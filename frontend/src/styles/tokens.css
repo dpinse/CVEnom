@@ -7,7 +7,7 @@
   --line: #1c2735;
   --text: #e9eef4;
   --muted: #8a97a7;
-  --faint: #6b7a8b;
+  --faint: #7d8a9b;
 
   /* signal: the only hues */
   --sev-crit: #ff5663;
@@ -40,12 +40,12 @@
     --line: #d2dde9;
     --text: #0f1a27;
     --muted: #52637a;
-    --faint: #6a7a8f;
-    --sev-crit: #d62436;
-    --sev-high: #a85609;
+    --faint: #5c6c80;
+    --sev-crit: #c8202f;
+    --sev-high: #a15208;
     --sev-med: #7f6200;
     --sev-low: #077a53;
-    --live: #d01026;
+    --live: #c00f24;
     --scope: #19729f;
     --ocean: #bcd4e8;
     --land: #eef4fa;
@@ -60,12 +60,12 @@
   --line: #d2dde9;
   --text: #0f1a27;
   --muted: #52637a;
-  --faint: #6a7a8f;
-  --sev-crit: #d62436;
-  --sev-high: #a85609;
+  --faint: #5c6c80;
+  --sev-crit: #c8202f;
+  --sev-high: #a15208;
   --sev-med: #7f6200;
   --sev-low: #077a53;
-  --live: #d01026;
+  --live: #c00f24;
   --scope: #19729f;
   --ocean: #bcd4e8;
   --land: #eef4fa;

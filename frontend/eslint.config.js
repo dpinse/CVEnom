@@ -28,8 +28,22 @@ export default tseslint.config(
           message: "Assigning innerHTML/outerHTML is forbidden; render text through React.",
         },
         {
-          selector: "CallExpression[callee.property.name='insertAdjacentHTML']",
-          message: "insertAdjacentHTML is forbidden; render text through React.",
+          selector: "AssignmentExpression[left.computed=true][left.property.value=/^(inner|outer)HTML$/]",
+          message: "Assigning innerHTML/outerHTML is forbidden; render text through React.",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(insertAdjacentHTML|setHTMLUnsafe|parseHTMLUnsafe|createContextualFragment)$/]",
+          message: "Raw HTML insertion APIs are forbidden; render text through React.",
+        },
+        {
+          selector: "CallExpression[callee.object.name='document'][callee.property.name=/^write(ln)?$/]",
+          message: "document.write/writeln is forbidden; render text through React.",
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='Object'][callee.property.name='assign'] > ObjectExpression > Property:matches([key.name=/^(inner|outer)HTML$/], [key.value=/^(inner|outer)HTML$/])",
+          message: "Object.assign of innerHTML/outerHTML is forbidden; render text through React.",
         },
       ],
     },

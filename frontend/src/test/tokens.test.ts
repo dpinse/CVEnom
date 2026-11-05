@@ -63,20 +63,24 @@ describe("tokens.css", () => {
 
 describe("WCAG AA contrast", () => {
   const themes = { dark, light };
+  const SIGNAL = ["--sev-crit", "--sev-high", "--sev-med", "--sev-low", "--live", "--scope"];
+  const TEXT = ["--text", "--muted", "--faint", ...SIGNAL];
+  const SURFACES = ["--bg", "--panel", "--panel-2"];
   for (const [name, t] of Object.entries(themes)) {
-    for (const surface of ["--bg", "--panel", "--panel-2"]) {
-      it(`${name}: text and muted on ${surface} >= 4.5`, () => {
-        expect(contrast(t["--text"], t[surface])).toBeGreaterThanOrEqual(4.5);
-        expect(contrast(t["--muted"], t[surface])).toBeGreaterThanOrEqual(4.5);
+    for (const surface of SURFACES) {
+      it(`${name}: text tier (text, muted, faint, severity, live, scope) >= 4.5 on ${surface}`, () => {
+        for (const k of TEXT) {
+          expect(contrast(t[k], t[surface]), `${k} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+        }
       });
-      it(`${name}: severity, live and scope on ${surface} >= 3 (non-text/large)`, () => {
-        for (const k of ["--sev-crit", "--sev-high", "--sev-med", "--sev-low", "--live", "--scope"]) {
-          expect(contrast(t[k], t[surface]), `${k}`).toBeGreaterThanOrEqual(3);
+      it(`${name}: non-text tier (signal colours) >= 3 on ${surface}`, () => {
+        for (const k of SIGNAL) {
+          expect(contrast(t[k], t[surface]), `${k} on ${surface}`).toBeGreaterThanOrEqual(3);
         }
       });
     }
-    it(`${name}: faint on bg >= 3`, () => {
-      expect(contrast(t["--faint"], t["--bg"])).toBeGreaterThanOrEqual(3);
+    it(`${name}: faint stays dimmer than muted on bg`, () => {
+      expect(contrast(t["--faint"], t["--bg"])).toBeLessThanOrEqual(contrast(t["--muted"], t["--bg"]));
     });
   }
 });
