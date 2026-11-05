@@ -55,7 +55,10 @@ class NewsFeedCollector(Collector):
         if not raw:
             return CollectorResult()
         # Entity declarations enable billion-laughs / XXE; no legitimate news feed needs them.
-        if b"<!entity" in raw.lower():
+        # Stripping NULs collapses UTF-16/UTF-32 (BOM or BOM-less, either endianness) ASCII-range
+        # markup back to ASCII, so the marker is found without decoding. Encodings that do not
+        # embed ASCII (e.g. EBCDIC) are not covered by this check.
+        if b"<!entity" in raw.replace(b"\x00", b"").lower():
             log.warning("%s: feed contains <!ENTITY declarations; refusing to parse", self.name)
             return CollectorResult()
         parsed = feedparser.parse(raw)  # bytes only: never a URL
@@ -82,11 +85,13 @@ class NewsFeedCollector(Collector):
                         url=link,
                         source=self.source_name,
                         title=title,
+                        # feedparser-sanitized HTML, not raw: a CVE id only inside a stripped
+                        # attribute or script text is not extracted (accepted; ingest sanitizes again).
                         summary=entry.get("summary", "") or "",
                         published=published,
                     )
                 )
-            except (ValidationError, ValueError, TypeError, OverflowError) as exc:
+            except (ValidationError, ValueError, TypeError, OverflowError, AttributeError, KeyError) as exc:
                 log.warning("%s: skipping bad entry: %s", self.name, exc)
         self.state.update(self._pending_validators)
         return CollectorResult(stories=stories)

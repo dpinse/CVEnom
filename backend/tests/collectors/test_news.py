@@ -1,3 +1,4 @@
+import codecs
 import logging
 import time
 from datetime import UTC, datetime, timedelta
@@ -187,3 +188,49 @@ def test_end_to_end_ingest_links_cve_and_sanitizes(db_session):
     story = db_session.scalars(select(Story).where(Story.url.like("%cve-2026-109618%"))).one()
     assert "<" not in story.summary
     assert db_session.get(StoryCveLink, (story.id, "CVE-2026-109618")) is not None
+
+
+_BOMB = (
+    '<?xml version="1.0"?><!DOCTYPE l [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;">]>'
+    '<rss version="2.0"><channel><title>x</title><item><title>&b;</title>'
+    "<link>https://a.test/z</link></item></channel></rss>"
+)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        codecs.BOM_UTF16_LE + _BOMB.encode("utf-16-le"),
+        codecs.BOM_UTF16_BE + _BOMB.encode("utf-16-be"),
+        _BOMB.encode("utf-16-le"),
+        codecs.BOM_UTF32_LE + _BOMB.encode("utf-32-le"),
+    ],
+    ids=["utf16le-bom", "utf16be-bom", "utf16le-nobom", "utf32le-bom"],
+)
+def test_wide_encoded_entity_bomb_refused_without_parsing(body, no_parse, caplog):
+    with caplog.at_level(logging.WARNING):
+        res = _Feed().normalize(body)
+    assert res.stories == []
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_utf16_feed_without_entities_still_parses():
+    xml = (
+        '<?xml version="1.0" encoding="utf-16"?><rss version="2.0"><channel><title>x</title>'
+        "<item><title>hi</title><link>https://a.test/u</link></item></channel></rss>"
+    )
+    res = _Feed().normalize(codecs.BOM_UTF16_LE + xml.encode("utf-16-le"))
+    assert [s.url for s in res.stories] == ["https://a.test/u"]
+
+
+def test_malformed_entry_object_is_skipped(monkeypatch):
+    good = {"title": "ok", "link": "https://a.test/ok"}
+
+    class Bad(dict):
+        def get(self, key, default=None):
+            raise AttributeError("boom")
+
+    fake = feedparser.FeedParserDict(bozo=0, entries=[Bad(), good])
+    monkeypatch.setattr(feedparser, "parse", lambda raw: fake)
+    res = _Feed().normalize(b"<rss/>")
+    assert [s.url for s in res.stories] == ["https://a.test/ok"]
