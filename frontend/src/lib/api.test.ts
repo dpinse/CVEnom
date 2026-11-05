@@ -406,23 +406,26 @@ describe("cross-tab (Web Locks + broadcast events)", () => {
     expect(b.store.getUser()).toBeNull();
   });
 
-  test("peer broadcast, then logout, then the in-flight refresh gets 401: lastPeer is not adopted", async () => {
-    const s = useServer([], async () => {
-      await delay(80);
-      return HttpResponse.json({ error: "invalid_token" }, { status: 401 });
-    });
+  // Discriminates the `lastPeer = null` in clear(): the refresh below starts AFTER the re-login, so
+  // the epoch guards cannot help; only forgetting the pre-logout peer token keeps it from coming back.
+  test("a peer token seen before a logout is not adopted by a refresh 401 after re-login", async () => {
+    const s = useServer([], () => HttpResponse.json({ error: "invalid_token" }, { status: 401 }));
     const hub = makeHub();
     const peer = hub.channel();
     const b = mk({ locks: null, channel: hub.channel() });
+    const user = { id: 1, email: "a@b.co", role: "member" as const };
     b.client.adopt("old", 900);
-    peer.postMessage({ type: "refreshed", access_token: "peer", expires_in: 900, sub: null });
-    await new Promise((r) => setTimeout(r, 5));
-    expect(b.store.getToken()).toBe("peer");
-    const p = caught(b.client.api("/cves"));
-    await vi.waitFor(() => expect(s.refreshCalls).toBe(1));
-    peer.postMessage({ type: "logout", sub: null });
-    expect(await p).toBeInstanceOf(AuthError);
-    expect(b.store.getToken()).toBeNull();
+    b.store.setUser(user);
+    peer.postMessage({ type: "refreshed", access_token: "peer", expires_in: 900, sub: "1" });
+    await vi.waitFor(() => expect(b.store.getToken()).toBe("peer")); // lastPeer is now "peer"
+    b.client.clear(); // logout (what auth.logout does locally)
+    b.client.adopt("relogin", 900); // login again as the same user, inside the 15 s peer window
+    b.store.setUser(user);
+    const e = await caught(b.client.api("/cves")); // 401 -> refresh -> 401
+    expect(s.refreshCalls).toBe(1);
+    expect(e).toBeInstanceOf(AuthError);
+    expect(b.store.getToken()).toBeNull(); // logged out, NOT signed back in with the old session's "peer"
+    expect(s.seenAuth).not.toContain("Bearer peer");
   });
 
   test("after a logout, a peer refreshed broadcast is not accepted by the discarded in-flight refresh", async () => {
