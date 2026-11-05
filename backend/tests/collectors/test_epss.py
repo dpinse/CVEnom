@@ -128,11 +128,24 @@ async def test_unchanged_score_date_short_circuits_after_first_page(monkeypatch)
             httpx.Response(200, json=_page([_dated("CVE-2026-0003", "2026-11-04")], 5, 2)),
         ]
     )
-    c = EpssCollector(state={"score_date": "2026-11-04"})
+    c = EpssCollector(state={"score_date": "2026-11-04", "cve_count": 7, "last_cve_count": 7})
     res = await c.run()
     assert route.call_count == 1
     assert c.last_error is None  # successful, empty run
     assert res.cves == []
+    assert c.state["score_date"] == "2026-11-04"
+
+
+@respx.mock
+async def test_unchanged_date_but_grown_cve_count_proceeds():
+    route = respx.get(EPSS_URL).mock(
+        return_value=httpx.Response(200, json=_page([_dated("CVE-2026-0001", "2026-11-04")], 1))
+    )
+    c = EpssCollector(state={"score_date": "2026-11-04", "cve_count": 9, "last_cve_count": 7})
+    res = await c.run()
+    assert route.call_count == 1
+    assert [x.cve_id for x in res.cves] == ["CVE-2026-0001"]
+    assert c.state["last_cve_count"] == 9
     assert c.state["score_date"] == "2026-11-04"
 
 
@@ -145,9 +158,10 @@ async def test_changed_score_date_fetches_all_and_updates_state(monkeypatch):
             httpx.Response(200, json=_page([_dated("CVE-2026-0003", "2026-11-05")], 3, 2)),
         ]
     )
-    c = EpssCollector(state={"score_date": "2026-11-04"})
+    c = EpssCollector(state={"score_date": "2026-11-04", "cve_count": 3, "last_cve_count": 3})
     res = await c.run()
     assert route.call_count == 2
+    assert c.state["last_cve_count"] == 3
     assert [x.cve_id for x in res.cves] == ["CVE-2026-0001", "CVE-2026-0002", "CVE-2026-0003"]
     assert c.state["score_date"] == "2026-11-05"
 

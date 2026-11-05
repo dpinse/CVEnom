@@ -10,12 +10,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from celery import Celery
+from sqlalchemy import func, select
 
 from cvenom.collectors import epss, kev, nvd, osv, vulncheck  # noqa: F401  (register)
 from cvenom.collectors.base import REGISTRY
 from cvenom.config import get_settings
 from cvenom.db import session_scope
-from cvenom.models import CollectorRun
+from cvenom.models import CollectorRun, Cve
 from cvenom.pipeline import ingest
 
 log = logging.getLogger(__name__)
@@ -104,14 +105,19 @@ def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLo
                 row = CollectorRun(collector=name, last_run=None, state={})
                 session.add(row)
             since = row.last_run - WINDOW_OVERLAP if row.last_run is not None else None
-            collector = cls(since=since, state=row.state or {})
+            state = dict(row.state or {})
+            enrich_only = getattr(cls, "enrich_only", False)
+            if enrich_only:
+                # Lets enrich-only collectors (EPSS) notice newly created CVE rows.
+                state["cve_count"] = session.scalar(select(func.count()).select_from(Cve))
+            collector = cls(since=since, state=state)
             result = asyncio.run(collector.run())
             if collector.last_error is not None:
                 log.error("collector %s failed; window not advanced", name)
                 if row in session.new:
                     session.expunge(row)
                 return summary
-            events = ingest(session, result, enrich_only=getattr(cls, "enrich_only", False))
+            events = ingest(session, result, enrich_only=enrich_only)
             row.last_run = started_at
             row.state = collector.state
         summary.update(ok=True, cves=len(result.cves), stories=len(result.stories), events=events)

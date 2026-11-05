@@ -147,6 +147,24 @@ def test_window_overlap_constant_and_first_run_since_is_none(db_session, factory
     assert seen == [(None, {})]
 
 
+def test_run_collector_passes_cve_count_to_enrich_only_state(db_session, factory, fake_registry):
+    from sqlalchemy import func, select
+    from cvenom.tasks import run_collector
+    seen = []
+    fake_registry(make_fake(enrich=True, seen=seen))
+    expected = db_session.scalar(select(func.count()).select_from(Cve))
+    run_collector("fake_t", session_factory=factory, lock=FakeLock())
+    assert seen[0][1]["cve_count"] == expected
+
+
+def test_run_collector_non_enrich_state_has_no_cve_count(db_session, factory, fake_registry):
+    from cvenom.tasks import run_collector
+    seen = []
+    fake_registry(make_fake(seen=seen))
+    run_collector("fake_t", session_factory=factory, lock=FakeLock())
+    assert "cve_count" not in seen[0][1]
+
+
 def test_run_collector_enrich_only_creates_no_rows(db_session, factory, fake_registry):
     from cvenom.tasks import run_collector
     fake_registry(make_fake(enrich=True))

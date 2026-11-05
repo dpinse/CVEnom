@@ -13,6 +13,12 @@ def test_extract_cve_ids_finds_all_and_dedupes():
     assert extract_cve_ids(txt) == {"CVE-2026-109618", "CVE-2026-109619"}
 
 
+def test_extract_does_not_truncate_overlong_digit_run():
+    from cvenom.extract import extract_cve_ids
+    assert extract_cve_ids("CVE-2024-12345678") == set()
+    assert extract_cve_ids("see CVE-2024-1234567 ok") == {"CVE-2024-1234567"}
+
+
 def test_extract_handles_empty_and_none():
     from cvenom.extract import extract_cve_ids
     assert extract_cve_ids("") == set()

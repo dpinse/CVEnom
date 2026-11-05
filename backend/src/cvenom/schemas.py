@@ -4,7 +4,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field, field_validator
 
 # ASCII digits only (no Unicode digits), anchored on the whole string via fullmatch.
-CVE_ID_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.ASCII)
+CVE_ID_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.ASCII)
 
 
 class NormalizedCve(BaseModel):

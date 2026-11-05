@@ -30,14 +30,14 @@ def test_none_and_boundaries_accepted():
 
 @pytest.mark.parametrize(
     "raw, expected",
-    [(" cve-2024-1234 ", "CVE-2024-1234"), ("CVE-2026-109618", "CVE-2026-109618")],
+    [(" cve-2024-1234 ", "CVE-2024-1234"), ("CVE-2026-109618", "CVE-2026-109618"), ("CVE-2024-1234567", "CVE-2024-1234567")],
 )
 def test_cve_id_normalized(raw, expected):
     assert NormalizedCve(cve_id=raw).cve_id == expected
 
 
 @pytest.mark.parametrize(
-    "bad", ["CVE-1<img src=x>", "CVE-24-1", "", "CVE-2024-123", "CVE-2024-1234 x", "GHSA-aaaa-bbbb-cccc"]
+    "bad", ["CVE-1<img src=x>", "CVE-24-1", "", "CVE-2024-123", "CVE-2024-12345678", "CVE-2024-1234 x", "GHSA-aaaa-bbbb-cccc"]
 )
 def test_cve_id_rejects_invalid(bad):
     with pytest.raises(ValidationError):
