@@ -12,3 +12,7 @@ data/
 
 # SDD scratch workspace
 .superpowers/
+
+# frontend
+frontend/node_modules/
+frontend/dist/

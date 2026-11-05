@@ -1,0 +1,73 @@
+/* Design tokens lifted from the approved radar mockup. Dark is the default. */
+:root {
+  /* chrome: cool graphite */
+  --bg: #0a0e15;
+  --panel: #0d131c;
+  --panel-2: #141d2a;
+  --line: #1c2735;
+  --text: #e9eef4;
+  --muted: #8a97a7;
+  --faint: #6b7a8b;
+
+  /* signal: the only hues */
+  --sev-crit: #ff5663;
+  --sev-high: #ff9a44;
+  --sev-med: #ecc14a;
+  --sev-low: #3dd79a;
+  --live: #ff2f45;
+  --scope: #6fb0d4;
+
+  /* geo */
+  --ocean: #0a1521;
+  --land: #2b3f54;
+  --border-geo: #4d7093;
+
+  /* type (self-hosted via @fontsource) */
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+
+  /* spacing / radius */
+  --radius: 6px;
+  --gutter: 16px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #e9eef4;
+    --panel: #ffffff;
+    --panel-2: #eef3f9;
+    --line: #d2dde9;
+    --text: #0f1a27;
+    --muted: #52637a;
+    --faint: #6a7a8f;
+    --sev-crit: #d62436;
+    --sev-high: #a85609;
+    --sev-med: #7f6200;
+    --sev-low: #077a53;
+    --live: #d01026;
+    --scope: #19729f;
+    --ocean: #bcd4e8;
+    --land: #eef4fa;
+    --border-geo: #7ea3c0;
+  }
+}
+
+:root[data-theme="light"] {
+  --bg: #e9eef4;
+  --panel: #ffffff;
+  --panel-2: #eef3f9;
+  --line: #d2dde9;
+  --text: #0f1a27;
+  --muted: #52637a;
+  --faint: #6a7a8f;
+  --sev-crit: #d62436;
+  --sev-high: #a85609;
+  --sev-med: #7f6200;
+  --sev-low: #077a53;
+  --live: #d01026;
+  --scope: #19729f;
+  --ocean: #bcd4e8;
+  --land: #eef4fa;
+  --border-geo: #7ea3c0;
+}
