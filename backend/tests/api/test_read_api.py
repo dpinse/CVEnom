@@ -568,3 +568,13 @@ async def test_lane_filter_follows_windows(db_session):
     assert [i["cve_id"] for i in r.json()["items"]] == []
     r = await get(db_session, "/api/cves?kev=true")
     assert [i["cve_id"] for i in r.json()["items"]] == ["CVE-2024-7001"]
+
+
+async def test_null_kev_added_out_of_lane_but_in_history(db_session):
+    cve(db_session, "CVE-2024-7002", kev=True, kev_added=None)
+    r = await get(db_session, "/api/cves?lane=EXPLOITED")
+    assert [i["cve_id"] for i in r.json()["items"]] == []
+    r = await get(db_session, "/api/lanes")
+    assert [i["cve_id"] for i in r.json()["EXPLOITED"]] == []
+    r = await get(db_session, "/api/cves?kev=true")
+    assert [i["cve_id"] for i in r.json()["items"]] == ["CVE-2024-7002"]

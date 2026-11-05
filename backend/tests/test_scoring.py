@@ -113,3 +113,14 @@ def test_likely_requires_publish_within_window():
     assert Lane.LIKELY in lanes_for_cve(new, NOW, cfg)
     assert Lane.LIKELY not in lanes_for_cve(old, NOW, cfg)
     assert Lane.LIKELY not in lanes_for_cve(none, NOW, cfg)
+
+
+def test_exploited_window_uses_utc_date_for_non_utc_now():
+    from datetime import date
+    from cvenom.scoring import CveView, Lane, lanes_for_cve
+    cfg = _cfg()
+    now = datetime(2026, 11, 5, 23, 30, tzinfo=timezone(timedelta(hours=-5)))  # 2026-11-06T04:30Z
+    edge = CveView("a", None, None, None, True, kev_added=date(2026, 10, 7))
+    past = CveView("b", None, None, None, True, kev_added=date(2026, 10, 6))
+    assert Lane.EXPLOITED in lanes_for_cve(edge, now, cfg)
+    assert Lane.EXPLOITED not in lanes_for_cve(past, now, cfg)
