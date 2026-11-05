@@ -121,7 +121,6 @@ export function dataLayers(t: GlobeTokens): LayerSpecification[] {
   ];
 }
 
-
 // ---- controller ---------------------------------------------------------------------
 
 /** Auto-rotate speed (degrees of longitude per second at full speed). */
@@ -130,10 +129,13 @@ export const ROTATE_DEG_PER_S = 3;
 export const IDLE_RESUME_MS = 4000;
 /** Active rotation is capped at ~30 fps: frames closer together than this are skipped. */
 export const ROTATE_FRAME_MS = 1000 / 30;
-/** If the countries source has not rendered this long after `load`, show the fallback. */
-export const DATA_DEADLINE_MS = 6000;
-/** After a map `error` event, allow this long for the countries source to render anyway. */
-export const ERROR_GRACE_MS = 1500;
+/**
+ * Watchdog, silent case: with no error at all, the countries source must have rendered within
+ * this long after `load` (visible time only; generous for low-end hardware / throttled tabs).
+ */
+export const DATA_DEADLINE_MS = 15000;
+/** Watchdog, after a post-`load` map error: fall back only if countries still not loaded this long after it. */
+export const ERROR_GRACE_MS = 5000;
 /** Ease the rotation speed in over this long after resuming. */
 const RAMP_MS = 1200;
 const START_CENTER: [number, number] = [-30, 22];
@@ -351,6 +353,8 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
   const onVisibility = () => {
     visible = document.visibilityState !== "hidden";
     schedule();
+    if (visible) resumeWatchdog();
+    else pauseWatchdog();
   };
   document.addEventListener("visibilitychange", onVisibility);
 
@@ -396,21 +400,49 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
 
   // ---- data-render watchdog ----
   // A worker or source failure (e.g. the worker blocked or failing to parse) leaves an empty
-  // globe. If the countries source has not reported loaded within the deadline, give up and
-  // let the caller show the static fallback.
+  // globe. Rules (controller ruling):
+  //  - an `error` before `load`            -> fall back immediately;
+  //  - an `error` after `load`             -> fall back only if the countries source is still
+  //                                           not loaded ERROR_GRACE_MS after that error;
+  //  - no error                            -> silent deadline DATA_DEADLINE_MS after `load`.
+  // The countdown only runs while the tab is visible: hidden pauses it, visible re-arms the
+  // remaining time. The earliest pending deadline wins.
   let dataOk = false;
-  let dataTimer: ReturnType<typeof setTimeout> | undefined;
-  let dataDue = Number.POSITIVE_INFINITY;
-  function armDataCheck(ms: number) {
-    if (dataOk || destroyed) return;
+  let wdTimer: ReturnType<typeof setTimeout> | undefined;
+  let wdDue = Number.POSITIVE_INFINITY; // Date.now() deadline of the running timer
+  let wdPausedLeft: number | null = null; // remaining ms while the tab is hidden
+  function clearWatchdog() {
+    if (wdTimer !== undefined) clearTimeout(wdTimer);
+    wdTimer = undefined;
+    wdDue = Number.POSITIVE_INFINITY;
+  }
+  function armWatchdog(ms: number) {
+    if (dataOk || destroyed || failed) return;
+    if (!visible) {
+      wdPausedLeft = Math.min(wdPausedLeft ?? Number.POSITIVE_INFINITY, ms);
+      return;
+    }
     const due = Date.now() + ms;
-    if (dataTimer !== undefined && dataDue <= due) return;
-    if (dataTimer !== undefined) clearTimeout(dataTimer);
-    dataDue = due;
-    dataTimer = setTimeout(() => {
-      dataTimer = undefined;
+    if (wdTimer !== undefined && wdDue <= due) return;
+    clearWatchdog();
+    wdDue = due;
+    wdTimer = setTimeout(() => {
+      wdTimer = undefined;
+      wdDue = Number.POSITIVE_INFINITY;
       if (!dataOk && !destroyed) fail(new Error("globe data did not render"), "render");
     }, ms);
+  }
+  function pauseWatchdog() {
+    if (wdTimer === undefined) return;
+    const left = Math.max(0, wdDue - Date.now());
+    wdPausedLeft = Math.min(wdPausedLeft ?? Number.POSITIVE_INFINITY, left);
+    clearWatchdog();
+  }
+  function resumeWatchdog() {
+    if (wdPausedLeft === null) return;
+    const left = wdPausedLeft;
+    wdPausedLeft = null;
+    armWatchdog(left);
   }
   function countriesLoaded(e: { sourceId?: string; isSourceLoaded?: boolean }): boolean {
     if (e?.sourceId !== "countries") return false;
@@ -424,12 +456,13 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
   map.on("sourcedata", (e: { sourceId?: string; isSourceLoaded?: boolean }) => {
     if (dataOk || !countriesLoaded(e)) return;
     dataOk = true;
-    if (dataTimer !== undefined) clearTimeout(dataTimer);
-    dataTimer = undefined;
+    clearWatchdog();
+    wdPausedLeft = null;
   });
-  map.on("error", () => {
-    // Before `load` an error may mean load never comes; after it, a short grace is enough.
-    armDataCheck(loaded ? ERROR_GRACE_MS : DATA_DEADLINE_MS);
+  map.on("error", (e: { error?: unknown }) => {
+    if (destroyed || dataOk) return;
+    if (!loaded) fail(e?.error ?? new Error("map error before load"), "render");
+    else armWatchdog(ERROR_GRACE_MS);
   });
 
   function fail(err: unknown, reason: GlobeFailure) {
@@ -455,7 +488,7 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
     for (const layer of dataLayers(tokens)) map.addLayer(layer);
     // Tokens may have changed between construction and load (theme toggled early).
     map.setPaintProperty("background", "background-color", tokens.ocean);
-    armDataCheck(DATA_DEADLINE_MS);
+    armWatchdog(DATA_DEADLINE_MS);
     opts.onLoad?.();
     schedule();
   });
@@ -476,7 +509,8 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
       destroyed = true;
       cancelRaf();
       clearResume();
-      if (dataTimer !== undefined) clearTimeout(dataTimer);
+      clearWatchdog();
+      wdPausedLeft = null;
       mo.disconnect();
       ro?.disconnect();
       io?.disconnect();

@@ -80,7 +80,8 @@
 }
 .lg-hint {
   margin-left: auto;
-  color: var(--faint);
+  /* --muted, not --faint: --faint is ~4.3:1 on the light backdrop (fails AA at 10.5px); tokens.test checks */
+  color: var(--muted);
   font-family: var(--font-mono);
   font-size: 10.5px;
 }

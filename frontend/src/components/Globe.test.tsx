@@ -599,37 +599,96 @@ describe("<Globe> render watchdog", () => {
     vi.useRealTimers();
   });
 
-  it("a map error with no countries data rendered switches to the fallback and removes the map", () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const fakeClock = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const noFallback = () => expect(screen.queryByText(/couldn't render its data/i)).toBeNull();
+  const fellBack = () => expect(screen.getByText(/couldn't render its data/i)).toBeInTheDocument();
+  const setVisibility = (state: "hidden" | "visible") => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  };
+
+  it("exports the ruled watchdog constants", () => {
+    expect(DATA_DEADLINE_MS).toBe(15000);
+    expect(ERROR_GRACE_MS).toBe(5000);
+  });
+
+  it("an error before load falls back immediately", () => {
+    fakeClock();
+    renderGlobe();
+    const m = lastMap();
+    act(() => m.fire("error", { error: new Error("worker failed") }));
+    fellBack();
+    expect(m.removed).toBe(true);
+  });
+
+  it("post-load error, data arriving at 3 s: no fallback", () => {
+    fakeClock();
     renderGlobe();
     loadMap();
     const m = lastMap();
+    act(() => m.fire("error", { error: new Error("transient worker warning") }));
+    act(() => vi.advanceTimersByTime(3000));
+    act(() => m.fire("sourcedata", { sourceId: "countries", isSourceLoaded: true }));
+    act(() => vi.advanceTimersByTime(DATA_DEADLINE_MS * 2));
+    noFallback();
+    expect(m.removed).toBe(false);
+  });
+
+  it("post-load error, no data by 5 s: fallback (and the map is removed)", () => {
+    fakeClock();
+    renderGlobe();
+    loadMap();
+    const m = lastMap();
+    act(() => vi.advanceTimersByTime(2000));
     act(() => m.fire("error", { error: new Error("worker failed") }));
     act(() => vi.advanceTimersByTime(ERROR_GRACE_MS - 100));
-    expect(screen.queryByText(/couldn't render its data/i)).toBeNull();
+    noFallback();
     act(() => vi.advanceTimersByTime(200));
-    expect(screen.getByText(/couldn't render its data/i)).toBeInTheDocument();
+    fellBack();
     expect(m.removed).toBe(true);
     expect(screen.getByRole("list", { name: /most active countries/i })).toBeInTheDocument();
   });
 
-  it("no countries data within the deadline after load also falls back (silent worker failure)", () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  it("no error and no data: silent fallback at 15 s, not before", () => {
+    fakeClock();
     renderGlobe();
     loadMap();
-    act(() => vi.advanceTimersByTime(DATA_DEADLINE_MS + 10));
-    expect(screen.getByText(/couldn't render its data/i)).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(DATA_DEADLINE_MS - 100));
+    noFallback();
+    act(() => vi.advanceTimersByTime(200));
+    fellBack();
   });
 
-  it("once the countries source has loaded, later errors do not trigger the fallback", () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  it("a hidden tab pauses the watchdog; visible again re-arms only the remaining time", () => {
+    fakeClock();
+    try {
+      renderGlobe();
+      loadMap();
+      act(() => vi.advanceTimersByTime(10000)); // 5 s of the 15 s budget left
+      setVisibility("hidden");
+      act(() => vi.advanceTimersByTime(60000));
+      noFallback();
+      setVisibility("visible");
+      act(() => vi.advanceTimersByTime(4900));
+      noFallback();
+      act(() => vi.advanceTimersByTime(200));
+      fellBack();
+    } finally {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    }
+  });
+
+  it("once the countries source has loaded, later errors never trigger the fallback", () => {
+    fakeClock();
     renderGlobe();
     loadMap();
     const m = lastMap();
     act(() => m.fire("sourcedata", { sourceId: "countries", isSourceLoaded: true }));
     act(() => m.fire("error", { error: new Error("transient") }));
     act(() => vi.advanceTimersByTime(DATA_DEADLINE_MS * 3));
-    expect(screen.queryByText(/couldn't render its data/i)).toBeNull();
+    noFallback();
     expect(m.removed).toBe(false);
   });
 
