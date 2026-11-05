@@ -1,6 +1,7 @@
 import { useVelocity } from "../lib/queries";
 import type { VelocityOut } from "../lib/types";
 
+export const DAYS = 30;
 const W = 200;
 const H = 42;
 const PAD = 3;
@@ -41,7 +42,7 @@ function summary(data: VelocityOut): string {
   for (const p of data.series) if (!peak || p.count >= peak.count) peak = p;
   const trend = data.rising ? "rising" : "steady";
   const pk = peak ? `, peak ${NUMBER.format(peak.count)} on ${peak.day}` : "";
-  return `CVEs published per day over the last 30 days: today ${NUMBER.format(data.current)}${pk}, trend ${trend}`;
+  return `CVEs published per day over the last ${DAYS} days: today ${NUMBER.format(data.current)}${pk}, trend ${trend}`;
 }
 
 interface ViewProps {
@@ -60,7 +61,8 @@ export function VelocityView({ data, loading, error }: ViewProps) {
   }
   if (loading || !data) {
     return (
-      <div className="velocity" aria-busy="true" aria-label="Loading CVE velocity">
+      <div className="velocity" role="status" aria-busy="true" aria-label="Loading CVE velocity">
+        <span className="sr-only">Loading CVE velocity</span>
         <div className="velocity-skeleton velocity-skeleton-num" />
         <div className="velocity-skeleton velocity-skeleton-spark" />
       </div>
@@ -101,6 +103,6 @@ export function VelocityView({ data, loading, error }: ViewProps) {
 }
 
 export function Velocity() {
-  const q = useVelocity(30);
+  const q = useVelocity(DAYS);
   return <VelocityView data={q.data} loading={q.isPending && !q.isError} error={q.isError ? q.error : undefined} />;
 }
