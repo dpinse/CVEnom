@@ -22,7 +22,7 @@ from .middleware import client_ip
 
 log = logging.getLogger(__name__)
 
-FAIL_CLOSED_SCOPES = frozenset({"login", "auth"})
+FAIL_CLOSED_SCOPES = frozenset({"login", "auth", "mfa"})
 _WARN_INTERVAL_S = 60.0
 _last_warn: dict[str, float] = {}
 
@@ -164,3 +164,50 @@ async def enforce_login_limits(request: Request, email: str) -> None:
     await _check(
         request, "login", f"login-email:{digest}", settings.rate_login_per_15min_email, 900
     )
+
+
+# ---------------------------------------------------------------- MFA attempts
+
+MFA_WINDOW_S = 900  # 15 minutes
+# Give back one reserved attempt; never below zero and never creates a key.
+_REFUND_LUA = """
+local c = tonumber(redis.call('GET', KEYS[1]) or '0')
+if c > 0 then
+  return redis.call('DECR', KEYS[1])
+end
+return 0
+"""
+
+
+class MfaAttempt:
+    """Failed second-factor attempts, counted per IP and per user (5 per 15 min each).
+
+    Each attempt RESERVES a slot (atomic INCR) before any code is checked, so a burst of
+    concurrent guesses can never exceed the limit; a successful attempt gives its slots
+    back. The 'mfa' scope fails closed (503) when Redis is unavailable."""
+
+    def __init__(self, request: Request) -> None:
+        self.request = request
+        self.keys: list[str] = []
+
+    async def _take(self, ident: str, limit: int) -> None:
+        await _check(self.request, "mfa", ident, limit, MFA_WINDOW_S)
+        self.keys.append(f"cvenom:rl:mfa:{ident}")
+
+    async def add_user(self, user_id: int) -> None:
+        await self._take(f"user:{user_id}", self.request.app.state.settings.rate_mfa_per_15min_user)
+
+    async def refund(self) -> None:
+        redis = get_redis(self.request.app)
+        for key in self.keys:
+            try:
+                await redis.eval(_REFUND_LUA, 1, key)
+            except (RedisError, OSError):
+                warn_rate_limited("rl-refund", "rate limiter unavailable; mfa refund skipped")
+        self.keys.clear()
+
+
+async def reserve_mfa_attempt(request: Request, *, ip: str) -> MfaAttempt:
+    attempt = MfaAttempt(request)
+    await attempt._take(f"ip:{ip}", request.app.state.settings.rate_mfa_per_15min_ip)
+    return attempt

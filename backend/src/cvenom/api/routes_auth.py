@@ -21,6 +21,7 @@ from cvenom.auth.tokens import (
     issue_access,
     rotate_refresh,
 )
+from cvenom.auth.mfa import TICKET_TTL, is_enrolled, issue_ticket
 from cvenom.auth.users import InvalidInvite, accept_invite, authenticate, create_invite
 from cvenom.models import User, UserSession
 
@@ -76,14 +77,12 @@ class LoginBody(BaseModel):
     password: str = Field(max_length=1024)
 
 
-def _login_sync(session: Session, request: Request, body: LoginBody) -> JSONResponse:
-    if len(body.password) > MAX_LENGTH:
-        dummy_verify(body.password)
-        return _error(401, "invalid_credentials")
-    user = authenticate(session, body.email, body.password)
-    if user is None:
-        return _error(401, "invalid_credentials")
-    now = _now()
+def session_response(
+    session: Session, request: Request, user: User, now: datetime, extra: dict | None = None
+) -> JSONResponse:
+    """Create a session and answer with the access token and refresh cookie.
+
+    Only called once the second factor has passed (MFA verify / enroll finish)."""
     row, raw = create_session(
         session,
         user,
@@ -97,10 +96,31 @@ def _login_sync(session: Session, request: Request, body: LoginBody) -> JSONResp
             "access_token": access,
             "token_type": "bearer",
             "expires_in": request.app.state.settings.access_ttl_minutes * 60,
+            **(extra or {}),
         }
     )
     _set_refresh(resp, request, raw)
     return resp
+
+
+def ticket_json(session: Session, user: User, now: datetime) -> dict:
+    """Step one of sign-in: a short-lived MFA ticket, never a session."""
+    return {
+        "ticket": issue_ticket(session, user, now),
+        "enroll_required": not is_enrolled(user),
+        "expires_in": int(TICKET_TTL.total_seconds()),
+    }
+
+
+def _login_sync(session: Session, request: Request, body: LoginBody) -> JSONResponse:
+    if len(body.password) > MAX_LENGTH:
+        dummy_verify(body.password)
+        return _error(401, "invalid_credentials")
+    user = authenticate(session, body.email, body.password)
+    if user is None:
+        return _error(401, "invalid_credentials")
+    # No session and no cookie until the second factor passes (/api/auth/mfa/*).
+    return JSONResponse(ticket_json(session, user, _now()))
 
 
 @router.post("/login")
@@ -274,4 +294,6 @@ def accept_invite_route(
         return _error(400, "invalid_invite")
     except WeakPassword:
         return _error(422, "weak_password")
-    return JSONResponse(_user_json(user), status_code=201)
+    # Straight on to the second factor (enrollment for a new account); still no session.
+    return JSONResponse({**_user_json(user), **ticket_json(session, user, _now())},
+                        status_code=201)

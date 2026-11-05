@@ -57,7 +57,7 @@ def test_migration_upgrade_and_downgrade(scratch_url):
 
 
 AUTH_TABLES = ["app_user", "invite", "user_session", "user_session_used_refresh", "signing_key", "alert_event",
-               "alert_rule", "alert_recipient", "alert_delivery"]
+               "alert_rule", "alert_recipient", "alert_delivery", "mfa_ticket", "mfa_recovery_code"]
 AUTH_EXPECTED = {
     "ix_alert_event_processed_created", "ix_alert_event_created_at_brin",
     "ix_alert_delivery_status_next_attempt", "uq_alert_delivery_rule_recipient_cve",
@@ -363,3 +363,43 @@ def test_migration_0006_on_empty_db(scratch_url):
     command.upgrade(cfg, "0006")
     command.downgrade(cfg, "0005")
     command.upgrade(cfg, "0006")
+
+
+def test_mfa_migration_revokes_live_sessions_and_round_trips(scratch_url):
+    """0007: MFA columns/tables; every live session is revoked so each existing user
+    (the first admin included) goes through enrollment at the next sign-in."""
+    cfg = _cfg()
+    command.upgrade(cfg, "0005")
+    eng = create_engine(scratch_url)
+    with eng.begin() as c:
+        uid = c.execute(text(
+            "insert into app_user (email, password_hash, role) values ('a@example.com','h','admin') "
+            "returning id")).scalar()
+        c.execute(text(
+            "insert into user_session (id, user_id, refresh_hash, expires_at) values "
+            "('00000000-0000-0000-0000-000000000001', :u, 'r1', now() + interval '1 day'), "
+            "('00000000-0000-0000-0000-000000000002', :u, 'r2', now() + interval '1 day')"),
+            {"u": uid})
+        c.execute(text(
+            "update user_session set revoked_at = '2020-01-01T00:00:00Z' where refresh_hash='r2'"))
+    command.upgrade(cfg, "0007")
+    with eng.connect() as c:
+        rows = dict(c.execute(text(
+            "select refresh_hash, revoked_at from user_session")).all())
+        user = c.execute(text(
+            "select mfa_secret_enc, mfa_enabled_at, mfa_last_step from app_user")).one()
+        last_step_type = c.execute(text(
+            "select data_type from information_schema.columns "
+            "where table_name='app_user' and column_name='mfa_last_step'")).scalar()
+    assert rows["r1"] is not None  # live session revoked
+    assert rows["r2"].year == 2020  # an already-revoked session keeps its timestamp
+    assert tuple(user) == (None, None, None)
+    assert last_step_type == "bigint"
+    assert {"mfa_ticket", "mfa_recovery_code"} <= _tables(scratch_url)
+    command.downgrade(cfg, "-1")
+    with eng.connect() as c:
+        cols = {r[0] for r in c.execute(text(
+            "select column_name from information_schema.columns where table_name='app_user'"))}
+    eng.dispose()
+    assert not ({"mfa_secret_enc", "mfa_enabled_at", "mfa_last_step"} & cols)
+    assert not ({"mfa_ticket", "mfa_recovery_code"} & _tables(scratch_url))

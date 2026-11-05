@@ -14,6 +14,7 @@ from cvenom.auth.passwords import hash_password
 from cvenom.auth.tokens import create_session, issue_access
 from cvenom.config import get_settings
 from cvenom.models import Invite, User, UserSession
+from mfa_helpers import full_login
 
 PW = "correct horse battery"
 COOKIE_PREFIX = "cvenom_refresh="
@@ -83,7 +84,8 @@ def cookie_value(r):
 
 
 async def login(c, email="u@example.com", pw=PW):
-    return await c.post("/api/auth/login", json={"email": email, "password": pw})
+    """Full two-step sign-in (password, then MFA enrollment for these unenrolled users)."""
+    return await full_login(c, email, pw)
 
 
 # ---------------------------------------------------------------- flow
@@ -122,11 +124,7 @@ async def test_login_me_refresh_logout_flow(db_session):
 async def test_login_records_ua_and_ip(db_session):
     mk_user(db_session)
     async with client(make_app(db_session)) as c:
-        await c.post(
-            "/api/auth/login",
-            json={"email": "u@example.com", "password": PW},
-            headers={"User-Agent": "Mozilla/test"},
-        )
+        await full_login(c, "u@example.com", PW, headers={"User-Agent": "Mozilla/test"})
     row = db_session.scalars(select(UserSession)).one()
     assert row.user_agent == "Mozilla/test" and row.ip == "1.2.3.4"
 
@@ -340,7 +338,8 @@ async def test_invite_flow(db_session):
         assert weak.status_code == 422 and weak.json() == {"error": "weak_password"}
         ok = await c.post("/api/auth/invites/accept", json={"token": tok, "password": PW})
         assert ok.status_code == 201
-        assert set(ok.json()) == {"id", "email", "role"}
+        assert set(ok.json()) == {"id", "email", "role", "ticket", "enroll_required", "expires_in"}
+        assert ok.json()["enroll_required"] is True
         assert ok.json()["email"] == "new@example.com" and ok.json()["role"] == "member"
         assert "set-cookie" not in ok.headers and "access_token" not in ok.text
         again = await c.post("/api/auth/invites/accept", json={"token": tok, "password": PW})

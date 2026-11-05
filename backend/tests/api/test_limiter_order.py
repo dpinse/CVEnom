@@ -153,3 +153,17 @@ def test_alert_test_route_has_its_own_limiter_scope(db_session):
 def test_login_handler_limits_before_any_db_work():
     src = inspect.getsource(routes_auth.login)
     assert src.index("enforce_login_limits") < src.index("run_in_threadpool(_login_sync")
+
+
+def test_mfa_handlers_reserve_an_attempt_before_any_db_work():
+    from cvenom.api import routes_mfa
+
+    for handler in (routes_mfa.verify, routes_mfa.enroll_finish):
+        src = inspect.getsource(handler)
+        assert src.index("reserve_mfa_attempt(request, ip=") < src.index("run_in_threadpool"), handler
+
+
+def test_mfa_scope_fails_closed():
+    from cvenom.api.ratelimit import FAIL_CLOSED_SCOPES
+
+    assert "mfa" in FAIL_CLOSED_SCOPES
