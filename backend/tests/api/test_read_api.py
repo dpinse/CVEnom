@@ -367,3 +367,71 @@ async def test_default_cache_paths_applied_and_explicit_respected(db_session):
     async with client(app) as c:
         await c.get("/api/lanes")
         assert "x-cache" not in (await c.get("/api/lanes")).headers
+
+
+# ---------------------------------------------------------------- fix round 1
+
+
+@pytest.mark.parametrize("qs", ["?q=%00", "?q=a%00b", "?page=%001"])
+async def test_nul_byte_is_422(db_session, qs):
+    r = await get(db_session, "/api/cves" + qs)
+    assert r.status_code == 422
+    assert r.json() == {"error": "validation_error"}
+
+
+async def test_q_plus_and_percent2b(db_session):
+    cve(db_session, "CVE-2024-0001", summary="a b")
+    cve(db_session, "CVE-2024-0002", summary="a+b")
+    r = await get(db_session, "/api/cves?q=a+b")
+    assert [i["cve_id"] for i in r.json()["items"]] == ["CVE-2024-0001"]
+    r = await get(db_session, "/api/cves?q=a%2Bb")
+    assert [i["cve_id"] for i in r.json()["items"]] == ["CVE-2024-0002"]
+
+
+async def test_date_edge_cases(db_session):
+    cve(db_session, "CVE-2024-0001", published=NOW - timedelta(days=3))
+    r = await get(db_session, "/api/cves?from=2030-01-02&to=2030-01-01")
+    assert r.status_code == 200 and r.json()["items"] == [] and r.json()["total"] == 0
+    r = await get(db_session, "/api/cves?from=0001-01-01")
+    assert r.status_code == 200 and r.json()["total"] == 1
+    r = await get(db_session, "/api/cves?to=9999-12-31")
+    assert r.status_code == 200 and r.json()["total"] == 1
+    day = (NOW - timedelta(days=3)).date().isoformat()
+    r = await get(db_session, f"/api/cves?from={day}&to={day}")
+    assert r.json()["total"] == 1
+
+
+@pytest.mark.parametrize("v", ["nan", "inf", "-inf"])
+async def test_min_cvss_non_finite(db_session, v):
+    assert (await get(db_session, f"/api/cves?min_cvss={v}")).status_code == 422
+
+
+async def test_cves_trailing_slash_404(db_session):
+    r = await get(db_session, "/api/cves/")
+    assert r.status_code == 404
+
+
+async def test_lane_filter_large_membership(db_session):
+    for i in range(300):
+        cve(db_session, f"CVE-2024-{5000 + i}", kev=True)
+    r = await get(db_session, "/api/cves?lane=EXPLOITED&page_size=100")
+    assert r.status_code == 200 and r.json()["total"] == 300
+
+
+async def test_datetimes_serialized_utc(db_session):
+    from datetime import timezone
+
+    tz = timezone(timedelta(hours=5))
+    pub = datetime(2024, 3, 1, 12, 0, tzinfo=tz)
+    cve(db_session, "CVE-2024-0001", published=pub)
+    story(db_session, 1, ["CVE-2024-0001"], published=pub)
+    geo(db_session, "g", cve_id="CVE-2024-0001", observed_at=pub)
+    for url in ("/api/cves", "/api/cves/CVE-2024-0001"):
+        r = await get(db_session, url)
+        b = r.json()
+        item = b["items"][0] if "items" in b else b
+        assert item["published"] in ("2024-03-01T07:00:00Z", "2024-03-01T07:00:00+00:00")
+    d = (await get(db_session, "/api/cves/CVE-2024-0001")).json()
+    assert d["stories"][0]["published"].startswith("2024-03-01T07:00:00")
+    assert d["geo_events"][0]["observed_at"].startswith("2024-03-01T07:00:00")
+    assert d["stories"][0]["published"].endswith(("Z", "+00:00"))

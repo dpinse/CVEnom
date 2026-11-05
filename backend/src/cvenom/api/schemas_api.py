@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PlainSerializer
+
+
+def _to_utc(v: datetime) -> datetime:
+    return v.replace(tzinfo=UTC) if v.tzinfo is None else v.astimezone(UTC)
+
+
+UtcDatetime = Annotated[datetime, PlainSerializer(_to_utc, return_type=datetime)]
 
 
 class CveItem(BaseModel):
@@ -16,7 +24,7 @@ class CveItem(BaseModel):
     kev_source: str | None
     poc_badge: bool
     patch_available: bool | None
-    published: datetime | None
+    published: UtcDatetime | None
     summary: str
     recent_story_count: int
 
@@ -39,7 +47,7 @@ class StoryRef(BaseModel):
     title: str
     url: str
     source: str
-    published: datetime
+    published: UtcDatetime
 
 
 class GeoEventOut(BaseModel):
@@ -47,7 +55,7 @@ class GeoEventOut(BaseModel):
     country_code: str | None
     label: str | None
     magnitude: float
-    observed_at: datetime
+    observed_at: UtcDatetime
     details: dict
 
 
@@ -74,7 +82,7 @@ class GeoSummaryItem(BaseModel):
     kind: str
     magnitude: float
     events: int
-    last_seen: datetime
+    last_seen: UtcDatetime
 
 
 class LoudStory(BaseModel):
@@ -82,5 +90,5 @@ class LoudStory(BaseModel):
     summary: str
     url: str
     source: str
-    published: datetime
+    published: UtcDatetime
     cve_ids: list[str]

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated, Literal
 from urllib.parse import unquote_to_bytes
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, any_, func, literal, or_, select
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
 from cvenom.config import get_settings
@@ -46,9 +47,11 @@ def _utf8_query(request: Request) -> None:
     """Starlette decodes %FF to U+FFFD silently; reject non-UTF8 explicitly."""
     raw = request.scope.get("query_string", b"").replace(b"+", b" ")
     try:
-        unquote_to_bytes(raw).decode("utf-8")
+        decoded = unquote_to_bytes(raw).decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=422, detail={"error": "validation_error"}) from None
+    if "\x00" in decoded:  # psycopg rejects NUL in text params (would be a 500)
+        raise HTTPException(status_code=422, detail={"error": "validation_error"})
 
 
 router = APIRouter(
@@ -139,14 +142,13 @@ def search_cves(
         conds.append(Cve.cvss >= min_cvss)
     if kev is not None:
         conds.append(Cve.kev.is_(kev))
-    pub_day = func.date(func.timezone("UTC", Cve.published))
-    if from_ is not None:
-        conds.append(pub_day >= from_)
-    if to is not None:
-        conds.append(pub_day <= to)
+    if from_ is not None:  # range predicates keep the BRIN index usable
+        conds.append(Cve.published >= datetime.combine(from_, time.min, tzinfo=UTC))
+    if to is not None and to < date.max:
+        conds.append(Cve.published < datetime.combine(to + timedelta(days=1), time.min, tzinfo=UTC))
     if lane is not None:
         members = [v.cve_id for v in lane_views(session, _now())[lane]]
-        conds.append(Cve.cve_id.in_(members))
+        conds.append(Cve.cve_id == any_(literal(members, ARRAY(String))))
 
     total = session.scalar(select(func.count()).select_from(Cve).where(*conds)) or 0
     rows = session.scalars(
