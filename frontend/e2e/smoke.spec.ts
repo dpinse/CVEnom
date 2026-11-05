@@ -114,7 +114,7 @@ test("the live socket is only ever same-origin /api/ws/live with no query string
   const pageOrigin = new URL(page.url()).origin;
   for (const raw of attempts) {
     const u = new URL(raw);
-    expect(u.origin).toBe(pageOrigin.replace(/^http/, "ws"));
+    expect(u.origin).toBe(pageOrigin.replace(/^http/g, "ws"));
     expect(u.pathname).toBe("/api/ws/live");
     expect(u.search).toBe("");
     expect(u.hash).toBe("");

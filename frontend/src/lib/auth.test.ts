@@ -134,7 +134,7 @@ describe("auth store", () => {
 
 // ---- cross-tab identity ----------------------------------------------------
 
-const b64u = (o: unknown) => btoa(JSON.stringify(o)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+const b64u = (o: unknown) => btoa(JSON.stringify(o)).replace(/=+$/g, "").replaceAll("+", "-").replaceAll("/", "_");
 const jwt = (sub: number) => `${b64u({ alg: "none" })}.${b64u({ sub: String(sub) })}.sig`;
 const userFor = (n: number) => ({ id: n, email: `u${n}@x.co`, role: "member" as const });
 

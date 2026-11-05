@@ -16,7 +16,7 @@ const INVALID = "This link is invalid or expired";
 /** The token from a `#<token>` fragment ("" when absent or malformed). */
 function tokenFrom(hash: string): string {
   try {
-    return decodeURIComponent(hash.replace(/^#/, ""));
+    return decodeURIComponent(hash.replace(/^#/g, ""));
   } catch {
     return "";
   }
