@@ -18,9 +18,11 @@ from cvenom.models import Story
 
 _WS = re.compile(r"\s+")
 _SEP = "\x1f"  # unit separator: keeps (title, summary) pairs unambiguous
-# Drop script/style elements together with their contents (bleach would keep the text).
+# Drop CLOSED script/style elements together with their contents (bleach would keep
+# the text). An unclosed <script>/<style> is left for bleach, which strips the tag
+# token and escapes the rest, so the text after it is never silently truncated.
 _SCRIPT_BLOCK = re.compile(
-    r"<(script|style)\b[^>]*>.*?(?:</\1\s*>|$)", re.IGNORECASE | re.DOTALL
+    r"<(script|style)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL
 )
 _MAX_DECODE_PASSES = 5
 

@@ -58,6 +58,28 @@ def test_sanitize_nested_script_is_neutralized():
     _assert_no_markup(out)
 
 
+def test_sanitize_bare_unclosed_script_keeps_preceding_text():
+    out = sanitize_text("x <script")
+    # The unclosed token is escaped by bleach, not deleted with everything after it.
+    assert out == "x &lt;script"
+    _assert_no_markup(out)
+
+
+def test_sanitize_unclosed_script_tag_does_not_truncate_rest_of_text():
+    text = "A stored XSS in Foo 1.2 allows a <script> element in the name field; fixed in 1.3."
+    out = sanitize_text(text)
+    assert out.startswith("A stored XSS in Foo 1.2 allows a")
+    assert "element in the name field; fixed in 1.3." in out
+    _assert_no_markup(out)
+
+
+def test_sanitize_unclosed_style_tag_does_not_truncate_rest_of_text():
+    out = sanitize_text("Bypass via <style> injection, then CSRF.")
+    assert out.startswith("Bypass via")
+    assert "injection, then CSRF." in out
+    _assert_no_markup(out)
+
+
 def test_content_hash_is_stable_and_order_sensitive():
     assert content_hash("t","s") == content_hash("t","s")
     assert content_hash("t","s") != content_hash("s","t")
