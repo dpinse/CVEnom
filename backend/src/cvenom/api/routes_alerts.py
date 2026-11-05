@@ -125,22 +125,25 @@ def _recipient_json(r: AlertRecipient) -> dict:
     return out
 
 
-def _rule_json(session: Session, rule: AlertRule) -> dict:
+def _rule_json(session: Session, rule: AlertRule, *, include_recipients: bool = True) -> dict:
+    """Rule view. ``include_recipients=False`` builds the member shape explicitly:
+    only a ``recipient_count``, so emails and webhook hosts can never leak."""
     recips = session.scalars(
         select(AlertRecipient).where(AlertRecipient.rule_id == rule.id).order_by(AlertRecipient.id)
     ).all()
-    return jsonable_encoder(
-        {
-            "id": rule.id,
-            "name": rule.name,
-            "kind": rule.kind,
-            "threshold": rule.threshold,
-            "keyword": rule.keyword,
-            "enabled": rule.enabled,
-            "created_at": rule.created_at,
-            "recipients": [_recipient_json(r) for r in recips],
-        }
-    )
+    out: dict = {
+        "id": rule.id,
+        "name": rule.name,
+        "kind": rule.kind,
+        "threshold": rule.threshold,
+        "keyword": rule.keyword,
+        "enabled": rule.enabled,
+        "created_at": rule.created_at,
+        "recipient_count": len(recips),
+    }
+    if include_recipients:
+        out["recipients"] = [_recipient_json(r) for r in recips]
+    return jsonable_encoder(out)
 
 
 def _build_recipient(
@@ -178,14 +181,17 @@ def _get_rule(session: Session, rule_id: int, *, lock: bool = False) -> AlertRul
 @router.get("/rules")
 def list_rules(user: User = Depends(require_user), session: Session = SessionDep) -> list[dict]:
     rules = session.scalars(select(AlertRule).order_by(AlertRule.id)).all()
-    return [_rule_json(session, r) for r in rules]
+    full = user.role == "admin"
+    return [_rule_json(session, r, include_recipients=full) for r in rules]
 
 
 @router.get("/rules/{rule_id}")
 def get_rule(
     rule_id: int, user: User = Depends(require_user), session: Session = SessionDep
 ) -> dict:
-    return _rule_json(session, _get_rule(session, rule_id))
+    return _rule_json(
+        session, _get_rule(session, rule_id), include_recipients=user.role == "admin"
+    )
 
 
 @router.post("/rules", status_code=201)
@@ -303,7 +309,7 @@ def list_deliveries(
     rule_id: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
     page: Annotated[int, Query(ge=1, le=10000)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
-    user: User = Depends(require_user),
+    admin: User = Depends(require_admin),  # recipient ids, channels and errors: admin only
     session: Session = SessionDep,
 ) -> dict:
     # Only the channel is joined from the recipient: never its email/URL/secret.

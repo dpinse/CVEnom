@@ -51,10 +51,10 @@ services:
       POSTGRES_PASSWORD: ""
       APP_DB_PASSWORD: ""
       REDIS_PASSWORD: ""
-      # Peer seen by the container for a host process hitting 127.0.0.1:8000 is the bridge gateway.
-      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.28.0.1}
-    ports:
-      - "127.0.0.1:8000:8000"
+      # Trusted hops, right to left: nginx (172.28.0.10, the TCP peer) then the bridge gateway
+      # 172.28.0.1 (what nginx sees when cloudflared on the host connects to 127.0.0.1:8080).
+      # No ports are published: the api is reachable only through nginx.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.28.0.1,172.28.0.10}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -129,14 +129,36 @@ services:
       timeout: 3s
       retries: 10
 
-  # frontend:
-  #   image: cvenom-frontend:latest   # added with the frontend plan
-  #   restart: unless-stopped
-  #   read_only: true
-  #   cap_drop: [ALL]
-  #   security_opt: ["no-new-privileges:true"]
-  #   ports:
-  #     - "127.0.0.1:8080:8080"
+  frontend:
+    build:
+      context: ../frontend
+    image: cvenom-frontend:latest
+    restart: unless-stopped
+    # Unprivileged nginx (uid 101): static SPA, strict CSP, same-origin proxy for /api and the
+    # WebSocket. The only published port; loopback only, for cloudflared / a host proxy.
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      cvenom:
+        ipv4_address: 172.28.0.10
+    depends_on:
+      api:
+        condition: service_started
+    read_only: true
+    # nginx-unprivileged writes its pid to /tmp and its temp/cache files under /var/cache/nginx
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
 networks:
   cvenom:

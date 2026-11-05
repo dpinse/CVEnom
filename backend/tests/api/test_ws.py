@@ -320,9 +320,34 @@ def test_allowed_origin_and_no_origin_connect(db_session, server):
             pass
 
 
-def test_origin_not_checked_without_cors_origins(db_session, server):
+def test_empty_cors_cross_site_origin_4403(db_session, server):
     with TestClient(make_app(db_session, server, cors_origins=[])) as c:
-        with c.websocket_connect("/api/ws/live", headers={"origin": "https://x.example.com"}):
+        expect_close(c, 4403, headers={"origin": "https://x.example.com"})
+
+
+def test_empty_cors_same_origin_accepted(db_session, server):
+    with TestClient(make_app(db_session, server, cors_origins=[])) as c:
+        for origin, host in (
+            ("https://app.example.com", "app.example.com"),
+            ("https://APP.example.com", "app.example.com"),  # case-insensitive
+            ("http://localhost:8080", "localhost:8080"),
+            ("https://app.example.com:443", "app.example.com"),  # default port normalised
+            ("http://app.example.com", "app.example.com:80"),
+        ):
+            with c.websocket_connect("/api/ws/live", headers={"origin": origin, "host": host}):
+                pass
+
+
+def test_empty_cors_port_or_host_mismatch_4403(db_session, server):
+    with TestClient(make_app(db_session, server, cors_origins=[])) as c:
+        expect_close(c, 4403, headers={"origin": "http://localhost:9999", "host": "localhost:8080"})
+        expect_close(c, 4403, headers={"origin": "https://app.example.com.evil.io", "host": "app.example.com"})
+        expect_close(c, 4403, headers={"origin": "null", "host": "app.example.com"})
+
+
+def test_empty_cors_no_origin_still_connects(db_session, server):
+    with TestClient(make_app(db_session, server, cors_origins=[])) as c:
+        with c.websocket_connect("/api/ws/live"):
             pass
 
 

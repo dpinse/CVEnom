@@ -238,11 +238,36 @@ async def test_refresh_replay_revokes_session(db_session):
         bad = await c.post("/api/auth/refresh", headers={**CSRF, "Cookie": f"cvenom_refresh={old}"})
         assert bad.status_code == 401 and bad.json() == {"error": "invalid_token"}
         assert set_cookie(bad) == CLEARED
+        assert "Max-Age=0" in set_cookie(bad)
         # session is revoked: even the newest token fails
         c.cookies.clear()
         worst = await c.post("/api/auth/refresh", headers={**CSRF, "Cookie": f"cvenom_refresh={newest}"})
         assert worst.status_code == 401
         assert db_session.scalars(select(UserSession)).one().revoked_at is not None
+
+
+async def test_refresh_grace_loser_401_does_not_clear_cookie(db_session):
+    mk_user(db_session)
+    async with client(make_app(db_session)) as c:
+        r = await login(c)
+        old = cookie_value(r)
+        win = await c.post("/api/auth/refresh", headers=CSRF)
+        assert win.status_code == 200
+        newest = cookie_value(win)
+        # concurrent loser: predecessor presented within the grace window
+        c.cookies.clear()
+        loser = await c.post(
+            "/api/auth/refresh", headers={**CSRF, "Cookie": f"cvenom_refresh={old}"}
+        )
+        assert loser.status_code == 401 and loser.json() == {"error": "invalid_token"}
+        assert "set-cookie" not in loser.headers
+        # session untouched; the winner's rotated token still works
+        assert db_session.scalars(select(UserSession)).one().revoked_at is None
+        c.cookies.clear()
+        again = await c.post(
+            "/api/auth/refresh", headers={**CSRF, "Cookie": f"cvenom_refresh={newest}"}
+        )
+        assert again.status_code == 200 and cookie_value(again) != newest
 
 
 async def test_refresh_garbage_cookie_401_and_clears(db_session):

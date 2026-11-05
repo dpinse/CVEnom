@@ -1,0 +1,20 @@
+[
+  {
+    "title": "Gateway flaw hits thousands",
+    "summary": "Attackers are exploiting it.",
+    "url": "https://news.example/gateway",
+    "source": "Example News",
+    "published": "2026-11-05T08:00:00Z",
+    "cve_ids": [
+      "CVE-2026-3001"
+    ]
+  },
+  {
+    "title": "<img src=x onerror=alert(1)> &lt;script&gt;alert(2)&lt;/script&gt;",
+    "summary": "<img src=x onerror=alert(1)>",
+    "url": "https://news.example/xss",
+    "source": "Example News",
+    "published": "2026-11-05T07:00:00Z",
+    "cve_ids": []
+  }
+]

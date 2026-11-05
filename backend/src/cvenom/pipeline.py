@@ -8,7 +8,7 @@ import math
 from collections.abc import Callable, Iterable
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import and_, delete, exists, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -88,14 +88,33 @@ def _drop_known_kev_events(session: Session, events: list[dict]) -> list[dict]:
     The sticky DB kev flag acts as a second seen-set: a CVE listed by both CISA
     and VulnCheck (or re-emitted after lost/corrupt collector state) alerts once.
     Must run before the result's CVEs are upserted.
+
+    Final rule for a ``kev_added`` event on an already-KEV CVE:
+      * VulnCheck (or any non-CISA source): always dropped.
+      * CISA: passes if and only if ``cve.kev_alerted_at IS NULL``, i.e. no
+        ``kev_added`` alert event was ever persisted for the CVE (VulnCheck may
+        have flagged it silently via its first-run baseline or the recency gate
+        in ``collectors/seenstate.py``). ``persist_events`` stamps
+        ``kev_alerted_at``, so a CVE alerts once, from whichever source is first.
+    The CISA collector's own seen-set and 14-day recency gate still apply
+    upstream: only a listing new to CISA's seen-set and added within
+    ``kev_alert_max_age_days`` (or with an unknown date) emits at all, so very
+    old CISA additions never alert.
     """
     kev_ids = [e.get("cve_id") for e in events if e.get("type") == "kev_added"]
     if not kev_ids:
         return events
     already = set(_in_chunks(session, Cve.cve_id, kev_ids, Cve.kev.is_(True)))
-    return [
-        e for e in events if not (e.get("type") == "kev_added" and e.get("cve_id") in already)
-    ]
+    never_alerted = set(
+        _in_chunks(session, Cve.cve_id, kev_ids, Cve.kev.is_(True), Cve.kev_alerted_at.is_(None))
+    )
+
+    def dropped(e: dict) -> bool:
+        if e.get("type") != "kev_added" or e.get("cve_id") not in already:
+            return False
+        return not (e.get("source") == "cisa" and e.get("cve_id") in never_alerted)
+
+    return [e for e in events if not dropped(e)]
 
 
 def _sanitized(cve: NormalizedCve) -> NormalizedCve:
@@ -227,6 +246,7 @@ def persist_events(session: Session, events: list[dict], *, source_default: str)
     """
     seen: set[tuple[str, str | None]] = set()
     added = 0
+    kev_alerted: set[str] = set()
     for e in events:
         etype = e.get("type") if isinstance(e, dict) else None
         cve_id = e.get("cve_id") if isinstance(e, dict) else None
@@ -249,8 +269,22 @@ def persist_events(session: Session, events: list[dict], *, source_default: str)
         payload = {k: v for k, v in e.items() if k not in ("type", "cve_id", "source")}
         session.add(AlertEvent(type=etype, cve_id=cve_id, source=source, payload=_json_safe(payload)))
         added += 1
+        if etype == "kev_added" and cve_id is not None:
+            kev_alerted.add(cve_id)
     if added:
         session.flush()
+    if kev_alerted:
+        # Same transaction as the events: stamp the first kev_added alert per CVE.
+        for i in range(0, len(kev_alerted), _ID_CHUNK):
+            session.execute(
+                update(Cve)
+                .where(
+                    Cve.cve_id.in_(list(kev_alerted)[i : i + _ID_CHUNK]),
+                    Cve.kev_alerted_at.is_(None),
+                )
+                .values(kev_alerted_at=func.now())
+                .execution_options(synchronize_session=False)
+            )
     return added
 
 

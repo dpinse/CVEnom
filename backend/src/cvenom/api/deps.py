@@ -90,6 +90,16 @@ def require_admin(user: User = Depends(require_user)) -> User:
     return user
 
 
+# Sources whose INDIVIDUAL records (victim names, groups, post URLs) are shown to signed-in
+# users only (ransomware.live Fair Usage Policy). Stories carry "ransomware.live"; geo events
+# carry "ransomware_live". Aggregates (geo summary, story counts) stay public.
+RESTRICTED_SOURCES = frozenset({"ransomware.live", "ransomware_live"})
+
+
+def restricted_sources(user: User | None) -> frozenset[str]:
+    return RESTRICTED_SOURCES if user is None else frozenset()
+
+
 def public_or_user(request: Request, user: User | None = Depends(current_user)) -> User | None:
     if user is None and not request.app.state.settings.public_read:
         raise _unauthorized("unauthorized")

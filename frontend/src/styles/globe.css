@@ -1,0 +1,179 @@
+/* Globe stage (approved mockup: full-width well, overlay title top-left, legend along the bottom). Tokens only. */
+
+.globe-stage {
+  min-width: 0;
+}
+.globe-well {
+  position: relative;
+  background: radial-gradient(130% 100% at 50% 0%, color-mix(in srgb, var(--scope) 6%, var(--well)), var(--well) 60%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/*
+ * The MapLibre container itself carries the explicit height: a 0-height container is the
+ * classic "nothing renders" failure. Doubled class beats maplibre-gl.css's .maplibregl-map
+ * (position: relative; overflow: hidden) whichever stylesheet loads last.
+ */
+.globe-map.globe-map {
+  display: block;
+  width: 100%;
+  height: clamp(360px, 55vh, 640px);
+  min-height: 360px;
+  position: relative;
+}
+.globe-map .maplibregl-canvas {
+  cursor: grab;
+  outline: none;
+}
+.globe-map .maplibregl-canvas:active {
+  cursor: grabbing;
+}
+.globe-map .maplibregl-canvas:focus-visible {
+  outline: 2px solid var(--scope);
+  outline-offset: -2px;
+}
+
+/* overlays: never block the globe's pointer input, except the attribution link */
+.globe-ov {
+  position: absolute;
+  pointer-events: none;
+}
+.globe-title {
+  top: 13px;
+  left: 15px;
+  margin: 0;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--well) 70%, transparent);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--muted);
+}
+.globe-title b {
+  color: var(--text);
+  font-weight: 700;
+}
+.globe-ov-bottom {
+  bottom: 10px;
+  left: 12px;
+  right: 12px;
+}
+
+.globe-legend {
+  display: flex;
+  gap: 6px 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--well) 70%, transparent);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.lg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.lg-hint {
+  margin-left: auto;
+  /* --muted, not --faint: --faint is ~4.3:1 on the light backdrop (fails AA at 10.5px); tokens.test checks */
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.geo-attrib {
+  pointer-events: auto;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--muted) 50%, transparent);
+  text-underline-offset: 2px;
+}
+.geo-attrib:hover {
+  color: var(--text);
+}
+
+.swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+  /* --swatch is set per kind from KIND_TOKEN (GlobeChrome.tsx), the same mapping as the map paint */
+  background: var(--swatch, var(--muted));
+}
+.shade-ramp {
+  width: 27px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--sev-high) 30%, var(--land)),
+    color-mix(in srgb, var(--sev-high) 80%, var(--land))
+  );
+  outline: 1px solid var(--border-geo);
+}
+
+/* static fallback (no WebGL 2, or the globe chunk failed) */
+.globe-fallback {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 13px 15px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.globe-fallback .globe-title {
+  position: static;
+  background: none;
+  padding: 0;
+}
+.globe-fallback .globe-legend {
+  background: none;
+  padding: 0;
+}
+.gf-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.gf-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0 24px;
+}
+.gf-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.gf-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gf-kinds {
+  display: inline-flex;
+  gap: 3px;
+}
+.gf-mag {
+  color: var(--muted);
+}
+
+@media (max-width: 580px) {
+  .lg-hint {
+    display: none;
+  }
+}

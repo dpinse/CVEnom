@@ -67,7 +67,9 @@ def _external_id(group: str, victim: str, observed: datetime) -> str:
 @register
 class RansomwareLiveCollector(Collector):
     name = "ransomware_live"
-    cadence_seconds = 900
+    # Fair Usage Policy: ransomware.live caches data for 30 minutes and treats polling more
+    # often than that as a breach. Poll hourly (never below 1800).
+    cadence_seconds = 3600
 
     async def run(self) -> CollectorResult:
         if not get_settings().ransomware_live_api_key:

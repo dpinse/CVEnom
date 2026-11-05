@@ -20,6 +20,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from functools import partial
+from urllib.parse import urlsplit
 
 import anyio
 from fastapi import APIRouter, WebSocket
@@ -246,13 +247,39 @@ async def _sleep_until_exp(exp: int) -> None:
     await asyncio.sleep(_seconds_until(exp))
 
 
+_DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
+
+
+def _origin_allowed(origin: str, host: str | None, allowed: list[str]) -> bool:
+    """Configured list: exact match. Empty list ("same-origin only"): Origin must name the Host."""
+    if allowed:
+        return origin in allowed
+    if not host:
+        return False
+    try:
+        u = urlsplit(origin)
+        o_host, o_port = u.hostname, u.port
+    except ValueError:
+        return False
+    if u.scheme not in _DEFAULT_PORTS or not o_host:
+        return False
+    try:
+        h = urlsplit("//" + host.strip())
+        h_host, h_port = h.hostname, h.port
+    except ValueError:
+        return False
+    if not h_host:
+        return False
+    return (o_host, o_port or _DEFAULT_PORTS[u.scheme]) == (h_host, h_port or _DEFAULT_PORTS[u.scheme])
+
+
 @router.websocket("/api/ws/live")
 async def live(ws: WebSocket) -> None:
     app = ws.app
     settings = app.state.settings
 
     origin = ws.headers.get("origin")
-    if origin is not None and settings.cors_origins and origin not in settings.cors_origins:
+    if origin is not None and not _origin_allowed(origin, ws.headers.get("host"), settings.cors_origins):
         await ws.close(code=4403)  # before accept: nothing is ever sent to a foreign site
         return
 

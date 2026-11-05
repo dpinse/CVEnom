@@ -285,8 +285,10 @@ def test_kev_overlap_one_event_stable_source_earliest_date(db_session, first, se
     events = []
     # Two full hourly cycles of both feeds: no flip-flopping, no duplicate events.
     for _ in range(2):
-        events += ingest(db_session, _kev_result(cid, *first))
-        events += ingest(db_session, _kev_result(cid, *second))
+        for part in (first, second):
+            new = ingest(db_session, _kev_result(cid, *part))
+            pipeline.persist_events(db_session, new, source_default="x")
+            events += new
     assert [e["cve_id"] for e in events] == [cid]
     assert events[0]["source"] == first[0]
     row = db_session.get(Cve, cid)
@@ -295,7 +297,8 @@ def test_kev_overlap_one_event_stable_source_earliest_date(db_session, first, se
 
 
 def test_reingest_already_kev_cve_emits_nothing(db_session):
-    _insert_cve(db_session, "CVE-2026-7002", kev=True, kev_source="cisa")
+    _insert_cve(db_session, "CVE-2026-7002", kev=True, kev_source="cisa",
+                kev_alerted_at=datetime.now(timezone.utc))
     res = _kev_result("CVE-2026-7002", "cisa", _date(2026, 11, 3))
     assert ingest(db_session, res) == []
 
@@ -309,7 +312,9 @@ def test_kev_event_for_new_cve_passes_and_other_events_untouched(db_session):
             {"type": "other", "cve_id": "CVE-2026-7003"},
         ],
     )
-    assert ingest(db_session, res) == res.events
+    first = ingest(db_session, res)
+    assert first == res.events
+    pipeline.persist_events(db_session, first, source_default="cisa")  # stamps kev_alerted_at
     # Second time around the CVE is KEV in the DB: kev_added dropped, other kept.
     assert ingest(db_session, res) == [{"type": "other", "cve_id": "CVE-2026-7003"}]
 
@@ -380,3 +385,84 @@ def test_empty_affected_entries_filtered_after_sanitizing(db_session, enrich):
         NormalizedCve(cve_id=cid, affected=["<script>alert(1)</script>", "", "   ", "<b></b>", "nginx"])]),
         enrich_only=enrich)
     assert db_session.get(Cve, cid).affected == ["nginx"]
+
+
+# ---- CISA listing alerts when no KEV alert was ever sent (kev_alerted_at)
+
+import logging
+from datetime import UTC
+from sqlalchemy import select
+from cvenom.collectors.seenstate import track_new
+from cvenom.models import AlertEvent
+
+
+def _kev_events(db_session, cid):
+    return db_session.scalars(
+        select(AlertEvent).where(AlertEvent.cve_id == cid, AlertEvent.type == "kev_added")
+    ).all()
+
+
+def _run_cisa(db_session, cid, state, *, added=None):
+    """One CISA collector cycle for ``cid`` via the real seen-set/recency logic."""
+    added = added or datetime.now(UTC).date()
+    events = track_new(state, {cid}, added_dates={cid: added}, max_age_days=14,
+                       source="cisa", collector_name="kev", logger=logging.getLogger("t"))
+    res = CollectorResult(
+        cves=[NormalizedCve(cve_id=cid, kev=True, kev_source="cisa", kev_added=added)],
+        events=events)
+    out = ingest(db_session, res)
+    pipeline.persist_events(db_session, out, source_default="kev")
+    db_session.refresh(db_session.get(Cve, cid))
+    return out
+
+
+def test_cisa_alerts_after_vulncheck_silent_baseline(db_session):
+    cid = "CVE-2026-9101"
+    # VulnCheck first-run baseline: marks KEV, emits no event.
+    assert ingest(db_session, _silent_vc(cid)) == []
+    assert db_session.get(Cve, cid).kev_alerted_at is None
+    state = {"seen": ["CVE-2026-0001"]}  # CISA already baselined, X is new and recent
+    out = _run_cisa(db_session, cid, state)
+    assert [e["source"] for e in out] == ["cisa"]
+    assert len(_kev_events(db_session, cid)) == 1
+    assert db_session.get(Cve, cid).kev_alerted_at is not None
+    # CISA re-run with a lost seen-set: already alerted -> nothing new.
+    assert _run_cisa(db_session, cid, {"seen": ["CVE-2026-0001"]}) == []
+    assert len(_kev_events(db_session, cid)) == 1
+
+
+def _silent_vc(cid):
+    return CollectorResult(
+        cves=[NormalizedCve(cve_id=cid, kev=True, kev_source="vulncheck",
+                            kev_added=datetime.now(UTC).date())])
+
+
+def test_cisa_dropped_after_vulncheck_alerted(db_session):
+    cid = "CVE-2026-9102"
+    res = _kev_result(cid, "vulncheck", datetime.now(UTC).date())
+    pipeline.persist_events(db_session, ingest(db_session, res), source_default="vulncheck")
+    assert len(_kev_events(db_session, cid)) == 1
+    assert _run_cisa(db_session, cid, {"seen": ["CVE-2026-0001"]}) == []
+    assert len(_kev_events(db_session, cid)) == 1
+
+
+def test_cisa_dropped_after_cisa_already_alerted(db_session):
+    cid = "CVE-2026-9103"
+    assert len(_run_cisa(db_session, cid, {"seen": ["CVE-2026-0001"]})) == 1
+    assert _run_cisa(db_session, cid, {"seen": ["CVE-2026-0001"]}) == []
+    assert len(_kev_events(db_session, cid)) == 1
+
+
+def test_vulncheck_event_still_dropped_for_known_kev_never_alerted(db_session):
+    cid = "CVE-2026-9104"
+    _insert_cve(db_session, cid, kev=True, kev_source="cisa")  # kev_alerted_at NULL
+    assert ingest(db_session, _kev_result(cid, "vulncheck", _date(2026, 11, 3))) == []
+
+
+def test_old_cisa_listing_still_gated_by_recency(db_session):
+    cid = "CVE-2026-9105"
+    ingest(db_session, _silent_vc(cid))
+    out = _run_cisa(db_session, cid, {"seen": ["CVE-2026-0001"]},
+                    added=datetime.now(UTC).date() - timedelta(days=60))
+    assert out == []
+    assert _kev_events(db_session, cid) == []

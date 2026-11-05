@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-harness
+test-results
+playwright-report
+.env
+.env.*
+*.log
+.git
+Dockerfile
+.dockerignore

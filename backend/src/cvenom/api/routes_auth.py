@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from cvenom.auth.passwords import MAX_LENGTH, WeakPassword, dummy_verify
 from cvenom.auth.tokens import (
     InvalidToken,
+    RefreshGrace,
     create_session,
     issue_access,
     rotate_refresh,
@@ -124,6 +125,10 @@ def _refresh_sync(session: Session, request: Request, raw: str) -> JSONResponse:
             request.headers.get("user-agent", ""),
             client_ip(request),
         )
+    except RefreshGrace:
+        # Concurrent loser: the winner's response carries the fresh cookie; clearing
+        # here would overwrite it and log out every tab sharing the cookie.
+        return _error(401, "invalid_token")
     except InvalidToken:
         resp = _error(401, "invalid_token")
         _clear_refresh(resp)

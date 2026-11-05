@@ -1,0 +1,44 @@
+/* CVE velocity readout. Tokens only. Text uses --muted (AA), never --faint. */
+.velocity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 66px;
+  box-sizing: border-box;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 11px 15px;
+  flex: none;
+}
+.velocity-num { line-height: 1; }
+.velocity-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.velocity-value { font-family: var(--font-display); font-weight: 700; font-size: 26px; }
+.velocity-spark { position: relative; flex: 1 1 auto; min-width: 0; height: 42px; }
+.velocity-spark svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.velocity-line { fill: none; stroke: var(--scope); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.velocity-area { fill: color-mix(in srgb, var(--scope) 16%, transparent); stroke: none; }
+.velocity-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: var(--scope);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--scope) 25%, transparent);
+  pointer-events: none;
+}
+.velocity-side { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 11.5px; white-space: nowrap; }
+.velocity-trend { color: var(--muted); }
+.velocity-rising { color: var(--sev-crit); }
+.velocity-empty, .velocity-msg { color: var(--muted); font-size: 11.5px; }
+.velocity-state { justify-content: center; }
+.velocity-skeleton { background: var(--line); border-radius: 6px; opacity: 0.6; }
+.velocity-skeleton-num { width: 96px; height: 40px; }
+.velocity-skeleton-spark { flex: 1 1 auto; height: 42px; }
+
+@media (max-width: 580px) {
+  .velocity { flex-wrap: wrap; }
+  .velocity-spark { order: 3; flex-basis: 100%; }
+  .velocity-side { margin-left: auto; }
+}

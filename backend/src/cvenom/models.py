@@ -35,6 +35,8 @@ class Cve(Base):
     kev: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     kev_added: Mapped[date | None] = mapped_column(Date)
     kev_source: Mapped[str | None] = mapped_column(String)
+    # First time a kev_added alert event was persisted for this CVE (NULL = never alerted).
+    kev_alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     poc_badge: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     patch_available: Mapped[bool | None] = mapped_column(Boolean)
     affected: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")

@@ -92,7 +92,7 @@ async def test_create_email_rule_and_shape(ctx):
         assert r.status_code == 201
         b = r.json()
         assert set(b) == {"id", "name", "kind", "threshold", "keyword", "enabled",
-                          "created_at", "recipients"}
+                          "created_at", "recipients", "recipient_count"}
         assert b["recipients"][0]["email"] == "ops@example.com"
         assert b["recipients"][0]["channel"] == "email"
         assert db.scalars(select(AlertRecipient)).one().email == "ops@example.com"
@@ -118,6 +118,41 @@ async def test_member_forbidden_on_writes_ok_on_reads(ctx):
         assert (await c.get("/api/alerts/rules", headers=member)).status_code == 200
         assert (await c.get(f"/api/alerts/rules/{rid}", headers=member)).status_code == 200
         assert (await c.get("/api/alerts/rules")).status_code == 401
+
+
+async def test_member_rules_have_no_recipients_only_count(ctx):
+    app, admin, member, db = ctx
+    async with client(app) as c:
+        body = hook_rule()
+        body["recipients"].append({"channel": "email", "email": "Ops@Example.com"})
+        rid = (await c.post("/api/alerts/rules", json=body, headers=admin)).json()["id"]
+        await c.post("/api/alerts/rules", json=email_rule(), headers=admin)
+        paths = ["/api/alerts/rules", f"/api/alerts/rules/{rid}"]
+        for path in paths:
+            r = await c.get(path, headers=member)
+            assert r.status_code == 200
+            for banned in ("ops@example.com", "hooks.example.com", "SECRETPATH", "url_masked",
+                           "recipients", "querysecret"):
+                assert banned not in r.text.lower().replace("recipient_count", "")
+            data = r.json()
+            for rule in data if isinstance(data, list) else [data]:
+                assert "recipients" not in rule and "recipient_count" in rule
+        one = (await c.get(f"/api/alerts/rules/{rid}", headers=member)).json()
+        assert one["recipient_count"] == 2
+        listed = (await c.get("/api/alerts/rules", headers=member)).json()
+        assert [x["recipient_count"] for x in listed] == [2, 1]
+
+
+async def test_admin_rules_keep_recipients_and_count(ctx):
+    app, admin, member, db = ctx
+    async with client(app) as c:
+        rid = (await c.post("/api/alerts/rules", json=email_rule(), headers=admin)).json()["id"]
+        for path in ("/api/alerts/rules", f"/api/alerts/rules/{rid}"):
+            r = await c.get(path, headers=admin)
+            data = r.json()
+            rule = data[0] if isinstance(data, list) else data
+            assert rule["recipient_count"] == 1
+            assert rule["recipients"][0]["email"] == "ops@example.com"
 
 
 @pytest.mark.parametrize(
@@ -234,7 +269,7 @@ async def test_secret_once_masked_and_encrypted(ctx):
         assert secret not in row.webhook_secret_enc
 
         later = [
-            await c.get("/api/alerts/rules", headers=member),
+            await c.get("/api/alerts/rules", headers=admin),
             await c.get(f"/api/alerts/rules/{rid}", headers=admin),
             await c.patch(f"/api/alerts/rules/{rid}", json={"name": "renamed"}, headers=admin),
         ]
@@ -422,10 +457,10 @@ async def test_undecryptable_url_masks_without_500(ctx, monkeypatch):
         rid = (await c.post("/api/alerts/rules", json=hook_rule(), headers=admin)).json()["id"]
         monkeypatch.setenv("SECRETS_KEY", base64.b64encode(os.urandom(32)).decode())
         get_settings.cache_clear()
-        r = await c.get(f"/api/alerts/rules/{rid}", headers=member)
+        r = await c.get(f"/api/alerts/rules/{rid}", headers=admin)
         assert r.status_code == 200
         assert r.json()["recipients"][0]["url_masked"] == "https://(unavailable)/\u2026"
-        assert (await c.get("/api/alerts/rules", headers=member)).status_code == 200
+        assert (await c.get("/api/alerts/rules", headers=admin)).status_code == 200
 
 
 async def test_control_chars_in_name_422(ctx):

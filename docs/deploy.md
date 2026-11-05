@@ -29,10 +29,14 @@ command aborts.
   `.env`: that file is handed to every app container.
 - DB and Redis passwords must be URL-safe (`openssl rand -hex 24`): compose builds `DATABASE_URL`
   and `REDIS_URL` from them without escaping.
-- Sign in as the admin and invite further users from the admin API.
+- Sign in as the admin and invite further users from the admin UI (Admin → Invites). Invite and
+  password-reset links carry their token in the URL fragment (`/invite#<token>`, `/reset#<token>`),
+  which browsers never send to the server, so it stays out of nginx and Cloudflare access logs.
 
-Only `api` publishes a port, and only on `127.0.0.1:8000`. Postgres and Redis publish nothing.
-All app containers run read-only, as uid 10001, with all capabilities dropped. They receive `.env`
+Only `frontend` (nginx) publishes a port, and only on `127.0.0.1:8080`. The api, Postgres and Redis
+publish nothing: the api is reachable only through nginx. The `frontend` container runs
+unprivileged (uid 101) with a read-only root filesystem, tmpfs for `/tmp` and `/var/cache/nginx`,
+and all capabilities dropped. All app containers run read-only, as uid 10001, with all capabilities dropped. They receive `.env`
 through `env_file`, but compose blanks `POSTGRES_PASSWORD`, `APP_DB_PASSWORD` and `REDIS_PASSWORD`
 in their environment: the app only needs those inside `DATABASE_URL` / `REDIS_URL`.
 `REQUIRE_SECRETS_KEY=true` makes the API refuse to start when `SECRETS_KEY` is missing or invalid
@@ -40,78 +44,170 @@ in their environment: the app only needs those inside `DATABASE_URL` / `REDIS_UR
 
 ## Cloudflare and reverse proxies
 
-Compose pins the `cvenom` network to `172.28.0.0/24` with gateway `172.28.0.1`. This matters
-because the proxy address the app must trust depends on how the proxy reaches it.
+The `frontend` service is an unprivileged nginx (`frontend/nginx.conf`). It serves the built SPA
+and proxies `/api/` and the WebSocket `/api/ws/live` to `api:8000` on the same origin, so the
+browser only ever talks to one origin and the CSP needs no remote sources. It is the only
+service that publishes a port: `127.0.0.1:8080`. The api publishes nothing.
 
-**(a) Cloudflare Tunnel or any reverse proxy running on the host** and connecting to
-`127.0.0.1:8000`. Docker NATs the published port, so the container sees the bridge **gateway
-`172.28.0.1`** as its peer. Set both to it (these are the defaults in compose and `.env.example`):
+Compose pins the `cvenom` network to `172.28.0.0/24` with gateway `172.28.0.1`, and pins nginx to
+`172.28.0.10`. The chain is:
 
 ```
-TRUSTED_PROXY_CIDRS='["172.28.0.1/32"]'
-FORWARDED_ALLOW_IPS=172.28.0.1
+visitor -> Cloudflare -> cloudflared (host) -> 127.0.0.1:8080
+        -> bridge gateway 172.28.0.1 -> nginx 172.28.0.10 -> api:8000
 ```
 
-How the client IP is resolved: uvicorn runs with `--proxy-headers`, so when the peer matches
-`FORWARDED_ALLOW_IPS` it rewrites the peer to the right-most untrusted `X-Forwarded-For` hop. The
-app then applies its own check (`TRUSTED_PROXY_CIDRS`) to that peer. Cloudflare always sends
-`X-Forwarded-For`, so in practice the right-most `X-Forwarded-For` hop is the client IP that is
-used.
+**(a) Point cloudflared (or any reverse proxy on the host) at `http://127.0.0.1:8080`.** Docker
+NATs the published port, so nginx sees the bridge **gateway `172.28.0.1`** as its TCP peer.
+Cloudflare puts the visitor in `X-Forwarded-For`. These are the defaults in compose and
+`.env.example`:
 
-`TRUST_CF_CONNECTING_IP` is therefore close to inert: `CF-Connecting-IP` is consulted only when a
-request from a trusted proxy carries **no** `X-Forwarded-For`. Set it to `true` only for cloudflared
-(every request must come through Cloudflare). For a non-Cloudflare host proxy (nginx, Caddy): have
-it strip any client-supplied `CF-Connecting-IP`, set `X-Forwarded-For` itself, and leave
-`TRUST_CF_CONNECTING_IP=false`.
+```
+TRUSTED_PROXY_CIDRS='["172.28.0.1/32","172.28.0.10/32"]'
+FORWARDED_ALLOW_IPS=172.28.0.1,172.28.0.10
+```
 
-**(b) A reverse proxy running as a container on the `cvenom` network.** The peer is that
-container's IP on `172.28.0.0/24`: give it a fixed `ipv4_address` and use `<ip>/32` (or the
-subnet) for both settings.
+How the real client IP is resolved:
+
+1. nginx trusts only the gateway (`set_real_ip_from 172.28.0.1`, `real_ip_recursive on`). It uses
+   the real visitor for its own coarse `limit_req` (20 r/s, burst 40 per client), never as a
+   security decision.
+2. nginx hands the api `X-Forwarded-For: <incoming chain>, 172.28.0.1`, i.e. the gateway is
+   appended as the last hop. (This is written out explicitly instead of
+   `$proxy_add_x_forwarded_for`, because `real_ip` rewrites `$remote_addr` to the visitor and the
+   gateway hop would otherwise be lost.)
+3. The api's TCP peer is nginx, `172.28.0.10`, which is in `FORWARDED_ALLOW_IPS`. uvicorn
+   (`--proxy-headers`) walks `X-Forwarded-For` right to left, skips every trusted hop
+   (`172.28.0.1`) and takes the first untrusted address as the client. A client that forges
+   `X-Forwarded-For: 1.2.3.4` only ends up further left, behind the real address that Cloudflare
+   appended, so it is never reached.
+4. The app's own check (`client_ip`, using `TRUSTED_PROXY_CIDRS`) then sees the visitor as the
+   peer, which is not a trusted proxy, and uses it as is. Both settings hold the same two hops so
+   that either layer alone resolves the same client.
+
+`CF-Connecting-IP` is **stripped** by nginx (`proxy_set_header CF-Connecting-IP ""`), so it never
+reaches the api, and `TRUST_CF_CONNECTING_IP` must stay `false` (the default). Cloudflare's
+`X-Forwarded-For` is the source of truth. If you ever want the header forwarded, remove that line
+from `nginx.conf` deliberately and set `TRUST_CF_CONNECTING_IP=true` only when every request
+comes through Cloudflare.
+
+**(b) A different reverse proxy as a container on the `cvenom` network** (instead of cloudflared
+on the host): give it a fixed `ipv4_address`, trust that `<ip>/32` plus nginx in both settings, and
+also add that IP to `set_real_ip_from` (and the `$xfp_to_api` map) in `frontend/nginx.conf`.
+Otherwise nginx's `limit_req` sees only the proxy and buckets every visitor together.
 
 **(c) `127.0.0.1` is wrong for the published-port topology.** The connection arrives from the
-bridge gateway, not loopback. If `FORWARDED_ALLOW_IPS` is `127.0.0.1`, uvicorn ignores the
-forwarded headers and the peer stays `172.28.0.1`; the app's own `X-Forwarded-For` walk still
-separates visitors as long as `TRUSTED_PROXY_CIDRS` contains the gateway. What actually collapses
-every visitor into one rate-limit and login-throttle bucket is a `TRUSTED_PROXY_CIDRS` that does
-not contain the real peer (for example `127.0.0.1/32`): the app then never reads the forwarded
-headers. Set both settings to the gateway.
+bridge gateway, not loopback. If `FORWARDED_ALLOW_IPS` omitted the gateway or nginx, uvicorn
+would ignore the forwarded headers, and every visitor would collapse into one rate-limit and
+login-throttle bucket (the nginx peer). Keep both hops in both settings. If you change the
+network subnet, also change `set_real_ip_from` in `frontend/nginx.conf`.
 
 **(d) Verify.**
 
 1. Confirm the gateway: `docker network inspect deploy_cvenom --format '{{(index .IPAM.Config 0).Gateway}}'`
    (the network is `<project>_cvenom`; the project name is `deploy` unless you pass `-p`). It
    should print `172.28.0.1`.
-2. Request `/api/health` through the tunnel or proxy, then read the access log. uvicorn logs
+2. Request `/api/health` through the tunnel or proxy, then read the api access log. uvicorn logs
    access by default, so no rebuild is needed:
 
    ```sh
    docker compose --env-file ./.env -f deploy/docker-compose.prod.yml logs api
    ```
 
-   The client address on that line must be the real visitor's, not `172.28.0.1`. It shows the
-   peer after uvicorn's rewrite, so `172.28.0.1` there means `FORWARDED_ALLOW_IPS` does not match.
+   The client address on that line must be the real visitor's, not `172.28.0.1` and not
+   `172.28.0.10`. It is the peer after uvicorn's rewrite, so one of those two addresses there
+   means `FORWARDED_ALLOW_IPS` does not match the chain.
 3. **Docker Desktop (Windows/macOS):** published ports are forwarded through Docker Desktop's VM,
-   so the peer the container sees may not be the bridge gateway. Check the address in the access
-   log for a request sent directly to `127.0.0.1:8000`, and set both settings to that peer.
+   so the peer nginx sees may not be the bridge gateway. Request `127.0.0.1:8080` directly, read
+   which address nginx forwards (`docker compose --env-file ./.env -f deploy/docker-compose.prod.yml logs frontend`, and the api log), and adjust
+   `set_real_ip_from`, `FORWARDED_ALLOW_IPS` and `TRUSTED_PROXY_CIDRS` to that hop.
 
-**Lock down the origin.** Do not rely on Cloudflare alone. Keep `127.0.0.1:8000` bound to loopback
+**Lock down the origin.** Do not rely on Cloudflare alone. Keep `127.0.0.1:8080` bound to loopback
 (or firewall the port to the proxy), and if the origin is reachable from the internet, require
 Cloudflare Authenticated Origin Pulls (mTLS) or restrict the firewall to Cloudflare's published
-ranges. A request that bypasses Cloudflare must not be able to spoof client IPs or skip its rate
-limits.
+ranges. nginx's own limits (64 KB request bodies, bounded headers, a per-client request rate) are a
+backstop, not a replacement. A request that bypasses Cloudflare must not be able to spoof client
+IPs or skip its rate limits.
 
-`FORWARDED_ALLOW_IPS` is passed to uvicorn `--forwarded-allow-ips`; it must match the proxy that
-connects to the container, otherwise forwarded headers are ignored (default `127.0.0.1`).
+`FORWARDED_ALLOW_IPS` is passed to uvicorn `--forwarded-allow-ips`; it must match the proxies that
+connect to the container, otherwise forwarded headers are ignored (the image default is
+`127.0.0.1`; compose sets `172.28.0.1,172.28.0.10`).
+
+**TLS is required in front of nginx.** nginx itself speaks plain http on `127.0.0.1:8080`; the
+browser must reach it over https (Cloudflare, cloudflared or your reverse proxy terminates TLS).
+Served over plain http on any other host name or IP:
+
+- the CSP's `upgrade-insecure-requests` makes the browser fetch every script, stylesheet and font
+  over https, which nothing answers, so the page comes up blank;
+- the refresh cookie is `Secure`, so the browser drops it: sign-in lasts only until the next reload
+  or the access token's expiry.
+
+For local evaluation use `http://localhost:8080` (or `http://127.0.0.1:8080`). Current Chromium and
+Firefox treat loopback as a secure context: they do not upgrade its requests, and they keep a
+`Secure` cookie set by `http://localhost`. `frontend/e2e/csp.spec.ts` loads the production headers,
+`upgrade-insecure-requests` included, over `http://127.0.0.1` in both browsers. A LAN address or
+host name over http is not exempt.
+
+## Content Security Policy and security headers
+
+nginx sends these on every response (`always`, including errors); proxied `/api` responses keep
+the API's other headers (such as `Cache-Control`):
+
+```
+Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;
+  font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none';
+  base-uri 'none'; form-action 'self'; upgrade-insecure-requests
+Strict-Transport-Security: max-age=63072000; includeSubDomains
+X-Content-Type-Options: nosniff    Referrer-Policy: no-referrer    X-Frame-Options: DENY
+Cross-Origin-Opener-Policy: same-origin    Cross-Origin-Resource-Policy: same-origin
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+```
+
+There is no `unsafe-inline`, `unsafe-eval`, `blob:` or remote origin. `connect-src 'self'` covers
+the same-origin `wss://` live socket in current Chromium and Firefox (checked by
+`frontend/e2e/csp.spec.ts`, which serves `dist/` with exactly the headers parsed from
+`nginx.conf`). Fonts are real files (never `data:` URIs) because of `font-src 'self'`; the map
+worker is a same-origin module worker; React and MapLibre set styles through the CSSOM, which
+`style-src 'self'` allows. `index.html` carries no inline script or style.
+
+- **API docs.** FastAPI mounts `/docs`, `/redoc` and `/openapi.json` at the root, outside `/api/`,
+  so through nginx they fall into `location /` and return the SPA's `index.html`. With
+  `API_DOCS=true` they are reachable only by hitting the api container directly (for example
+  `docker compose --env-file ./.env -f deploy/docker-compose.prod.yml exec api ...` from inside, or a
+  temporary loopback port), and the api's own CSP would blank Swagger UI there anyway. There is
+  deliberately no nginx route for them; keep `API_DOCS=false`.
+- **Response headers.** The api sets CSP, HSTS, nosniff, Referrer-Policy and X-Frame-Options itself;
+  nginx hides those five from `/api/` responses (`proxy_hide_header`) and sends its own, so each
+  appears exactly once. HSTS, nosniff, Referrer-Policy and X-Frame-Options match or exceed the
+  api's. The CSP does not: the SPA policy replaces the api's stricter `default-src 'none';
+  frame-ancestors 'none'` on `/api/` responses. That is acceptable because those responses are JSON
+  served with `nosniff` (a browser will not run or render them as a document), and framing is still
+  refused by `frame-ancestors 'none'` and `X-Frame-Options: DENY`. A per-URI CSP (the api's policy
+  on `/api/`) is a possible future hardening. Any other api header (`Cache-Control`, ...) passes
+  through untouched.
+- **X-Forwarded-Proto.** nginx passes the gateway's `X-Forwarded-Proto` through only when the peer is
+  the trusted gateway and the value is exactly `http` or `https` (cloudflared connects over plain
+  http, so `$scheme` alone would always say `http`); otherwise it sends `$scheme`.
+- **Rate limit and timeouts.** `limit_req` (20 r/s, burst 40 per visitor) covers `/api/` and the
+  WebSocket only, never static files. `/api/` waits up to 60 s, above the 45 s alert test-send cap.
+- **Adding an origin.** Only when you truly need one (for example a tile server): add it to the
+  one directive that needs it in `frontend/nginx.conf` (for tiles, `connect-src 'self'
+  https://tiles.example.com`), never to `default-src`, then rebuild the frontend image. The
+  packaging tests still require no `unsafe-*`, no `blob:` and no wildcard. Update the e2e and
+  `src/test/project.test.ts` (which forbids remote URLs in the bundle) in the same change.
+- Headers are declared only at server level in `nginx.conf`: nginx drops inherited `add_header`
+  lines in any `location` that declares its own, so do not add one inside a `location`.
 
 ## Exposure settings
 
 - `PUBLIC_READ` (default `true`): anonymous read-only access to radar data. Set `false` to require
   login for everything.
 - `CORS_ORIGINS`: JSON list of exact origins, e.g. `'["https://cvenom.example.com"]'`. No wildcards.
-  Empty means same-origin only.
-- `API_DOCS` (default `false`): enables `/docs` and `/redoc`. Keep off in production. Note that
-  the strict `Content-Security-Policy` (`default-src 'none'`) blocks the Swagger UI / ReDoc assets,
-  so those pages render blank; `/openapi.json` itself works.
+  Empty means same-origin only, and that includes the live WebSocket: its `Origin` host[:port] must
+  equal the `Host` header (nginx forwards the client's `Host` unchanged, port included). A WebSocket
+  without an `Origin` header (non-browser clients) is still accepted.
+- `API_DOCS` (default `false`): enables `/docs`, `/redoc` and `/openapi.json` on the api. Keep off in
+  production. They are not reachable through nginx (see "Content Security Policy" above).
 
 ## Alert rules
 
@@ -156,7 +252,7 @@ The Redis password is passed as the `--requirepass` argument, so it is visible i
 `docker inspect` and `ps`. That is acceptable when only the operator has Docker access; the upgrade
 path is a mounted `redis.conf` or a Docker secret.
 
-## Free API keys
+## API keys
 
 | Setting | Source |
 | --- | --- |
@@ -166,9 +262,25 @@ path is a mounted `redis.conf` or a Docker secret.
 | `MAXMIND_ACCOUNT_ID`, `MAXMIND_LICENSE_KEY` | https://www.maxmind.com/en/geolite2/signup |
 | `CF_RADAR_TOKEN` | Cloudflare dashboard, API Tokens (Radar read) |
 | `ABUSECH_AUTH_KEY` | https://auth.abuse.ch/ |
-| `RANSOMWARE_LIVE_API_KEY` | ransomware.live Pro API. This one is a paid Pro key; leave it blank to use the free public data. |
+| `RANSOMWARE_LIVE_API_KEY` | ransomware.live Pro key (paid). The collector is OFF while this is blank. Polls hourly per their fair-use policy. |
 
-All are optional; sources run unauthenticated or are skipped when a key is blank.
+All keys are optional. A blank key means that source is skipped, or runs unauthenticated where it
+supports that: the ransomware.live, Cloudflare Radar and abuse.ch ThreatFox collectors are **off**
+while their key is blank, and DShield and Feodo need no key.
+
+### ransomware.live fair use
+
+- CVEnom polls ransomware.live hourly, which respects their 30-minute cache.
+- Anonymous/public viewers see only aggregated per-country victim counts; individual victim
+  records (names, groups, post URLs) are shown only to signed-in users and never re-served
+  to anonymous viewers.
+- Use a single key; do not rotate multiple keys to avoid quotas.
+- Raw ransomware.live data must not be exported or published.
+- The UI credits the source wherever a ransomware.live story is shown ("Ransomware data:
+  ransomware.live", a link to https://www.ransomware.live). Anonymous viewers of a CVE whose story
+  count includes hidden sources see "Some sources are visible to signed-in users only."
+- Story and per-CVE counts (`recent_story_count`) and lane placement include ransomware.live
+  stories for everyone: they are aggregate statistics, not records.
 
 ## Lock file
 
