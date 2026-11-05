@@ -1,3 +1,5 @@
+/* Explicit table roles are deliberate: the mobile stylesheet sets display:block, which drops native table semantics in some browsers. */
+/* eslint-disable jsx-a11y/no-redundant-roles, jsx-a11y/no-interactive-element-to-noninteractive-role */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ApiError, RateLimited } from "../lib/api";
@@ -33,7 +35,8 @@ function validCvss(s: string | null): number | undefined {
 export function parseFilters(sp: URLSearchParams): CveQuery & { page: number } {
   const out: CveQuery & { page: number } = { page: 1 };
   const q = sp.get("q");
-  if (q) out.q = q.slice(0, MAX_Q);
+  const tq = q?.trim().slice(0, MAX_Q).trim();
+  if (tq) out.q = tq;
   const lane = sp.get("lane");
   if (lane && (LANES as string[]).includes(lane)) out.lane = lane as Lane;
   const source = sp.get("source");
@@ -58,8 +61,8 @@ type Patch = Partial<Record<(typeof FILTER_KEYS)[number], string | undefined>>;
 function ResultRow({ item, now, onSelect }: { item: CveItem; now: Date; onSelect: (id: string) => void }) {
   const sev = severityOf(item.cvss);
   return (
-    <tr className="srow" data-sev={sev} data-testid="search-row" onClick={() => onSelect(item.cve_id)}>
-      <td className="c-id" data-label="CVE">
+    <tr className="srow" role="row" data-sev={sev} data-testid="search-row" onClick={() => onSelect(item.cve_id)}>
+      <td role="cell" className="c-id" data-label="CVE">
         <button
           type="button"
           className="sid"
@@ -71,23 +74,23 @@ function ResultRow({ item, now, onSelect }: { item: CveItem; now: Date; onSelect
           {item.cve_id}
         </button>
       </td>
-      <td data-label="CVSS">
+      <td role="cell" data-label="CVSS">
         {item.cvss !== null && <span className={`chip num ${sev}`}>{item.cvss.toFixed(1)}</span>}
       </td>
-      <td data-label="EPSS">
+      <td role="cell" data-label="EPSS">
         {item.epss_percentile !== null && <span className="chip num">p{Math.round(item.epss_percentile * 100)}</span>}
       </td>
-      <td data-label="KEV">
+      <td role="cell" data-label="KEV">
         {item.kev && (
           <span className="chip kev" title={item.kev_source ?? undefined}>
             KEV{item.kev_added ? ` · ${item.kev_added}` : ""}
           </span>
         )}
       </td>
-      <td className="c-pub" data-label="Published">
+      <td role="cell" className="c-pub" data-label="Published">
         {relTime(item.published, now)}
       </td>
-      <td className="c-sum" data-label="Summary">
+      <td role="cell" className="c-sum" data-label="Summary">
         <Text className="sum" value={item.summary} />
       </td>
     </tr>
@@ -124,7 +127,6 @@ export default function Search() {
 
   // q: local text, debounced into the URL (replace).
   const [qText, setQText] = useState(filters.q ?? "");
-  const [qDirty, setQDirty] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancel = () => {
     if (timer.current) clearTimeout(timer.current);
@@ -133,19 +135,33 @@ export default function Search() {
   useEffect(() => cancel, []);
   const urlQ = filters.q ?? "";
   const [seenQ, setSeenQ] = useState(urlQ);
+  const [lastWritten, setLastWritten] = useState(urlQ);
+  const [epoch, setEpoch] = useState(0);
+  const epochRef = useRef(0);
+  useEffect(() => {
+    epochRef.current = epoch;
+    cancel(); // a stale debounce must not fire after an external URL change
+  }, [epoch]);
   if (seenQ !== urlQ) {
     setSeenQ(urlQ);
-    if (!qDirty) setQText(urlQ);
+    if (urlQ !== lastWritten) {
+      // changed externally (back/forward, link): the URL wins
+      setLastWritten(urlQ);
+      setQText(urlQ);
+      setEpoch((e) => e + 1);
+    }
   }
   const onQ = (v: string) => {
     const value = v.slice(0, MAX_Q);
     setQText(value);
-    setQDirty(true);
     cancel();
+    const mine = epochRef.current;
     timer.current = setTimeout(() => {
       timer.current = null;
-      setQDirty(false);
-      update({ q: value });
+      if (mine !== epochRef.current) return;
+      const written = value.trim();
+      setLastWritten(written);
+      update({ q: written });
     }, DEBOUNCE_MS);
   };
 
@@ -176,7 +192,16 @@ export default function Search() {
     );
   }, [invalid, page, setSp]);
 
-  const setPage = (p: number) => update({ page: p <= 1 ? undefined : String(p) }, true);
+  const countRef = useRef<HTMLParagraphElement>(null);
+  const setPage = (p: number) => {
+    update({ page: p <= 1 ? undefined : String(p) }, true);
+    const el = countRef.current;
+    if (el) {
+      el.focus({ preventScroll: true });
+      const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      el.scrollIntoView?.({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    }
+  };
   const dateOrder = filters.from && filters.to && filters.from > filters.to;
   const total = data?.total ?? 0;
   const items = data?.items ?? [];
@@ -193,7 +218,7 @@ export default function Search() {
   const clear = () => {
     cancel();
     setInvalidSeen(false);
-    setQDirty(false);
+    setLastWritten("");
     setQText("");
     setCvssText("");
     setSp((prev) => {
@@ -275,24 +300,24 @@ export default function Search() {
           {errorText}
         </p>
       )}
-      <p className="scount" aria-live="polite">
+      <p className="scount" aria-live="polite" tabIndex={-1} ref={countRef}>
         {data ? (total === 0 ? "0 results" : `Showing ${first}–${last} of ${total}`) : isFetching ? "Loading…" : ""}
       </p>
       {data && items.length === 0 && !errorText && <p className="sempty">No CVEs match these filters</p>}
       {items.length > 0 && (
         <div className="stable-wrap" aria-busy={isPlaceholderData}>
-          <table className="stable">
-            <thead>
-              <tr>
-                <th scope="col">CVE</th>
-                <th scope="col">CVSS</th>
-                <th scope="col">EPSS</th>
-                <th scope="col">KEV</th>
-                <th scope="col">Published</th>
-                <th scope="col">Summary</th>
+          <table className="stable" role="table">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th scope="col" role="columnheader">CVE</th>
+                <th scope="col" role="columnheader">CVSS</th>
+                <th scope="col" role="columnheader">EPSS</th>
+                <th scope="col" role="columnheader">KEV</th>
+                <th scope="col" role="columnheader">Published</th>
+                <th scope="col" role="columnheader">Summary</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody role="rowgroup">
               {items.map((it) => (
                 <ResultRow key={it.cve_id} item={it} now={now} onSelect={(id) => select({ kind: "cve", id })} />
               ))}

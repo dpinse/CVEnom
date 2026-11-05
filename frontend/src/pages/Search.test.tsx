@@ -1,11 +1,11 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, test } from "vitest";
 import { item, renderAt, server, setupMsw } from "../test/shell";
 import type { CveListOut } from "../lib/types";
-import Search, { parseFilters } from "./Search";
+import Search, { DEBOUNCE_MS, parseFilters } from "./Search";
 
 setupMsw();
 afterEach(cleanup);
@@ -99,11 +99,62 @@ describe("Search page", () => {
     const before = seen.length;
     const input = screen.getByLabelText("Search CVEs");
     for (const v of ["l", "lo", "log", "log4"]) fireEvent.change(input, { target: { value: v } });
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, DEBOUNCE_MS / 2));
     expect(seen.length).toBe(before);
     await waitFor(() => expect(seen.length).toBe(before + 1));
     expect(seen[seen.length - 1].get("q")).toBe("log4");
     expect(lastUrl).toBe("/search?q=log4");
+  });
+
+  test("whitespace-only q sends nothing; padded q is trimmed", async () => {
+    api(() => list());
+    renderAt(ui, "/search");
+    await screen.findByText("CVE-2026-0001");
+    const before = seen.length;
+    const input = screen.getByLabelText("Search CVEs");
+    fireEvent.change(input, { target: { value: "   " } });
+    await new Promise((r) => setTimeout(r, DEBOUNCE_MS + 100));
+    expect(lastUrl).toBe("/search");
+    expect(seen.length).toBe(before);
+    fireEvent.change(input, { target: { value: "  log4j  " } });
+    await waitFor(() => expect(seen[seen.length - 1].get("q")).toBe("log4j"));
+    expect(lastUrl).toBe("/search?q=log4j");
+    expect(parseFilters(new URLSearchParams("q=%20%20%20")).q).toBeUndefined();
+  });
+
+  test("an external URL change cancels a pending debounce", async () => {
+    api(() => list());
+    function Nav() {
+      const nav = useNavigate();
+      return <button onClick={() => nav("/search?q=back")}>go</button>;
+    }
+    renderAt(
+      <>
+        {ui}
+        <Nav />
+      </>,
+      "/search",
+    );
+    await screen.findByText("CVE-2026-0001");
+    const input = screen.getByLabelText("Search CVEs") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "stale" } });
+    fireEvent.click(screen.getByText("go"));
+    await waitFor(() => expect(input.value).toBe("back"));
+    await new Promise((r) => setTimeout(r, DEBOUNCE_MS + 100));
+    expect(input.value).toBe("back");
+    expect(lastUrl).toBe("/search?q=back");
+    expect(seen.some((sp) => sp.get("q") === "stale")).toBe(false);
+  });
+
+  test("paging moves focus to the result count; table has explicit roles", async () => {
+    api((sp) => list(many(50), 120, Number(sp.get("page") ?? 1)));
+    renderAt(ui, "/search");
+    await screen.findByText("Showing 1–50 of 120");
+    expect(screen.getAllByRole("columnheader").length).toBe(6);
+    expect(screen.getAllByRole("cell").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByText("Next"));
+    await screen.findByText("Showing 51–100 of 120");
+    expect(document.activeElement?.className).toBe("scount");
   });
 
   test("a 201-char q is blocked at the input and truncated from the URL", async () => {
