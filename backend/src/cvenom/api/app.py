@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
+from cvenom import secretbox
 from cvenom.config import Settings, get_settings
 from cvenom.db import session_scope
 
@@ -69,6 +70,12 @@ def create_app(
     cache_paths: dict[str, frozenset[str]] | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
+    try:
+        secretbox.check_key(settings)
+    except (secretbox.SecretsKeyMissing, ValueError) as exc:
+        log.error("SECRETS_KEY unusable: %s", type(exc).__name__)
+        if settings.require_secrets_key:
+            raise
     if cache_paths is None:
         cache_paths = CACHE_PATHS
     docs = settings.api_docs

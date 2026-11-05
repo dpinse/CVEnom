@@ -415,3 +415,43 @@ async def test_member_forbidden_admin_allowed(db_session):
         assert_security_headers(r)
         r = await c.get("/t/admin", headers={"Authorization": f"Bearer {at}"})
         assert r.status_code == 200
+
+
+# ---- M-d: SECRETS_KEY validated at startup ----
+
+
+def _no_secrets_key(monkeypatch):
+    monkeypatch.delenv("SECRETS_KEY", raising=False)
+    get_settings.cache_clear()
+
+
+def test_create_app_raises_without_key_when_required(db_session, monkeypatch, caplog):
+    _no_secrets_key(monkeypatch)
+    with caplog.at_level("ERROR", logger="cvenom.api.app"):
+        with pytest.raises(Exception) as ei:
+            make_app(db_session, require_secrets_key=True)
+    assert type(ei.value).__name__ == "SecretsKeyMissing"
+    assert "SecretsKeyMissing" in caplog.text
+
+
+def test_create_app_raises_on_malformed_key_when_required(db_session, monkeypatch, caplog):
+    monkeypatch.setenv("SECRETS_KEY", "c2hvcnQ=")  # valid base64, wrong length
+    get_settings.cache_clear()
+    with caplog.at_level("ERROR", logger="cvenom.api.app"):
+        with pytest.raises(ValueError):
+            make_app(db_session, require_secrets_key=True)
+    assert "c2hvcnQ" not in caplog.text
+
+
+def test_create_app_only_logs_without_key_by_default(db_session, monkeypatch, caplog):
+    _no_secrets_key(monkeypatch)
+    with caplog.at_level("ERROR", logger="cvenom.api.app"):
+        make_app(db_session)
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1 and "SecretsKeyMissing" in errors[0].getMessage()
+
+
+def test_create_app_valid_key_logs_nothing(db_session, caplog):
+    with caplog.at_level("ERROR", logger="cvenom.api.app"):
+        make_app(db_session, require_secrets_key=True)
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]

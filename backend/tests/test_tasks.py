@@ -772,3 +772,21 @@ def test_default_publisher_reaches_channel(db_session, factory, fake_registry, m
     assert out["published"] is True
     msg = sub.get_message(timeout=1)
     assert json.loads(msg["data"])["what"] == ["lanes"]
+
+
+def test_worker_ready_checks_secrets_key_and_only_logs(monkeypatch, caplog):
+    import cvenom.tasks as tasks
+    from cvenom.config import get_settings
+
+    monkeypatch.setattr(tasks.refresh_geoip_task, "delay", lambda: None)
+    monkeypatch.delenv("SECRETS_KEY", raising=False)
+    get_settings.cache_clear()
+    try:
+        with caplog.at_level("ERROR", logger="cvenom.tasks"):
+            from celery.signals import worker_ready
+
+            worker_ready.send(sender=None)  # must not raise
+    finally:
+        get_settings.cache_clear()
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any("SECRETS_KEY" in m and "SecretsKeyMissing" in m for m in errors)

@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     # --- API / auth / alerts (Plan 3) ---
     # base64 of 32 random bytes; required only when the secret box is used.
     secrets_key: SecretStr | None = None
+    # true in production: the API refuses to start without a valid SECRETS_KEY.
+    require_secrets_key: bool = False
     public_read: bool = True
     api_docs: bool = False
     cors_origins: list[str] = []

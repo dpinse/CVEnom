@@ -17,8 +17,8 @@ class SecretsKeyMissing(Exception):
     """SECRETS_KEY is not configured."""
 
 
-def _aesgcm() -> AESGCM:
-    secret = get_settings().secrets_key
+def _aesgcm(settings=None) -> AESGCM:
+    secret = (settings or get_settings()).secrets_key
     if secret is None:
         raise SecretsKeyMissing("SECRETS_KEY is not configured")
     try:
@@ -28,6 +28,12 @@ def _aesgcm() -> AESGCM:
     if len(key) != 32:
         raise ValueError("SECRETS_KEY must decode to exactly 32 bytes")
     return AESGCM(key)
+
+
+def check_key(settings=None) -> None:
+    """Load and validate SECRETS_KEY. Raises SecretsKeyMissing or ValueError
+    (messages never contain the key)."""
+    _aesgcm(settings)
 
 
 def encrypt(plaintext: bytes) -> str:

@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from cvenom import secretbox
-from cvenom.alerts.sinks import SinkError, clean_summary
+from cvenom.alerts.sinks import SinkError, SinkNotConfigured, clean_summary
 from cvenom.models import AlertDelivery, AlertRecipient, AlertRule, Cve
 
 MAX_URL_LEN = 2048
@@ -151,9 +151,13 @@ MAX_RESPONSE_BYTES = 64 * 1024
 OVERALL_TIMEOUT_S = 30
 
 
+class _MissingCredential(Exception):
+    pass
+
+
 def _decrypt(token: str | None) -> str:
     if not token:
-        raise ValueError("missing")
+        raise _MissingCredential
     return secretbox.decrypt(token).decode()
 
 
@@ -195,6 +199,10 @@ class WebhookSink:
         try:
             url = _decrypt(recipient.webhook_url)
             secret = _decrypt(recipient.webhook_secret_enc)
+        except (secretbox.SecretsKeyMissing, ValueError):
+            # SECRETS_KEY missing or changed: defer (no attempt burned); the
+            # dispatcher's 7-day expiry still bounds how long it stays pending.
+            raise SinkNotConfigured("webhook credentials unavailable") from None
         except Exception:
             raise SinkError("webhook credentials unavailable") from None
         try:

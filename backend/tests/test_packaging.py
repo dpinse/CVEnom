@@ -14,6 +14,8 @@ ENV_EXAMPLE = ROOT / ".env.example"
 INIT = ROOT / "deploy" / "postgres-init" / "01-app-role.sh"
 APP_SERVICES = ("api", "worker", "beat", "migrate")
 SECRET_KEY_RE = re.compile(r"(?i)(password|secret|token|key)")
+# Boolean flags whose names merely contain "secret"/"key".
+NOT_SECRETS = {"REQUIRE_SECRETS_KEY"}
 REF_RE = re.compile(r"\$\{[A-Z_]+:\?[^}]*\}")
 
 
@@ -55,7 +57,7 @@ def test_only_api_publishes_loopback(compose):
 
 def test_no_literal_secrets_in_compose(compose):
     for key, value, path in _walk(compose):
-        if SECRET_KEY_RE.search(key) and isinstance(value, str):
+        if SECRET_KEY_RE.search(key) and isinstance(value, str) and key not in NOT_SECRETS:
             assert REF_RE.fullmatch(value), (path, value)
     text = COMPOSE.read_text()
     for var in ("POSTGRES_PASSWORD", "APP_DB_PASSWORD", "REDIS_PASSWORD"):
@@ -135,7 +137,7 @@ def test_env_example_secrets_blank():
             continue
         k, v = s.split("=", 1)
         seen.add(k)
-        if SECRET_KEY_RE.search(k):
+        if SECRET_KEY_RE.search(k) and k not in NOT_SECRETS:
             assert v.strip() == "", k
     for k in ("SECRETS_KEY", "POSTGRES_PASSWORD", "APP_DB_PASSWORD", "REDIS_PASSWORD",
               "ADMIN_PASSWORD", "SMTP_PASSWORD", "TRUST_CF_CONNECTING_IP"):
@@ -201,3 +203,12 @@ def test_build_is_fully_hashed():
     assert "build-constraints.lock" in text
     bc = (ROOT / "backend" / "build-constraints.lock").read_text()
     assert "setuptools==" in bc and "--hash=sha256:" in bc
+
+
+@pytest.mark.parametrize("svc", APP_SERVICES)
+def test_prod_requires_secrets_key(compose, svc):
+    assert compose["services"][svc]["environment"]["REQUIRE_SECRETS_KEY"] == "true"
+
+
+def test_env_example_requires_secrets_key():
+    assert re.search(r"(?m)^REQUIRE_SECRETS_KEY=true$", ENV_EXAMPLE.read_text())

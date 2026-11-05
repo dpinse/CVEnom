@@ -90,3 +90,19 @@ def test_bad_key_raises_without_leaking(monkeypatch, text):
         secretbox.encrypt(b"PLAINTEXT-MARKER")
     msg = str(ei.value) + repr(ei.value)
     assert text not in msg and "PLAINTEXT-MARKER" not in msg
+
+
+def test_check_key(monkeypatch):
+    from cvenom import secretbox
+
+    _set_key(monkeypatch)
+    secretbox.check_key()
+    _set_key(monkeypatch, raw=b"x" * 16)
+    with pytest.raises(ValueError):
+        secretbox.check_key()
+    monkeypatch.delenv("SECRETS_KEY")
+    from cvenom.config import get_settings
+
+    get_settings.cache_clear()
+    with pytest.raises(secretbox.SecretsKeyMissing):
+        secretbox.check_key()

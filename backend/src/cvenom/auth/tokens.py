@@ -8,6 +8,7 @@ Functions flush but never commit, with one deliberate exception: see
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import threading
 import time
@@ -28,6 +29,8 @@ from sqlalchemy.orm import Session
 from cvenom import secretbox
 from cvenom.config import get_settings
 from cvenom.models import SigningKey, User, UserSession, UserSessionUsedRefresh
+
+log = logging.getLogger(__name__)
 
 ALGORITHM = "EdDSA"
 # Fixed int64 key for the transaction-scoped advisory lock guarding key creation.
@@ -123,8 +126,14 @@ class KeyRing:
         return session.scalars(stmt).first()
 
     @staticmethod
-    def current(session: Session, now: datetime) -> SigningKey:
+    def current(
+        session: Session, now: datetime, *, discard_kid: str | None = None
+    ) -> SigningKey:
         """Return the active signing key, creating/rotating it when needed.
+
+        `discard_kid` names an active key that must not be returned (its private
+        half is undecryptable); it is retired and replaced unless another worker
+        already did so.
 
         Flushes but does not commit; the caller owns the transaction.
         """
@@ -132,7 +141,11 @@ class KeyRing:
         rotate_after = timedelta(days=get_settings().jwt_rotation_days)
 
         def usable(k: SigningKey | None) -> bool:
-            return k is not None and k.created_at > now - rotate_after
+            return (
+                k is not None
+                and k.created_at > now - rotate_after
+                and k.kid != discard_kid
+            )
 
         key = KeyRing._active(session)
         if usable(key):
@@ -153,6 +166,26 @@ class KeyRing:
         session.info[_KEY_CREATED] = True
         _invalidate_key_cache()
         return new
+
+    @staticmethod
+    def signing_key(session: Session, now: datetime) -> tuple[SigningKey, Ed25519PrivateKey]:
+        """The active key with its decrypted private half.
+
+        If SECRETS_KEY changed, the stored private key no longer decrypts; the
+        key is retired and a fresh one created (under the advisory lock) instead
+        of failing every login until it ages out. A missing or malformed
+        SECRETS_KEY still raises: no new key could be encrypted either.
+        """
+        key = KeyRing.current(session, now)
+        try:
+            return key, _load_private(key)
+        except secretbox.SecretsKeyMissing:
+            raise
+        except ValueError as exc:
+            secretbox.check_key()  # raises if SECRETS_KEY itself is unusable
+            log.warning("signing key undecryptable; rotating (%s)", type(exc).__name__)
+        key = KeyRing.current(session, now, discard_kid=key.kid)
+        return key, _load_private(key)
 
     @staticmethod
     def _load_keys(
@@ -191,11 +224,17 @@ class KeyRing:
         }
 
 
+def _load_private(key: SigningKey) -> Ed25519PrivateKey:
+    priv = serialization.load_der_private_key(secretbox.decrypt(key.private_enc), password=None)
+    if not isinstance(priv, Ed25519PrivateKey):
+        raise ValueError("signing key is not Ed25519")
+    return priv
+
+
 def issue_access(session: Session, user: User, sid: uuid.UUID, now: datetime) -> str:
     _require_aware(now)
     s = get_settings()
-    key = KeyRing.current(session, now)
-    priv = serialization.load_der_private_key(secretbox.decrypt(key.private_enc), password=None)
+    key, priv = KeyRing.signing_key(session, now)
     iat = int(now.timestamp())
     claims = {
         "sub": str(user.id),

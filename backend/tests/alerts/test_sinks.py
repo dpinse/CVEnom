@@ -334,3 +334,34 @@ def test_build_sinks_registers_both():
     sinks = build_sinks()
     assert set(sinks) == {"email", "webhook"}
     assert isinstance(sinks["email"], EmailSink) and isinstance(sinks["webhook"], WebhookSink)
+
+
+# ------------------------------------------ M-d: undecryptable credentials defer
+
+
+def test_webhook_wrong_secrets_key_defers(monkeypatch):
+    from cvenom.config import get_settings
+
+    rec = hook_recipient()
+    monkeypatch.setenv("SECRETS_KEY", base64.b64encode(os.urandom(32)).decode())
+    get_settings.cache_clear()
+    cap = Capture()
+    with pytest.raises(SinkNotConfigured, match="^webhook credentials unavailable$"):
+        sink_with(cap).send(None, make_cve(), make_rule(), rec)
+    assert cap.requests == []
+
+
+def test_webhook_missing_secrets_key_defers(monkeypatch):
+    from cvenom.config import get_settings
+
+    rec = hook_recipient()
+    monkeypatch.delenv("SECRETS_KEY")
+    get_settings.cache_clear()
+    with pytest.raises(SinkNotConfigured, match="^webhook credentials unavailable$"):
+        sink_with(Capture()).send(None, make_cve(), make_rule(), rec)
+
+
+def test_webhook_absent_credentials_are_a_hard_error():
+    with pytest.raises(SinkError) as ei:
+        sink_with(Capture()).send(None, make_cve(), make_rule(), AlertRecipient(channel="webhook"))
+    assert not isinstance(ei.value, SinkNotConfigured)

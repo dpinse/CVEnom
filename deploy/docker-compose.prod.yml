@@ -10,6 +10,7 @@ x-app: &app
     DATABASE_URL: postgresql+psycopg://cvenom_app:${APP_DB_PASSWORD:?}@postgres:5432/cvenom
     REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
     GEOIP_DIR: /data/geoip
+    REQUIRE_SECRETS_KEY: "true"
   read_only: true
   tmpfs:
     - /tmp
@@ -38,6 +39,7 @@ services:
       DATABASE_URL: postgresql+psycopg://cvenom_app:${APP_DB_PASSWORD:?}@postgres:5432/cvenom
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
       GEOIP_DIR: /data/geoip
+      REQUIRE_SECRETS_KEY: "true"
       # Peer seen by the container for a host process hitting 127.0.0.1:8000 is the bridge gateway.
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.28.0.1}
     ports:

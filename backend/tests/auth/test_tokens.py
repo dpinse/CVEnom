@@ -598,3 +598,61 @@ def test_cache_invalidated_on_commit_of_key_creation(test_engine):
         s.execute(__import__("sqlalchemy").text("DELETE FROM signing_key"))
         s.commit()
         s.close()
+
+
+# ------------------------------------------- I2: SECRETS_KEY change recovery
+
+
+def _change_secrets_key(monkeypatch):
+    monkeypatch.setenv("SECRETS_KEY", base64.b64encode(os.urandom(32)).decode())
+    get_settings.cache_clear()
+
+
+def test_secrets_key_change_rotates_undecryptable_key(db_session, user, monkeypatch, caplog):
+    sid = uuid.uuid4()
+    old_tok = issue_access(db_session, user, sid, NOW)
+    old_kid = jwt.get_unverified_header(old_tok)["kid"]
+    _change_secrets_key(monkeypatch)
+    later = NOW + timedelta(minutes=1)
+    with caplog.at_level("WARNING", logger="cvenom.auth.tokens"):
+        new_tok = issue_access(db_session, user, sid, later)
+    new_kid = jwt.get_unverified_header(new_tok)["kid"]
+    assert new_kid != old_kid
+    assert db_session.get(SigningKey, old_kid).retired_at == later
+    assert db_session.get(SigningKey, new_kid).retired_at is None
+    assert decode_access(db_session, new_tok, later).kid == new_kid
+    # Verification needs only the public PEM: the old token still verifies in grace.
+    tokens.reset_key_cache()
+    assert decode_access(db_session, old_tok, later).kid == old_kid
+    msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("signing key undecryptable; rotating" in m for m in msgs)
+    assert not any("v1:" in m for m in msgs)
+
+
+def test_secrets_key_change_then_reissue_uses_new_key_once(db_session, user, monkeypatch):
+    issue_access(db_session, user, uuid.uuid4(), NOW)
+    _change_secrets_key(monkeypatch)
+    a = issue_access(db_session, user, uuid.uuid4(), NOW + timedelta(minutes=1))
+    b = issue_access(db_session, user, uuid.uuid4(), NOW + timedelta(minutes=2))
+    assert jwt.get_unverified_header(a)["kid"] == jwt.get_unverified_header(b)["kid"]
+    assert len(db_session.scalars(select(SigningKey)).all()) == 2
+
+
+def test_missing_secrets_key_still_raises(db_session, user, monkeypatch):
+    issue_access(db_session, user, uuid.uuid4(), NOW)
+    monkeypatch.delenv("SECRETS_KEY")
+    monkeypatch.setattr(get_settings(), "secrets_key", None)
+    with pytest.raises(secretbox.SecretsKeyMissing):
+        issue_access(db_session, user, uuid.uuid4(), NOW + timedelta(minutes=1))
+    active = db_session.scalars(select(SigningKey).where(SigningKey.retired_at.is_(None))).all()
+    assert len(active) == 1  # nothing retired
+
+
+def test_invalid_secrets_key_does_not_retire(db_session, user, monkeypatch):
+    issue_access(db_session, user, uuid.uuid4(), NOW)
+    monkeypatch.setenv("SECRETS_KEY", "not-base64!!")
+    get_settings.cache_clear()
+    with pytest.raises(ValueError):
+        issue_access(db_session, user, uuid.uuid4(), NOW + timedelta(minutes=1))
+    active = db_session.scalars(select(SigningKey).where(SigningKey.retired_at.is_(None))).all()
+    assert len(active) == 1

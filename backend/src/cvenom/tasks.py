@@ -22,7 +22,7 @@ from cvenom.collectors import abusech, cfradar, dshield, epss, kev, news, nvd, o
 from cvenom.collectors.base import REGISTRY
 from cvenom.config import get_settings
 from cvenom.db import get_engine, session_scope
-from cvenom import live
+from cvenom import live, secretbox
 from cvenom.alerts.dispatch import dispatch_once
 from cvenom.alerts.sinks import build_sinks
 from cvenom.models import CollectorRun, Cve, UserSession
@@ -228,6 +228,16 @@ def bootstrap_geoip(*args: Any, **kwargs: Any) -> None:
         refresh_geoip_task.delay()
     except Exception as exc:
         log.warning("geoip bootstrap enqueue failed: %s", type(exc).__name__)
+
+
+@worker_ready.connect
+def check_secrets_key(*args: Any, **kwargs: Any) -> None:
+    """Surface a missing/invalid SECRETS_KEY at worker start (log only: collectors
+    do not need it; webhook deliveries defer until it is fixed)."""
+    try:
+        secretbox.check_key()
+    except Exception as exc:
+        log.error("SECRETS_KEY unusable: %s", type(exc).__name__)
 
 
 @worker_process_init.connect
