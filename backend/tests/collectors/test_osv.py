@@ -137,7 +137,13 @@ def test_enrich_only_and_registration():
 
 @pytest.mark.asyncio
 async def test_fetch_skips_failed_vuln_and_continues(respx_mock, fast_sleep, caplog):
-    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=INDEX))
+    # 1 failure out of 5 fetches (20%) is at the threshold: logged, run continues.
+    index = INDEX.replace(
+        "2026-11-01T00:00:00Z,Go/GO-2026-1\n",
+        "2026-11-01T00:00:00Z,Go/GO-2026-1\n2026-11-01T00:00:00Z,Go/GO-2026-2\n",
+    )
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=index))
+    respx_mock.get(VULN_URL.format(id="GO-2026-2")).mock(return_value=httpx.Response(200, json=NO_CVE))
     respx_mock.get(VULN_URL.format(id="GHSA-aaaa-bbbb-cccc")).mock(
         return_value=httpx.Response(200, json=FIXED)
     )
@@ -150,7 +156,9 @@ async def test_fetch_skips_failed_vuln_and_continues(respx_mock, fast_sleep, cap
     )
     with caplog.at_level(logging.WARNING, logger="cvenom.collectors.osv"):
         raw = await OsvCollector().fetch(since=SINCE)
-    assert [r["id"] for r in raw] == ["GHSA-aaaa-bbbb-cccc", "GHSA-dddd-eeee-ffff", "CVE-2026-3001"]
+    assert [r["id"] for r in raw] == [
+        "GHSA-aaaa-bbbb-cccc", "GHSA-dddd-eeee-ffff", "CVE-2026-3001", "GHSA-gggg-hhhh-iiii"
+    ]
     assert any("DSA-1234" in r.getMessage() for r in caplog.records)
     assert osv.REQUEST_DELAY in fast_sleep
 
@@ -231,3 +239,50 @@ def test_invalid_alias_skipped_but_valid_aliases_kept(caplog):
         res = OsvCollector().normalize([rec])
     assert [c.cve_id for c in res.cves] == ["CVE-2026-5050"]
     assert any("CVE-1<img src=x>" in r.getMessage() for r in caplog.records)
+
+
+
+# --- failure threshold and id validation (#9b, #9c) ---
+
+
+def _index(*ids):
+    return "".join(f"2026-11-04T10:00:00Z,Go/{i}\n" for i in ids)
+
+
+@pytest.mark.asyncio
+async def test_fetch_raises_when_more_than_20_percent_fail(respx_mock):
+    ids = [f"GO-2026-{n}" for n in range(1, 6)]
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=_index(*ids)))
+    for i in ids[:3]:
+        respx_mock.get(VULN_URL.format(id=i)).mock(return_value=httpx.Response(200, json=OWN_CVE))
+    for i in ids[3:]:  # 2 of 5 = 40% fail
+        respx_mock.get(VULN_URL.format(id=i)).mock(return_value=httpx.Response(404))
+    with pytest.raises(RuntimeError, match="2/5"):
+        await OsvCollector(since=SINCE).fetch()
+
+
+@pytest.mark.asyncio
+async def test_run_marked_failed_when_threshold_exceeded(respx_mock):
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=_index("GO-2026-1")))
+    respx_mock.get(VULN_URL.format(id="GO-2026-1")).mock(return_value=httpx.Response(404))
+    c = OsvCollector(since=SINCE)
+    res = await c.run()
+    assert c.last_error is not None and res.cves == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_ids_skipped_with_warning_and_valid_ids_quoted(respx_mock, caplog):
+    bad = ["..", "GO?x=1", "GO#frag", "GO%2F..", "GO 1", "GO\\x"]
+    good = "GHSA:abc_1.2-x"
+    text = _index(*bad) + _index(good)
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=text))
+    route = respx_mock.get(url__startswith="https://api.osv.dev/v1/vulns/").mock(
+        return_value=httpx.Response(200, json=OWN_CVE)
+    )
+    with caplog.at_level(logging.WARNING, logger="cvenom.collectors.osv"):
+        raw = await OsvCollector(since=SINCE).fetch()
+    assert route.call_count == 1
+    assert route.calls[0].request.url.raw_path == b"/v1/vulns/GHSA%3Aabc_1.2-x"
+    assert len(raw) == 1
+    invalid_msgs = [r.getMessage() for r in caplog.records if "invalid" in r.getMessage()]
+    assert len(invalid_msgs) == len(bad)

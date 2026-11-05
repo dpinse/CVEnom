@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 
 from cvenom.collectors import base
 from cvenom.collectors.base import (
@@ -22,6 +24,9 @@ VULN_URL = "https://api.osv.dev/v1/vulns/{id}"
 MAX_IDS = 1000
 DEFAULT_WINDOW = timedelta(days=7)
 REQUEST_DELAY = 0.1
+# A run with more than this share of per-id fetch failures fails as a whole.
+MAX_FAILURE_RATIO = 0.2
+_ID_RE = re.compile(r"[A-Za-z0-9._:-]+")
 
 
 async def _sleep(delay: float) -> None:
@@ -32,6 +37,11 @@ async def _sleep(delay: float) -> None:
 def _parse_ts(text: str) -> datetime:
     ts = datetime.fromisoformat(text.strip())
     return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
+def _valid_id(vuln_id: str) -> bool:
+    # Dot-only ids ("." / "..") pass the character class but are path segments.
+    return bool(_ID_RE.fullmatch(vuln_id)) and bool(vuln_id.strip("."))
 
 
 def parse_index(text: str, since: datetime) -> list[str]:
@@ -75,18 +85,31 @@ class OsvCollector(Collector):
 
     async def fetch(self, since: datetime | None = None) -> list[dict]:
         cutoff = since or self.since or datetime.now(UTC) - DEFAULT_WINDOW
-        ids = parse_index(await http_get_text(INDEX_URL), cutoff)
+        ids = []
+        for vuln_id in parse_index(await http_get_text(INDEX_URL), cutoff):
+            if _valid_id(vuln_id):
+                ids.append(vuln_id)
+            else:
+                log.warning("osv: skipping invalid id %r", vuln_id)
         records: list[dict] = []
+        failed = 0
         for i, vuln_id in enumerate(ids):
             if i:
                 await _sleep(REQUEST_DELAY)
             try:
-                rec = await http_get_json(VULN_URL.format(id=vuln_id))
+                rec = await http_get_json(VULN_URL.format(id=quote(vuln_id, safe="")))
             except Exception as exc:
+                failed += 1
                 log.warning("osv: failed to fetch %s: %s", vuln_id, exc)
                 continue
             if isinstance(rec, dict):
                 records.append(rec)
+        if ids and failed / len(ids) > MAX_FAILURE_RATIO:
+            # Fail the run so the window does not advance past the lost ids.
+            raise RuntimeError(
+                f"osv: {failed}/{len(ids)} vuln fetches failed "
+                f"(> {MAX_FAILURE_RATIO:.0%}); not advancing window"
+            )
         return records
 
     @staticmethod
