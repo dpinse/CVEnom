@@ -1,7 +1,8 @@
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
-from urllib.parse import urlsplit
+import unicodedata
+from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -37,6 +38,21 @@ def validate_cve_id(value: object) -> str:
     return normalized
 
 
+# IDNA label separators that WHATWG URL parsing maps to "." (ideographic, fullwidth, halfwidth).
+_IDNA_DOTS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
+
+
+def _is_onion_host(hostname: str) -> bool:
+    """True if the host is (or ends in) .onion as a browser would see it.
+
+    Normalises like WHATWG host parsing does before the check: percent-decode, NFKC
+    (fullwidth letters), map the IDNA dot separators, drop trailing dots, lower-case.
+    """
+    host = unicodedata.normalize("NFKC", unquote(hostname)).translate(_IDNA_DOTS)
+    host = host.rstrip(".").lower()
+    return host == "onion" or host.endswith(".onion")
+
+
 def validate_http_url(value: object) -> str:
     if not isinstance(value, str):
         raise ValueError("url must be a string")
@@ -51,8 +67,7 @@ def validate_http_url(value: object) -> str:
         raise ValueError("url must be http(s) with a host")
     if parts.username or parts.password:
         raise ValueError("url must not contain userinfo")
-    host = (parts.hostname or "").rstrip(".").lower()
-    if host == "onion" or host.endswith(".onion"):
+    if _is_onion_host(parts.hostname or ""):
         raise ValueError("onion urls are not allowed")
     return url
 
@@ -119,9 +134,9 @@ class NormalizedCve(BaseModel):
 
     @field_validator("cvss_vector", mode="before")
     @classmethod
-    def _bound_vector(cls, value: object) -> object:
-        # An overlong vector (column is String(255)) is dropped, never fails the record.
-        if isinstance(value, str) and len(value) > MAX_CVSS_VECTOR_LEN:
+    def _bound_vector(cls, value: object) -> str | None:
+        # A non-string or overlong vector (column is String(255)) is dropped, never fails the record.
+        if not isinstance(value, str) or len(value) > MAX_CVSS_VECTOR_LEN:
             return None
         return value
 

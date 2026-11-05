@@ -284,6 +284,8 @@ def test_migration_0006_cleanup(scratch_url):
         "g_site": ("ransomware_live", "https://www.acme-victim.example/"),
         "g_permalink": ("ransomware_live", "https://www.ransomware.live/id/YWNtZQ==@lockbit"),
         "g_other_clear": ("shodan", "https://example.com/scan"),  # not ransomware_live: untouched
+        # Not ransomware_live: only the ONION clause can null it (tests that clause alone).
+        "g_other_onion": ("shodan", "http://x.onion/p"),
         "g_null": ("ransomware_live", None),
     }
     with eng.begin() as c:
@@ -307,7 +309,9 @@ def test_migration_0006_cleanup(scratch_url):
         geo_rows = dict(c.execute(text("select external_id, story_url from geo_event")).all())
         cve_cols = _columns(c, "cve")
         story_cols = _columns(c, "story")
-        # The Postgres ONION regex agrees with validate_http_url on the brief's URL cases.
+        # The Postgres ONION regex matches the brief's URL cases (and spares the lookalikes).
+        # It is narrower than validate_http_url: a bare "onion" host, multiple trailing dots
+        # and percent/IDNA-encoded dots are not matched (the regex is kept verbatim, ruling R2).
         matches = {u: c.execute(text("select cast(:u as text) ~* :r"), {"u": u, "r": mig.ONION}).scalar()
                    for u in ("http://abcdef.onion/", "https://ABC.ONION/x", "http://abc.onion.:80/p",
                              "http://sub.abc.onion", "http://u@x.onion?q", "https://onion.example.com/",
@@ -317,7 +321,7 @@ def test_migration_0006_cleanup(scratch_url):
     assert geo_rows == {
         "g_onion": None, "g_site": None,
         "g_permalink": "https://www.ransomware.live/id/YWNtZQ==@lockbit",
-        "g_other_clear": "https://example.com/scan", "g_null": None,
+        "g_other_clear": "https://example.com/scan", "g_other_onion": None, "g_null": None,
     }
     assert matches == {
         "http://abcdef.onion/": True, "https://ABC.ONION/x": True, "http://abc.onion.:80/p": True,

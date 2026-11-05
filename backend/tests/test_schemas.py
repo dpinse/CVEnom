@@ -184,6 +184,9 @@ def test_story_url_normal_urls_still_pass():
 
 @pytest.mark.parametrize("url", [
     "http://abcdef.onion/", "https://ABC.ONION/x", "http://abc.onion.:80/p", "http://sub.abc.onion",
+    "http://onion/", "http://abc.onion../", "http://x%2Eonion/", "http://x%2eONION/",
+    "http://x\u3002onion/", "http://x\uff0eonion/", "http://x\uff61onion/",
+    "http://x.\uff4f\uff4e\uff49\uff4f\uff4e/",  # fullwidth letters (NFKC)
 ])
 def test_validate_http_url_rejects_onion(url):
     from cvenom.schemas import validate_http_url
@@ -260,6 +263,12 @@ def test_cvss_vector_bounded_to_255():
     vec = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
     assert NormalizedCve(cve_id="CVE-2026-1001", cvss_vector=vec).cvss_vector == vec
     assert NormalizedCve(cve_id="CVE-2026-1001", cvss_vector="x" * 256).cvss_vector is None
+
+
+@pytest.mark.parametrize("bad", [5, 3.1, ["CVSS:3.1"], {"v": 1}, True])
+def test_non_string_cvss_vector_is_none(bad):
+    c = NormalizedCve(cve_id="CVE-2026-1001", cvss=7.5, cvss_vector=bad)
+    assert c.cvss_vector is None and c.cvss == 7.5  # the record is still created
 
 
 def test_last_modified_bounded():
