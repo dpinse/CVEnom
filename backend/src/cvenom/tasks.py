@@ -17,7 +17,8 @@ from cvenom.collectors.base import REGISTRY
 from cvenom.config import get_settings
 from cvenom.db import session_scope
 from cvenom.models import CollectorRun, Cve
-from cvenom.pipeline import ingest
+from cvenom.geoip import refresh_geoip
+from cvenom.pipeline import ingest, purge_old_geo_events
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +132,52 @@ def run_collector_task(name: str) -> dict:
     return run_collector(name)
 
 
+GEOIP_LOCK = "maintenance-geoip"
+PURGE_GEO_LOCK = "maintenance-purge-geo"
+MAINTENANCE_LOCK_TTL = 3600
+
+
+def refresh_geoip_job(*, lock: CollectorLock | None = None) -> dict:
+    lock = lock if lock is not None else RedisLock()
+    if not lock.acquire(GEOIP_LOCK, MAINTENANCE_LOCK_TTL):
+        log.info("geoip refresh already running; skipping")
+        return {"skipped": True}
+    try:
+        settings = get_settings()
+        provider = asyncio.run(refresh_geoip(settings.geoip_dir, settings))
+        return {"ok": True, "provider": provider}
+    except Exception:
+        log.exception("geoip refresh failed")
+        return {"ok": False}
+    finally:
+        lock.release(GEOIP_LOCK)
+
+
+def purge_geo_job(*, session_factory=session_scope, lock: CollectorLock | None = None,
+                  now: datetime | None = None) -> dict:
+    lock = lock if lock is not None else RedisLock()
+    if not lock.acquire(PURGE_GEO_LOCK, MAINTENANCE_LOCK_TTL):
+        log.info("geo purge already running; skipping")
+        return {"skipped": True}
+    try:
+        now = now if now is not None else datetime.now(timezone.utc)
+        with session_factory() as session:
+            deleted = purge_old_geo_events(session, now, days=get_settings().geo_retention_days)
+        return {"ok": True, "deleted": deleted}
+    finally:
+        lock.release(PURGE_GEO_LOCK)
+
+
+@celery_app.task(name="cvenom.tasks.refresh_geoip_task")
+def refresh_geoip_task() -> dict:
+    return refresh_geoip_job()
+
+
+@celery_app.task(name="cvenom.tasks.purge_geo_task")
+def purge_geo_task() -> dict:
+    return purge_geo_job()
+
+
 beat_schedule = {
     f"collect-{n}": {
         "task": run_collector_task.name,
@@ -139,4 +186,6 @@ beat_schedule = {
     }
     for n, cls in REGISTRY.items()
 }
+beat_schedule["maintenance-geoip"] = {"task": refresh_geoip_task.name, "schedule": 7 * 24 * 3600}
+beat_schedule["maintenance-purge-geo"] = {"task": purge_geo_task.name, "schedule": 24 * 3600}
 celery_app.conf.beat_schedule = beat_schedule

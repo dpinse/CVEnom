@@ -8,16 +8,121 @@ from cvenom.models import Cve, CollectorRun
 from cvenom.schemas import NormalizedCve
 
 
-def test_registry_contains_all_core_collectors():
-    import cvenom.tasks  # triggers collector imports/registration
-    from cvenom.collectors.base import REGISTRY
-    assert {"nvd","epss","cisa_kev","vulncheck_kev","osv"} <= set(REGISTRY)
+ALL_COLLECTORS = {
+    "nvd", "epss", "cisa_kev", "vulncheck_kev", "osv", "news_krebs", "news_thn",
+    "news_bleeping", "news_securityweek", "ransomware_live", "dshield", "cf_radar", "abusech",
+}
 
 
-def test_beat_schedule_has_entry_per_collector():
-    from cvenom.tasks import beat_schedule
-    from cvenom.collectors.base import REGISTRY
-    assert len(beat_schedule) == len(REGISTRY)
+def test_registry_contains_exactly_all_collectors(fake_registry):
+    assert {n for n in REGISTRY if not n.startswith("fake")} == ALL_COLLECTORS
+
+
+def test_beat_schedule_has_entry_per_collector_and_maintenance():
+    from cvenom.tasks import beat_schedule, purge_geo_task, refresh_geoip_task
+    collect = {k for k in beat_schedule if k.startswith("collect-")}
+    assert {k.removeprefix("collect-") for k in collect} == set(REGISTRY)
+    assert beat_schedule["maintenance-geoip"] == {
+        "task": refresh_geoip_task.name, "schedule": 7 * 24 * 3600}
+    assert beat_schedule["maintenance-purge-geo"] == {
+        "task": purge_geo_task.name, "schedule": 24 * 3600}
+    assert set(beat_schedule) == collect | {"maintenance-geoip", "maintenance-purge-geo"}
+
+
+def test_maintenance_tasks_registered_on_celery_app():
+    from cvenom.tasks import celery_app, purge_geo_task, refresh_geoip_task
+    assert refresh_geoip_task.name in celery_app.tasks
+    assert purge_geo_task.name in celery_app.tasks
+    assert celery_app.conf.beat_schedule["maintenance-geoip"]["task"] == refresh_geoip_task.name
+
+
+def test_refresh_geoip_job_success(monkeypatch):
+    import cvenom.tasks as tasks
+    from cvenom.config import get_settings
+    calls = []
+
+    async def fake_refresh(d, settings):
+        calls.append(d)
+        return "dbip"
+
+    monkeypatch.setattr(tasks, "refresh_geoip", fake_refresh)
+    lock = FakeLock()
+    out = tasks.refresh_geoip_job(lock=lock)
+    assert out == {"ok": True, "provider": "dbip"}
+    assert calls == [get_settings().geoip_dir]
+    assert lock.acquired == [("maintenance-geoip", 3600)]
+    assert lock.released == ["maintenance-geoip"]
+
+
+def test_refresh_geoip_job_lock_held(monkeypatch):
+    import cvenom.tasks as tasks
+
+    async def boom(*a, **k):
+        raise AssertionError("should not run")
+
+    monkeypatch.setattr(tasks, "refresh_geoip", boom)
+    lock = FakeLock(held=True)
+    assert tasks.refresh_geoip_job(lock=lock) == {"skipped": True}
+    assert lock.released == []
+
+
+def test_refresh_geoip_job_failure_is_swallowed(monkeypatch, caplog):
+    import cvenom.tasks as tasks
+
+    async def boom(*a, **k):
+        raise RuntimeError("net down")
+
+    monkeypatch.setattr(tasks, "refresh_geoip", boom)
+    lock = FakeLock()
+    with caplog.at_level("ERROR", logger="cvenom.tasks"):
+        assert tasks.refresh_geoip_job(lock=lock) == {"ok": False}
+    assert lock.released == ["maintenance-geoip"]
+    assert "geoip" in caplog.text
+
+
+def _seed_geo(db_session, now):
+    from cvenom.models import GeoEvent
+    for i, days in enumerate((200, 100, 1)):
+        db_session.add(GeoEvent(source="t", external_id=f"e{i}", kind="k",
+                                observed_at=now - timedelta(days=days)))
+    db_session.flush()
+
+
+def test_purge_geo_job_deletes_only_old(db_session, factory, monkeypatch):
+    import cvenom.tasks as tasks
+    from sqlalchemy import select
+    from cvenom.models import GeoEvent
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    _seed_geo(db_session, now)
+    monkeypatch.setattr(tasks, "get_settings", lambda: type("S", (), {"geo_retention_days": 150})())
+    lock = FakeLock()
+    out = tasks.purge_geo_job(session_factory=factory, lock=lock, now=now)
+    assert out == {"ok": True, "deleted": 1}
+    left = {e.external_id for e in db_session.scalars(select(GeoEvent))}
+    assert left == {"e1", "e2"}
+    assert lock.acquired == [("maintenance-purge-geo", 3600)]
+    assert lock.released == ["maintenance-purge-geo"]
+
+
+def test_purge_geo_job_lock_held(db_session, factory):
+    import cvenom.tasks as tasks
+    lock = FakeLock(held=True)
+    assert tasks.purge_geo_job(session_factory=factory, lock=lock) == {"skipped": True}
+    assert lock.released == []
+
+
+def test_purge_geo_job_releases_lock_on_failure(db_session):
+    import cvenom.tasks as tasks
+
+    @contextmanager
+    def bad():
+        raise RuntimeError("db down")
+        yield
+
+    lock = FakeLock()
+    with pytest.raises(RuntimeError):
+        tasks.purge_geo_job(session_factory=bad, lock=lock)
+    assert lock.released == ["maintenance-purge-geo"]
 
 
 class FakeLock:
