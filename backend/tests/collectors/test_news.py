@@ -234,3 +234,19 @@ def test_malformed_entry_object_is_skipped(monkeypatch):
     monkeypatch.setattr(feedparser, "parse", lambda raw: fake)
     res = _Feed().normalize(b"<rss/>")
     assert [s.url for s in res.stories] == ["https://a.test/ok"]
+
+
+def test_out_of_range_dates_fall_back_to_now_and_do_not_fail():
+    xml = (
+        '<rss version="2.0"><channel><title>t</title>'
+        "<item><title>a</title><link>https://a.test/a</link>"
+        "<pubDate>Fri, 31 Dec 9999 23:59:59 GMT</pubDate></item>"
+        "<item><title>b</title><link>https://a.test/b</link>"
+        "<pubDate>Mon, 01 Jan 0001 00:00:00 GMT</pubDate></item>"
+        "</channel></rss>"
+    ).encode()
+    before = datetime.now(UTC)
+    res = _Feed().normalize(xml)
+    after = datetime.now(UTC)
+    assert [s.url for s in res.stories] == ["https://a.test/a", "https://a.test/b"]
+    assert all(before <= s.published <= after for s in res.stories)

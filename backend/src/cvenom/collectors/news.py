@@ -91,17 +91,28 @@ class NewsFeedCollector(Collector):
                         published=published,
                     )
                 )
-            except (ValidationError, ValueError, TypeError, OverflowError, AttributeError, KeyError) as exc:
+            except (
+                ValidationError, ValueError, TypeError, OverflowError, OSError, AttributeError, KeyError
+            ) as exc:
                 log.warning("%s: skipping bad entry: %s", self.name, exc)
         self.state.update(self._pending_validators)
         return CollectorResult(stories=stories)
+
+
+MIN_YEAR, MAX_YEAR = 1970, 2100
 
 
 def _entry_time(entry, now: datetime) -> datetime:
     for key in ("published_parsed", "updated_parsed"):
         tm = entry.get(key)
         if tm:
-            return datetime.fromtimestamp(calendar.timegm(tm), UTC)
+            try:
+                dt = datetime.fromtimestamp(calendar.timegm(tm), UTC)
+            except (OverflowError, OSError, ValueError):
+                return now
+            if MIN_YEAR <= dt.year <= MAX_YEAR:
+                return dt
+            return now
     return now
 
 
