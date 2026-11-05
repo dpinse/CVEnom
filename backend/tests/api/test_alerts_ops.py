@@ -280,3 +280,38 @@ def test_default_sinks_factory_is_build_sinks(db_session):
     from cvenom.alerts.sinks import build_sinks
 
     assert make_app(db_session).state.sinks_factory is build_sinks
+
+
+async def test_test_send_stops_starting_sends_after_deadline(ctx, monkeypatch):
+    import time as _time
+
+    db, admin, _ = ctx
+    rule, ids = rule_with(db, hook=True)
+    slow, hook = Rec(delay=0.6), Rec()
+    monkeypatch.setattr(routes_alerts, "TEST_SEND_TIMEOUT_S", 0.2)
+    app = make_app(db, {"email": slow, "webhook": hook})
+    async with client(app) as c:
+        r = await c.post(f"/api/alerts/rules/{rule.id}/test", headers=admin)
+    assert r.status_code == 504
+    _time.sleep(1.0)  # let the abandoned worker thread finish its current send
+    assert len(slow.calls) == 1
+    assert hook.calls == []  # never started after the deadline
+
+
+def test_send_test_marks_deadline_skips_as_timeout(db_session):
+    rule, ids = rule_with(db_session, hook=True)
+    recips = list(db_session.scalars(select(AlertRecipient).order_by(AlertRecipient.id)))
+    sink = Rec()
+    out = routes_alerts._send_test({"email": sink, "webhook": sink}, rule, recips,
+                                   deadline=time.monotonic() - 1)
+    assert [o["error"] for o in out] == ["timeout", "timeout"]
+    assert all(o["ok"] is False for o in out) and sink.calls == []
+
+
+async def test_test_send_flags_delivery_as_test(ctx):
+    db, admin, _ = ctx
+    rule, _ids = rule_with(db)
+    sink = Rec()
+    async with client(make_app(db, {"email": sink})) as c:
+        await c.post(f"/api/alerts/rules/{rule.id}/test", headers=admin)
+    assert sink.calls[0][0].is_test is True

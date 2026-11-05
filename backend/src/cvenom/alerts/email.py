@@ -33,13 +33,14 @@ class EmailSink:
     def send(self, delivery: AlertDelivery, cve: Cve, rule: AlertRule,
              recipient: AlertRecipient) -> None:
         try:
-            asyncio.run(asyncio.wait_for(self._send(cve, rule, recipient), SEND_TIMEOUT_S))
+            asyncio.run(asyncio.wait_for(self._send(cve, rule, recipient, test=getattr(delivery, "is_test", False)), SEND_TIMEOUT_S))
         except SinkError:
             raise
         except Exception as exc:
             raise SinkError(f"smtp error: {type(exc).__name__}") from None
 
-    async def _send(self, cve: Cve, rule: AlertRule, recipient: AlertRecipient) -> None:
+    async def _send(self, cve: Cve, rule: AlertRule, recipient: AlertRecipient,
+                    test: bool = False) -> None:
         st = self._cfg()
         if not st.smtp_host or not st.smtp_from_addr or not recipient.email:
             raise SinkNotConfigured("smtp not configured")
@@ -50,7 +51,7 @@ class EmailSink:
             raise SinkError("smtp error: invalid recipient")
         try:
             msg = EmailMessage(policy=SMTP)
-            subject = _HEADER_BAD.sub("", f"[CVEnom] {cve.cve_id} exploited in the wild")
+            subject = _HEADER_BAD.sub("", f"[CVEnom{' TEST' if test else ''}] {cve.cve_id} exploited in the wild")
             msg["Subject"] = subject[:SUBJECT_MAX]
             msg["From"] = st.smtp_from_addr
             msg["To"] = addr

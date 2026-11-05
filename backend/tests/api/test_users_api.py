@@ -439,3 +439,53 @@ async def test_new_reset_supersedes_older_reset(ctx):
         r = await c.post("/api/auth/invites/accept",
                          json={"token": t2["token"], "password": NEW_PW})
         assert r.status_code == 201
+
+
+# ------------------------------------------------------------ hardening round 1
+
+
+async def test_admin_cannot_reset_self(ctx):
+    db = ctx["db"]
+    async with client(ctx["app"]) as c:
+        r = await c.post(f"/api/auth/users/{ctx['admin'].id}/reset", headers=ctx["ah"])
+    assert r.status_code == 409 and r.json() == {"error": "cannot_modify_self"}
+    assert db.scalars(select(Invite)).all() == []
+
+
+async def test_reset_token_dies_after_password_change(ctx):
+    member = ctx["member"]
+    async with client(ctx["app"]) as c:
+        tok = (await c.post(f"/api/auth/users/{member.id}/reset", headers=ctx["ah"])).json()
+        r = await c.post("/api/auth/password",
+                         json={"current_password": PW, "new_password": NEW_PW},
+                         headers=ctx["mh"])
+        assert r.status_code == 204
+        r = await c.post("/api/auth/invites/accept",
+                         json={"token": tok["token"], "password": "attacker passphrase"})
+    assert r.status_code == 400
+    assert verify_password(ctx["db"].get(User, member.id).password_hash, NEW_PW)
+
+
+async def test_reset_token_dies_after_deactivate_reactivate(ctx):
+    member = ctx["member"]
+    async with client(ctx["app"]) as c:
+        tok = (await c.post(f"/api/auth/users/{member.id}/reset", headers=ctx["ah"])).json()
+        for flag in (False, True):
+            r = await c.patch(f"/api/auth/users/{member.id}", json={"is_active": flag},
+                              headers=ctx["ah"])
+            assert r.status_code == 200
+        r = await c.post("/api/auth/invites/accept",
+                         json={"token": tok["token"], "password": NEW_PW})
+    assert r.status_code == 400
+    assert verify_password(ctx["db"].get(User, member.id).password_hash, PW)
+
+
+def test_accepting_a_reset_consumes_other_outstanding_resets(db_session):
+    admin = mk(db_session, "a@example.com", "admin")
+    victim = mk(db_session, "v@example.com")
+    t1 = create_invite(db_session, admin, victim.email, "member", 24, purpose="reset")
+    t2 = create_invite(db_session, admin, victim.email, "member", 24, purpose="reset")
+    accept_invite(db_session, t1, NEW_PW)
+    with pytest.raises(InvalidInvite):
+        accept_invite(db_session, t2, "attacker passphrase")
+    assert verify_password(victim.password_hash, NEW_PW)

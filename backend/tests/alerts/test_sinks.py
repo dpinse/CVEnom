@@ -455,3 +455,37 @@ def test_email_multi_or_invalid_recipient_rejected(smtp, addr):
 def test_email_recipients_passed_explicitly(smtp):
     EmailSink(smtp_settings()).send(None, make_cve(), make_rule(), mail_recipient())
     assert smtp[0][1]["recipients"] == ["dest@example.com"]
+
+
+# ------------------------------------------------------------- test-send marking
+
+
+def _test_delivery():
+    from cvenom.models import AlertDelivery
+
+    d = AlertDelivery(id=0)
+    d.is_test = True
+    return d
+
+
+def test_webhook_test_payload_is_marked_and_real_is_not(monkeypatch):
+    dns(monkeypatch, PUBLIC_IP)
+    cap = Capture()
+    sink_with(cap).send(_test_delivery(), make_cve(), make_rule(), hook_recipient())
+    data = json.loads(cap.requests[0].content)
+    assert data["test"] is True and data["event"] == "test"
+    assert data["content"] == data["text"] == (
+        "[CVEnom TEST] CVE-2099-0001 exploited in the wild (CVSS 9.8)")
+    cap = Capture()
+    sink_with(cap).send(None, make_cve(), make_rule(), hook_recipient())
+    real = json.loads(cap.requests[0].content)
+    assert "test" not in real and real["event"] == "kev_added"
+    assert real["content"] == "[CVEnom] CVE-2099-0001 exploited in the wild (CVSS 9.8)"
+
+
+def test_email_test_subject_is_marked_and_real_is_not(smtp):
+    EmailSink(smtp_settings()).send(_test_delivery(), make_cve(), make_rule(), mail_recipient())
+    EmailSink(smtp_settings()).send(None, make_cve(), make_rule(), mail_recipient())
+    (test_msg, _), (real_msg, _) = smtp
+    assert test_msg["Subject"] == "[CVEnom TEST] CVE-2099-0001 exploited in the wild"
+    assert real_msg["Subject"] == "[CVEnom] CVE-2099-0001 exploited in the wild"

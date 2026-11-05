@@ -137,8 +137,19 @@ def _accept_reset(session: Session, invite: Invite, pw: str, now: datetime) -> U
     user.password_hash = hash_password(pw)
     revoke_sessions(session, user.id, now)  # every device must sign in again
     invite.used_at = now
+    consume_resets(session, user.email, now)  # any other outstanding resets die too
     session.flush()
     return user
+
+
+def consume_resets(session: Session, email: str, now: datetime) -> None:
+    """Invalidate every unused reset token for this address."""
+    session.execute(
+        update(Invite)
+        .where(Invite.email == _norm(email), Invite.purpose == "reset",
+               Invite.used_at.is_(None))
+        .values(used_at=now)
+    )
 
 
 def create_reset(session: Session, admin: User, user: User, ttl_hours: int = 24,
@@ -146,12 +157,7 @@ def create_reset(session: Session, admin: User, user: User, ttl_hours: int = 24,
     """Single-use password-reset token for `user`; older unused resets for the
     same address are invalidated. Returns (raw token, expires_at)."""
     now = now or _utcnow()
-    session.execute(
-        update(Invite)
-        .where(Invite.email == user.email, Invite.purpose == "reset",
-               Invite.used_at.is_(None))
-        .values(used_at=now)
-    )
+    consume_resets(session, user.email, now)
     raw = create_invite(session, admin, user.email, user.role, ttl_hours, now=now,
                         purpose="reset")
     return raw, now + timedelta(hours=ttl_hours)
@@ -201,5 +207,6 @@ def update_user(session: Session, target: User, *, role: str | None = None,
     target.is_active = new_active
     if not new_active:
         revoke_sessions(session, target.id, now)
+        consume_resets(session, target.email, now)
     session.flush()
     return target

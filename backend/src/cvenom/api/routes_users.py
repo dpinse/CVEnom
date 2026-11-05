@@ -12,7 +12,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from cvenom.auth.passwords import WeakPassword, hash_password, verify_password
-from cvenom.auth.users import LastAdmin, create_reset, revoke_sessions, update_user
+from cvenom.auth.users import (
+    LastAdmin,
+    consume_resets,
+    create_reset,
+    revoke_sessions,
+    update_user,
+)
 from cvenom.models import Invite, User, UserSession
 
 from .deps import SessionDep, require_admin, require_user
@@ -119,6 +125,9 @@ def create_user_reset(
     user_id: int, admin: User = Depends(require_admin), session: Session = SessionDep
 ) -> dict:
     target = _get_user(session, user_id)
+    if target.id == admin.id:
+        # A reset would bypass "current password required"; use /password instead.
+        _error(409, "cannot_modify_self")
     if not target.is_active:
         _error(409, "user_inactive")
     raw, expires_at = create_reset(session, admin, target, RESET_TTL_HOURS)
@@ -142,7 +151,9 @@ def _change_password_sync(session: Session, user: User, sid, body: PasswordBody)
     except WeakPassword:
         _error(422, "weak_password")
     user.password_hash = new_hash
-    revoke_sessions(session, user.id, _now(), except_sid=sid)  # keep this device
+    now = _now()
+    revoke_sessions(session, user.id, now, except_sid=sid)  # keep this device
+    consume_resets(session, user.email, now)  # outstanding reset tokens die
     session.flush()
 
 

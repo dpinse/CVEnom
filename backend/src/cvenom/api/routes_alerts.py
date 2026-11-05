@@ -6,6 +6,8 @@ import secrets
 from typing import Annotated, Literal, NoReturn
 from urllib.parse import urlsplit
 
+import time
+
 import anyio
 import anyio.to_thread
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -359,14 +361,21 @@ def _load_for_test(session: Session, rule_id: int) -> tuple[AlertRule, list[Aler
     return rule, recips
 
 
-def _send_test(sinks: dict, rule: AlertRule, recips: list[AlertRecipient]) -> list[dict]:
-    """Runs in a worker thread. Transient objects only: nothing is persisted."""
+def _send_test(sinks: dict, rule: AlertRule, recips: list[AlertRecipient],
+               deadline: float | None = None) -> list[dict]:
+    """Runs in a worker thread. Transient objects only: nothing is persisted.
+    After `deadline` (time.monotonic) no new send is started."""
     cve = Cve(cve_id="CVE-0000-0000", summary="CVEnom test alert", cvss=None,
               epss_percentile=None, kev=True, kev_source="test", affected=[])
     out = []
     for r in recips:
+        if deadline is not None and time.monotonic() >= deadline:
+            out.append({"recipient_id": r.id, "channel": r.channel, "ok": False,
+                        "error": "timeout"})
+            continue
         delivery = AlertDelivery(id=0, rule_id=rule.id, recipient_id=r.id,
                                  cve_id=cve.cve_id, status="pending", attempts=0)
+        delivery.is_test = True  # plain attribute: sinks mark the payload as a test
         ok, error = True, None
         sink = sinks.get(r.channel)
         try:
@@ -393,10 +402,11 @@ async def test_send(
 ) -> list[dict]:
     rule, recips = await run_in_threadpool(_load_for_test, session, rule_id)
     sinks = request.app.state.sinks_factory()
+    deadline = time.monotonic() + TEST_SEND_TIMEOUT_S
     try:
         with anyio.fail_after(TEST_SEND_TIMEOUT_S):
             return await anyio.to_thread.run_sync(
-                _send_test, sinks, rule, recips, abandon_on_cancel=True
+                _send_test, sinks, rule, recips, deadline, abandon_on_cancel=True
             )
     except TimeoutError:
         _error(504, "timeout")

@@ -161,11 +161,13 @@ def _decrypt(token: str | None) -> str:
     return secretbox.decrypt(token).decode()
 
 
-def _build_body(cve: Cve, rule: AlertRule, now: datetime) -> bytes:
+def _build_body(cve: Cve, rule: AlertRule, now: datetime, test: bool = False) -> bytes:
     cvss = "n/a" if cve.cvss is None else cve.cvss
     line = f"[CVEnom] {cve.cve_id} exploited in the wild (CVSS {cvss})"
+    if test:
+        line = "[CVEnom TEST] " + line[len("[CVEnom] "):]
     payload = {
-        "event": "kev_added",
+        "event": "test" if test else "kev_added",
         "cve_id": cve.cve_id,
         "rule": {"id": rule.id, "name": rule.name, "kind": rule.kind},
         "cve": {
@@ -181,6 +183,8 @@ def _build_body(cve: Cve, rule: AlertRule, now: datetime) -> bytes:
         "text": line,  # Slack
         "allowed_mentions": {"parse": []},  # never ping @everyone from summary text
     }
+    if test:
+        payload["test"] = True
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
 
 
@@ -210,7 +214,7 @@ class WebhookSink:
         except UnsafeWebhookURL:
             raise SinkError("webhook target rejected") from None
         now = datetime.now(timezone.utc)
-        body = _build_body(cve, rule, now)
+        body = _build_body(cve, rule, now, test=getattr(delivery, "is_test", False))
         status: list[int] = []  # set by _post as soon as the response headers arrive
         try:
             asyncio.run(asyncio.wait_for(
