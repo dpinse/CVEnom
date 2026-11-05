@@ -579,6 +579,107 @@ def test_worker_ready_handler_swallows_errors(monkeypatch, caplog):
     assert "geoip bootstrap" in caplog.text
 
 
+def _patch_bootstrap(monkeypatch, last_runs):
+    from cvenom import tasks
+
+    queued: list[str] = []
+    monkeypatch.setattr(tasks, "_collector_last_runs", lambda: last_runs)
+    monkeypatch.setattr(tasks.run_collector_task, "delay", lambda name: queued.append(name))
+    return tasks, queued
+
+
+def test_bootstrap_collectors_registered_on_worker_ready():
+    from celery.signals import worker_ready
+
+    from cvenom import tasks
+
+    assert tasks.bootstrap_collectors in list(worker_ready._live_receivers(None))
+
+
+def test_bootstrap_collectors_queues_only_stale(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from cvenom import tasks
+
+    names = sorted(tasks.REGISTRY)
+    stale, fresh = names[0], names[1]
+    now = datetime.now(timezone.utc)
+    last_runs = {
+        stale: now - timedelta(seconds=tasks.REGISTRY[stale].cadence_seconds + 60),
+        fresh: now - timedelta(seconds=tasks.REGISTRY[fresh].cadence_seconds // 2),
+    }
+    tasks, queued = _patch_bootstrap(monkeypatch, last_runs)
+    tasks.bootstrap_collectors()
+    assert stale in queued
+    assert fresh not in queued
+    # everything with no row at all is "never run" and is queued
+    assert set(queued) == set(names) - {fresh}
+
+
+def test_bootstrap_collectors_queues_null_last_run(monkeypatch):
+    from cvenom import tasks
+
+    names = sorted(tasks.REGISTRY)
+    tasks, queued = _patch_bootstrap(monkeypatch, {n: None for n in names})
+    tasks.bootstrap_collectors()
+    assert sorted(queued) == names
+
+
+def test_bootstrap_collectors_survives_enqueue_failure(monkeypatch, caplog):
+    from cvenom import tasks
+
+    queued: list[str] = []
+
+    def flaky(name):
+        first = not queued
+        queued.append(name)
+        if first:
+            raise RuntimeError("broker down")
+
+    monkeypatch.setattr(tasks, "_collector_last_runs", lambda: {})
+    monkeypatch.setattr(tasks.run_collector_task, "delay", flaky)
+    with caplog.at_level("WARNING", logger="cvenom.tasks"):
+        tasks.bootstrap_collectors()
+    assert "collector bootstrap" in caplog.text
+    assert sorted(queued) == sorted(tasks.REGISTRY)  # one failure does not stop the rest
+
+
+def test_bootstrap_collectors_db_error_queues_nothing(monkeypatch, caplog):
+    from cvenom import tasks
+
+    queued: list[str] = []
+
+    def boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(tasks, "_collector_last_runs", boom)
+    monkeypatch.setattr(tasks.run_collector_task, "delay", lambda name: queued.append(name))
+    with caplog.at_level("WARNING", logger="cvenom.tasks"):
+        tasks.bootstrap_collectors()  # must not raise
+    assert queued == []
+    assert "last_run lookup failed" in caplog.text
+
+
+def test_collector_last_runs_reads_all_rows(monkeypatch, db_session):
+    from contextlib import contextmanager
+    from datetime import datetime, timezone
+
+    from cvenom import tasks
+
+    ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    db_session.add_all([CollectorRun(collector="fake_a", last_run=ts, state={}),
+                        CollectorRun(collector="fake_b", last_run=None, state={})])
+    db_session.flush()
+
+    @contextmanager
+    def scope():  # the helper normally opens its own session; reuse the test one so rows are visible
+        yield db_session
+
+    monkeypatch.setattr(tasks, "session_scope", scope)
+    runs = tasks._collector_last_runs()
+    assert runs["fake_a"] == ts and runs["fake_b"] is None
+
+
 def test_worker_process_init_disposes_engine_without_closing(monkeypatch):
     from unittest.mock import MagicMock
 

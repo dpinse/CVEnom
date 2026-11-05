@@ -1,7 +1,12 @@
 import os
 
 # Force the test DB: never defer to an exported DATABASE_URL (drop_all below).
-TEST_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/cvenom_test"
+# CVENOM_TEST_PG_PORT selects a different local test Postgres (parallel worktrees); the host and
+# the cvenom_test database are fixed so the drop_all can never target a real database.
+_port = os.environ.get("CVENOM_TEST_PG_PORT", "5432")
+if not _port.isdigit():
+    raise RuntimeError("CVENOM_TEST_PG_PORT must be a port number")
+TEST_DATABASE_URL = f"postgresql+psycopg://postgres:postgres@localhost:{_port}/cvenom_test"
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 

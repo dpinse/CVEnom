@@ -232,6 +232,35 @@ def bootstrap_geoip(*args: Any, **kwargs: Any) -> None:
         log.warning("geoip bootstrap enqueue failed: %s", type(exc).__name__)
 
 
+def _collector_last_runs() -> dict[str, datetime | None]:
+    """last_run of every recorded collector, in one query."""
+    with session_scope() as session:
+        return dict(session.execute(select(CollectorRun.collector, CollectorRun.last_run)).all())
+
+
+@worker_ready.connect
+def bootstrap_collectors(*args: Any, **kwargs: Any) -> None:
+    """At worker start, queue a run of every registered collector that is stale: never run
+    (no row or NULL last_run) or last run longer ago than its cadence. A fresh deploy fills in
+    at once, while a restart or hot-reload loop only re-runs what is due. If the database is
+    unreachable nothing is queued (beat still covers it). The per-collector Redis lock still
+    prevents double runs; collectors without a key skip as usual."""
+    try:
+        last_runs = _collector_last_runs()
+    except Exception as exc:
+        log.warning("collector bootstrap skipped, last_run lookup failed: %s", type(exc).__name__)
+        return
+    now = datetime.now(timezone.utc)
+    for name, cls in list(REGISTRY.items()):
+        last = last_runs.get(name)
+        if last is not None and now - last < timedelta(seconds=cls.cadence_seconds):
+            continue
+        try:
+            run_collector_task.delay(name)
+        except Exception as exc:
+            log.warning("collector bootstrap enqueue failed for %s: %s", name, type(exc).__name__)
+
+
 @worker_ready.connect
 def check_secrets_key(*args: Any, **kwargs: Any) -> None:
     """Surface a missing/invalid SECRETS_KEY at worker start (log only: collectors

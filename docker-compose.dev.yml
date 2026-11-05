@@ -1,0 +1,134 @@
+# Development stack with live reload. From the repo root:
+#   cp .env.dev.example .env.dev
+#   docker compose -f docker-compose.dev.yml up --build
+# Open http://127.0.0.1:5173 (Vite HMR). API: http://127.0.0.1:8000. Every published port is
+# bound to 127.0.0.1. The plain docker-compose.yml (postgres + redis only, for host-side
+# backend tests) is separate and unchanged.
+name: cvenom-dev
+
+x-backend: &backend
+  build:
+    context: ./backend
+    dockerfile: Dockerfile.dev
+  image: cvenom-backend-dev:latest
+  env_file: .env.dev
+  environment: &backend-env
+    DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/cvenom
+    REDIS_URL: redis://redis:6379/0
+    GEOIP_DIR: /data/geoip
+    # Bind mounts on Windows/OneDrive do not deliver file events: poll instead.
+    WATCHFILES_FORCE_POLLING: "true"
+    WATCHFILES_POLL_DELAY_MS: "500"
+  volumes:
+    - ./backend/src:/app/src
+    - ./backend/migrations:/app/migrations
+    - ./backend/alembic.ini:/app/alembic.ini:ro
+    - geoip:/data/geoip
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cvenom
+    ports:
+      - "127.0.0.1:${DEV_PG_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cvenom"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "127.0.0.1:${DEV_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Runs once before the api starts (and again on every `up`, so new migrations apply).
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    command:
+      - uvicorn
+      - cvenom.api.app:create_app
+      - --factory
+      - --host=0.0.0.0
+      - --port=8000
+      - --reload
+      - --reload-dir=/app/src
+    ports:
+      - "127.0.0.1:${DEV_API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *backend
+    command:
+      - watchfiles
+      - --filter=python
+      - celery -A cvenom.tasks:celery_app worker --loglevel=INFO --concurrency=2
+      - /app/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  beat:
+    <<: *backend
+    command:
+      - watchfiles
+      - --filter=python
+      - celery -A cvenom.tasks:celery_app beat --loglevel=INFO --schedule /tmp/celerybeat-schedule
+      - /app/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: node:26.13.0-slim
+    working_dir: /app
+    # Reinstall only when package-lock.json changed since the last install into the volume.
+    command:
+      - sh
+      - -c
+      - >-
+        cmp -s package-lock.json node_modules/.lock-stamp
+        || (npm ci --no-audit --no-fund && cp package-lock.json node_modules/.lock-stamp);
+        exec npm run dev -- --host 0.0.0.0 --port 5173 --strictPort
+    environment:
+      CVENOM_API_PROXY: http://api:8000
+      CVENOM_VITE_POLLING: "1"
+    ports:
+      - "127.0.0.1:${DEV_FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  geoip:
+  frontend_node_modules:

@@ -80,11 +80,22 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    # The image's HEALTHCHECK probes the api's HTTP port, which the worker does not serve.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A cvenom.tasks:celery_app inspect ping -d celery@$$HOSTNAME -t 5"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
 
   beat:
     <<: *app
     command: ["beat"]
     restart: unless-stopped
+    # Beat serves no HTTP and answers no remote control; the image's api HEALTHCHECK would
+    # mark it unhealthy forever. It is supervised by restart: unless-stopped instead.
+    healthcheck:
+      disable: true
     depends_on:
       migrate:
         condition: service_completed_successfully

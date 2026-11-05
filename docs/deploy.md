@@ -3,6 +3,8 @@
 CVEnom is a self-hosted, internet-facing service. Cloudflare in front is welcome but the origin must
 be safe without it.
 
+Looking to hack on CVEnom instead? See [development.md](development.md) (hot-reload dev stack).
+
 ## First run
 
 ```sh
@@ -41,6 +43,22 @@ through `env_file`, but compose blanks `POSTGRES_PASSWORD`, `APP_DB_PASSWORD` an
 in their environment: the app only needs those inside `DATABASE_URL` / `REDIS_URL`.
 `REQUIRE_SECRETS_KEY=true` makes the API refuse to start when `SECRETS_KEY` is missing or invalid
 (the worker logs the error and keeps running).
+
+## First scrape and manual runs
+
+When the worker starts it queues a run of every stale collector: one that has never run (no
+`collector_run` row, or NULL `last_run`) or whose last run is older than its cadence. A fresh deploy
+fills in right away, while an ordinary restart only re-runs what is due. If the database is
+unreachable at that moment nothing is queued and the beat schedule covers it. Collectors without a
+key skip, and the per-collector Redis lock prevents double runs. To force every collector
+regardless of staleness:
+
+```sh
+docker compose --env-file ./.env -f deploy/docker-compose.prod.yml exec worker python -c "from cvenom.tasks import REGISTRY, run_collector_task as t; [t.delay(n) for n in REGISTRY]"
+```
+
+The `worker` container is health-checked with `celery inspect ping`; `beat` has its health check
+disabled (it serves no HTTP) and is supervised by `restart: unless-stopped`.
 
 ## Cloudflare and reverse proxies
 

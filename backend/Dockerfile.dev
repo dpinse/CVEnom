@@ -1,0 +1,16 @@
+# syntax=docker/dockerfile:1
+# Dev image (used by docker-compose.dev.yml). Build context: backend/
+# Installs the app editable plus the dev extras (watchfiles, pytest, ...). The compose file
+# bind-mounts backend/src over /app/src, so code edits never need a rebuild; rebuild only when
+# pyproject.toml dependencies change:  docker compose -f docker-compose.dev.yml build
+FROM python:3.14-slim
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY pyproject.toml ./
+COPY src ./src
+RUN pip install --no-cache-dir -e ".[dev]"
+COPY alembic.ini ./
+COPY migrations ./migrations
+EXPOSE 8000
