@@ -52,13 +52,17 @@ def lanes_for_cve(v: CveView, now: datetime, cfg: Settings) -> set[Lane]:
 
 
 def heat_rank(v: CveView, now: datetime, cfg: Settings) -> float:
-    """Ordering within lanes. Weights are tiered so earlier factors dominate."""
+    """Ordering within lanes.
+
+    KEV is a strict gate (+1000 exceeds the max of all other terms). The epss,
+    cvss, recency and story terms are a weighted sort and may overlap.
+    """
     score = 1000.0 if v.kev else 0.0
     score += 100.0 * (v.epss_percentile or 0.0)
     score += (v.cvss or 0.0)  # 0..10
-    if v.published is not None:
+    window = float(cfg.fresh_window_hours)
+    if v.published is not None and window > 0:
         age_h = max((_utc(now) - _utc(v.published)).total_seconds() / 3600.0, 0.0)
-        window = float(cfg.loud_window_hours)
         score += max(0.0, 1.0 - age_h / window) * 0.9  # 0..0.9
     score += min(v.recent_story_count, 10) * 0.05  # 0..0.5
     if v.patch_available is False:
