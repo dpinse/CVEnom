@@ -9,6 +9,13 @@ def test_sanitize_strips_script_and_html():
     assert sanitize_text("<b>PHP</b><script>alert(1)</script> RCE") == "PHP RCE"
     assert sanitize_text(None) == ""
 
+def test_sanitize_keeps_plain_angle_brackets_and_ampersand_literal():
+    from cvenom.textutil import sanitize_text
+    out = sanitize_text("5 < 6 & 7 > 2")
+    assert out == "5 < 6 & 7 > 2"
+    assert "&lt;" not in out and "&amp;" not in out and "&gt;" not in out
+
+
 def test_content_hash_is_stable_and_order_sensitive():
     from cvenom.textutil import content_hash
     assert content_hash("t","s") == content_hash("t","s")

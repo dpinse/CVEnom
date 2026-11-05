@@ -1,4 +1,5 @@
 import hashlib
+import html
 import re
 
 import bleach
@@ -34,7 +35,10 @@ def sanitize_text(raw: str | None) -> str:
         return ""
     without_blocks = _SCRIPT_BLOCK.sub(" ", raw)
     stripped = bleach.clean(without_blocks, tags=[], attributes={}, strip=True)
-    return _WS.sub(" ", stripped).strip()
+    # bleach entity-encodes text ("&" -> "&amp;"); store true plain text so the
+    # frontend escapes exactly once on render.
+    decoded = html.unescape(stripped)
+    return _WS.sub(" ", decoded).strip()
 
 
 def find_existing_story(session: Session, url: str, content_hash: str) -> Story | None:
