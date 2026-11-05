@@ -233,6 +233,18 @@ def bootstrap_geoip(*args: Any, **kwargs: Any) -> None:
 
 
 @worker_ready.connect
+def bootstrap_collectors(*args: Any, **kwargs: Any) -> None:
+    """Queue one run of every registered collector at worker start, so a fresh stack
+    fills in at once instead of waiting for each cron slot. The per-collector Redis
+    lock prevents double runs; collectors without a key skip as usual."""
+    for name in list(REGISTRY):
+        try:
+            run_collector_task.delay(name)
+        except Exception as exc:
+            log.warning("collector bootstrap enqueue failed for %s: %s", name, type(exc).__name__)
+
+
+@worker_ready.connect
 def check_secrets_key(*args: Any, **kwargs: Any) -> None:
     """Surface a missing/invalid SECRETS_KEY at worker start (log only: collectors
     do not need it; webhook deliveries defer until it is fixed)."""

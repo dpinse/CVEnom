@@ -579,6 +579,37 @@ def test_worker_ready_handler_swallows_errors(monkeypatch, caplog):
     assert "geoip bootstrap" in caplog.text
 
 
+def test_bootstrap_collectors_enqueues_every_registered_collector(monkeypatch):
+    from celery.signals import worker_ready
+
+    from cvenom import tasks
+
+    queued: list[str] = []
+    monkeypatch.setattr(tasks.run_collector_task, "delay", lambda name: queued.append(name))
+    assert tasks.bootstrap_collectors in list(worker_ready._live_receivers(None))
+    tasks.bootstrap_collectors()
+    assert sorted(queued) == sorted(tasks.REGISTRY)
+    assert queued  # the registry is never empty
+
+
+def test_bootstrap_collectors_survives_enqueue_failure(monkeypatch, caplog):
+    from cvenom import tasks
+
+    queued: list[str] = []
+
+    def flaky(name):
+        if not queued:
+            queued.append(name)
+            raise RuntimeError("broker down")
+        queued.append(name)
+
+    monkeypatch.setattr(tasks.run_collector_task, "delay", flaky)
+    with caplog.at_level("WARNING", logger="cvenom.tasks"):
+        tasks.bootstrap_collectors()
+    assert "collector bootstrap" in caplog.text
+    assert sorted(queued) == sorted(tasks.REGISTRY)  # one failure does not stop the rest
+
+
 def test_worker_process_init_disposes_engine_without_closing(monkeypatch):
     from unittest.mock import MagicMock
 
