@@ -322,3 +322,109 @@ def test_session_is_active_expiry_and_unknown(db_session, user):
     s, _ = create_session(db_session, user, NOW, "ua", "ip")
     assert not session_is_active(db_session, s.id, NOW + timedelta(days=30))
     assert not session_is_active(db_session, uuid.uuid4(), NOW)
+
+
+# ---- fix round 1 ----
+
+
+def test_current_does_not_expire_callers_pending_changes(db_session, user):
+    KeyRing.current(db_session, NOW)
+    db_session.flush()
+    user.role = "admin"  # pending, unflushed
+    with db_session.no_autoflush:
+        KeyRing.current(db_session, NOW + timedelta(days=8))  # rotates
+    assert user.role == "admin"
+    assert "role" in db_session.get_one(User, user.id).__dict__
+
+
+def test_reuse_of_any_older_token_revokes(db_session, user):
+    s, t0 = create_session(db_session, user, NOW, "ua", "ip")
+    sid = s.id
+    _, t1 = rotate_refresh(db_session, t0, NOW, "ua", "ip")
+    _, t2 = rotate_refresh(db_session, t1, NOW + timedelta(minutes=1), "ua", "ip")
+    later = NOW + timedelta(minutes=5)
+    with pytest.raises(TokenReuse):
+        rotate_refresh(db_session, t0, later, "ua", "ip")
+    db_session.rollback()
+    row = db_session.get(UserSession, sid)
+    db_session.refresh(row)
+    assert row.revoked_at == later
+    with pytest.raises(InvalidToken):
+        rotate_refresh(db_session, t2, later, "ua", "ip")
+
+
+def test_predecessor_within_grace_is_not_revoked(db_session, user):
+    s, t0 = create_session(db_session, user, NOW, "ua", "ip")
+    _, t1 = rotate_refresh(db_session, t0, NOW, "ua", "ip")
+    with pytest.raises(InvalidToken) as ei:
+        rotate_refresh(db_session, t0, NOW + timedelta(seconds=9), "ua", "ip")
+    assert not isinstance(ei.value, TokenReuse)
+    assert tokens.REUSE_GRACE == timedelta(seconds=10)
+    assert session_is_active(db_session, s.id, NOW + timedelta(seconds=9))
+    rotate_refresh(db_session, t1, NOW + timedelta(seconds=9), "ua", "ip")
+
+
+def test_predecessor_after_grace_revokes(db_session, user):
+    s, t0 = create_session(db_session, user, NOW, "ua", "ip")
+    rotate_refresh(db_session, t0, NOW, "ua", "ip")
+    at = NOW + timedelta(seconds=11)
+    with pytest.raises(TokenReuse):
+        rotate_refresh(db_session, t0, at, "ua", "ip")
+    assert not session_is_active(db_session, s.id, at)
+
+
+NAIVE = datetime(2026, 1, 1, 12, 0)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda db, u: KeyRing.current(db, NAIVE),
+        lambda db, u: KeyRing.verification_keys(db, NAIVE),
+        lambda db, u: issue_access(db, u, uuid.uuid4(), NAIVE),
+        lambda db, u: decode_access(db, "a.b.c", NAIVE),
+        lambda db, u: rotate_refresh(db, "x", NAIVE, "ua", "ip"),
+        lambda db, u: create_session(db, u, NAIVE, "ua", "ip"),
+        lambda db, u: session_is_active(db, uuid.uuid4(), NAIVE),
+    ],
+)
+def test_naive_now_rejected(db_session, user, call):
+    with pytest.raises(ValueError, match="timezone-aware"):
+        call(db_session, user)
+
+
+def test_bool_iat_rejected(db_session):
+    with pytest.raises(InvalidToken):
+        decode_access(db_session, _resign(db_session, iat=True), NOW)
+
+
+@pytest.mark.parametrize("alg", ["eddsa", "EdDSA ", "EDDSA", " EdDSA"])
+def test_alg_variants_rejected(db_session, alg):
+    key = KeyRing.current(db_session, NOW)
+    tok = forge({"alg": alg, "typ": "JWT", "kid": key.kid}, good_payload(key.kid), b"x" * 64)
+    with pytest.raises(InvalidToken):
+        decode_access(db_session, tok, NOW)
+
+
+@pytest.mark.parametrize("kid", [5, ["a"], None])
+def test_non_string_kid_rejected(db_session, kid):
+    key = KeyRing.current(db_session, NOW)
+    tok = forge({"alg": "EdDSA", "typ": "JWT", "kid": kid}, good_payload(key.kid), b"x" * 64)
+    with pytest.raises(InvalidToken):
+        decode_access(db_session, tok, NOW)
+
+
+def test_attacker_jwk_header_rejected(db_session):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = KeyRing.current(db_session, NOW)
+    attacker = Ed25519PrivateKey.generate()
+    raw = attacker.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    jwk = {"kty": "OKP", "crv": "Ed25519", "x": b64u(raw)}
+    tok = jwt.encode(
+        good_payload(key.kid), attacker, algorithm="EdDSA", headers={"kid": key.kid, "jwk": jwk}
+    )
+    with pytest.raises(InvalidToken):
+        decode_access(db_session, tok, NOW)

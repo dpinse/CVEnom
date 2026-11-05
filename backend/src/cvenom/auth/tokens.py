@@ -24,12 +24,15 @@ from sqlalchemy.orm import Session
 
 from cvenom import secretbox
 from cvenom.config import get_settings
-from cvenom.models import SigningKey, User, UserSession
+from cvenom.models import SigningKey, User, UserSession, UserSessionUsedRefresh
 
 ALGORITHM = "EdDSA"
 # Fixed int64 key for the transaction-scoped advisory lock guarding key creation.
 _KEY_RING_LOCK_ID = 0x43564E4B455952  # "CVNKEYR"
 _IAT_LEEWAY = timedelta(seconds=60)
+# A client racing itself (two concurrent refreshes with the same token) must not
+# lose its session: the immediate predecessor is tolerated inside this window.
+REUSE_GRACE = timedelta(seconds=10)
 _REQUIRED_CLAIMS = ["exp", "iat", "sub", "sid", "kid", "iss", "aud"]
 
 
@@ -49,6 +52,11 @@ class AccessClaims:
     kid: str
     iat: int
     exp: int
+
+
+def _require_aware(now: datetime) -> None:
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
 
 
 class KeyRing:
@@ -73,13 +81,16 @@ class KeyRing:
         )
 
     @staticmethod
-    def _active(session: Session) -> SigningKey | None:
-        return session.scalars(
+    def _active(session: Session, refresh: bool = False) -> SigningKey | None:
+        stmt = (
             select(SigningKey)
             .where(SigningKey.retired_at.is_(None))
             .order_by(SigningKey.created_at.desc())
             .limit(1)
-        ).first()
+        )
+        if refresh:
+            stmt = stmt.execution_options(populate_existing=True)
+        return session.scalars(stmt).first()
 
     @staticmethod
     def current(session: Session, now: datetime) -> SigningKey:
@@ -87,6 +98,7 @@ class KeyRing:
 
         Flushes but does not commit; the caller owns the transaction.
         """
+        _require_aware(now)
         rotate_after = timedelta(days=get_settings().jwt_rotation_days)
 
         def usable(k: SigningKey | None) -> bool:
@@ -99,8 +111,7 @@ class KeyRing:
         # Serialize creation across workers; released at transaction end.
         session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _KEY_RING_LOCK_ID})
         # Re-check: another worker may have created a key while we waited.
-        session.expire_all()
-        key = KeyRing._active(session)
+        key = KeyRing._active(session, refresh=True)
         if usable(key):
             return key  # type: ignore[return-value]
 
@@ -114,6 +125,7 @@ class KeyRing:
     @staticmethod
     def verification_keys(session: Session, now: datetime) -> dict[str, Ed25519PublicKey]:
         """Active key plus keys retired within access_ttl + 1h (grace window)."""
+        _require_aware(now)
         grace = timedelta(minutes=get_settings().access_ttl_minutes) + timedelta(hours=1)
         rows = session.scalars(
             select(SigningKey).where(
@@ -129,6 +141,7 @@ class KeyRing:
 
 
 def issue_access(session: Session, user: User, sid: uuid.UUID, now: datetime) -> str:
+    _require_aware(now)
     s = get_settings()
     key = KeyRing.current(session, now)
     priv = serialization.load_der_private_key(secretbox.decrypt(key.private_enc), password=None)
@@ -147,6 +160,7 @@ def issue_access(session: Session, user: User, sid: uuid.UUID, now: datetime) ->
 
 
 def decode_access(session: Session, token: str, now: datetime) -> AccessClaims:
+    _require_aware(now)
     s = get_settings()
     try:
         header = jwt.get_unverified_header(token)
@@ -168,7 +182,7 @@ def decode_access(session: Session, token: str, now: datetime) -> AccessClaims:
             options={"require": _REQUIRED_CLAIMS, "verify_exp": False, "verify_iat": False},
         )
         exp, iat = payload["exp"], payload["iat"]
-        if not isinstance(exp, int) or not isinstance(iat, int) or isinstance(exp, bool):
+        if not isinstance(exp, int) or not isinstance(iat, int) or isinstance(exp, bool) or isinstance(iat, bool):
             raise InvalidToken("invalid token")
         now_ts = now.timestamp()
         if exp <= now_ts or iat > now_ts + _IAT_LEEWAY.total_seconds():
@@ -201,6 +215,7 @@ def new_refresh() -> tuple[str, str]:
 def create_session(
     session: Session, user: User, now: datetime, ua: str | None, ip: str | None
 ) -> tuple[UserSession, str]:
+    _require_aware(now)
     raw, h = new_refresh()
     row = UserSession(
         id=uuid.uuid4(),
@@ -222,21 +237,33 @@ def rotate_refresh(
 ) -> tuple[UserSession, str]:
     """Exchange a refresh token for a new one (same session id).
 
-    Reuse detection: if `raw` matches no current token but matches a session's
-    previous token, the token was already rotated, so someone holds a stale copy.
-    The session is revoked and this function COMMITS before raising `TokenReuse`,
-    so the revocation survives the caller's rollback on the error path. This is
-    the only place in this module that commits.
+    Reuse detection: every hash a session has rotated away from is recorded in
+    `user_session_used_refresh`. Presenting any of them again means someone holds
+    a stale copy, so the session is revoked and this function COMMITS before
+    raising `TokenReuse`, so the revocation survives the caller's rollback on the
+    error path. This is the only place in this module that commits.
+
+    Exception: the immediate predecessor presented within `REUSE_GRACE` of the
+    last rotation is treated as a client racing itself; it gets a plain
+    `InvalidToken` and the session is left untouched.
     """
+    _require_aware(now)
     h = _hash(raw)
     row = session.scalars(
         select(UserSession).where(UserSession.refresh_hash == h).with_for_update()
     ).first()
     if row is None:
-        reused = session.scalars(
-            select(UserSession).where(UserSession.prev_refresh_hash == h).with_for_update()
-        ).first()
+        used = session.get(UserSessionUsedRefresh, h)
+        reused = (
+            session.scalars(
+                select(UserSession).where(UserSession.id == used.session_id).with_for_update()
+            ).first()
+            if used is not None
+            else None
+        )
         if reused is not None:
+            if reused.prev_refresh_hash == h and now - reused.last_used_at < REUSE_GRACE:
+                raise InvalidToken("invalid refresh token")
             if reused.revoked_at is None:
                 reused.revoked_at = now
             session.commit()
@@ -253,6 +280,7 @@ def rotate_refresh(
         raise InvalidToken("invalid refresh token")
 
     new_raw, new_hash = new_refresh()
+    session.add(UserSessionUsedRefresh(hash=row.refresh_hash, session_id=row.id, used_at=now))
     row.prev_refresh_hash = row.refresh_hash
     row.refresh_hash = new_hash
     row.last_used_at = now
@@ -263,5 +291,6 @@ def rotate_refresh(
 
 
 def session_is_active(session: Session, sid: uuid.UUID, now: datetime) -> bool:
+    _require_aware(now)
     row = session.get(UserSession, sid)
     return row is not None and row.revoked_at is None and row.expires_at > now

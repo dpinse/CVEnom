@@ -185,6 +185,20 @@ class UserSession(Base):
     )
 
 
+class UserSessionUsedRefresh(Base):
+    """Every refresh hash a session has rotated away from (reuse detection)."""
+
+    __tablename__ = "user_session_used_refresh"
+
+    hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_session.id", ondelete="CASCADE"), index=True
+    )
+    used_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class SigningKey(Base):
     __tablename__ = "signing_key"
 

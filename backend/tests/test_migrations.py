@@ -56,7 +56,7 @@ def test_migration_upgrade_and_downgrade(scratch_url):
     assert not (EXPECTED & _indexes(scratch_url))
 
 
-AUTH_TABLES = ["app_user", "invite", "user_session", "signing_key", "alert_event",
+AUTH_TABLES = ["app_user", "invite", "user_session", "user_session_used_refresh", "signing_key", "alert_event",
                "alert_rule", "alert_recipient", "alert_delivery"]
 AUTH_EXPECTED = {
     "ix_alert_event_processed_created", "ix_alert_event_created_at_brin",

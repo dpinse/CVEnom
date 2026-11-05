@@ -64,6 +64,18 @@ def upgrade() -> None:
     op.create_index("ix_user_session_user_id", "user_session", ["user_id"])
     op.create_index("ix_user_session_prev_refresh_hash", "user_session", ["prev_refresh_hash"])
     op.create_table(
+        "user_session_used_refresh",
+        sa.Column("hash", sa.String(length=64), primary_key=True),
+        sa.Column(
+            "session_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("user_session.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        _ts("used_at", nullable=False, server_default=sa.func.now()),
+    )
+    op.create_index("ix_user_session_used_refresh_session_id", "user_session_used_refresh", ["session_id"])
+    op.create_table(
         "signing_key",
         sa.Column("kid", sa.String(length=64), primary_key=True),
         sa.Column("private_enc", sa.Text(), nullable=False),
@@ -133,6 +145,7 @@ def downgrade() -> None:
     op.drop_table("alert_rule")
     op.drop_table("alert_event")
     op.drop_table("signing_key")
+    op.drop_table("user_session_used_refresh")
     op.drop_table("user_session")
     op.drop_table("invite")
     op.drop_table("app_user")
