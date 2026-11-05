@@ -5,6 +5,7 @@ import "../styles/tokens.css";
 import "../styles/base.css";
 import "../styles/shell.css";
 import "../styles/globe.css";
+import "../styles/velocity.css";
 import "./harness.css";
 import GlobeHarness from "./GlobeHarness";
 
