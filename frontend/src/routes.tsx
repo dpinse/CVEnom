@@ -11,6 +11,7 @@ import History from "./pages/History";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 import Sessions from "./pages/Sessions";
+import TwoFactor from "./pages/TwoFactor";
 
 /** The old /search URL keeps working: same query string, new path. */
 function SearchRedirect() {
@@ -35,6 +36,7 @@ export function AppRoutes() {
         <Route element={<RequireUser />}>
           <Route path="account/sessions" element={<Sessions />} />
           <Route path="account/password" element={<ChangePassword />} />
+          <Route path="account/two-factor" element={<TwoFactor />} />
         </Route>
         <Route element={<RequireAdmin />}>
           <Route path="admin/alerts" element={<AdminAlerts />} />

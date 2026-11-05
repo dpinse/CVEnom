@@ -2,7 +2,16 @@ import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import type { APIResponse, Page } from "@playwright/test";
-import { canvasCentreStdDev, CVE_ID, expect, loaded, STDDEV_MIN, test } from "./harness";
+import {
+  canvasCentreStdDev,
+  CVE_ID,
+  expect,
+  loaded,
+  mockTwoStepSignIn,
+  passwordStep,
+  STDDEV_MIN,
+  test,
+} from "./harness";
 import { cspFor } from "./nginxHeaders.ts";
 
 /**
@@ -174,4 +183,19 @@ test("positive controls: the violation collector sees off-origin fetches and Web
   // The blocked attempts also log console errors / show up as requests; they are the expected outcome here.
   guards.consoleErrors.length = 0;
   guards.offOrigin.length = 0;
+});
+
+test("MFA enrollment (local QR) and recovery codes under the production CSP: zero violations", async ({
+  page,
+  guards,
+}) => {
+  await mockTwoStepSignIn(page, { enroll: true });
+  await passwordStep(page);
+  await expect(page.getByRole("img", { name: "QR code for your authenticator app" })).toBeVisible();
+  await page.getByLabel("Authentication code").fill("123456");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(page.getByRole("region", { name: "Recovery codes" })).toBeVisible();
+  expect(await violations(page)).toEqual([]);
+  expect(guards.consoleErrors).toEqual([]);
+  expect(guards.offOrigin).toEqual([]);
 });

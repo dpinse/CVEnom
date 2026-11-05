@@ -64,6 +64,17 @@ describe("guards", () => {
     at("/account/password");
     expect(await screen.findByRole("heading", { name: "Change password" })).toBeInTheDocument();
   });
+  test("a signed-in user reaches /account/two-factor", async () => {
+    handlers();
+    server.use(
+      http.get("http://localhost/api/auth/mfa", () =>
+        HttpResponse.json({ enabled: true, enrolled_at: null, recovery_codes_remaining: 10 }),
+      ),
+    );
+    signIn(member);
+    at("/account/two-factor");
+    expect(await screen.findByRole("heading", { name: "Two-factor authentication" })).toBeInTheDocument();
+  });
   test("public server: a guest sees the dashboard and search", async () => {
     handlers({ publicRead: true });
     guest();

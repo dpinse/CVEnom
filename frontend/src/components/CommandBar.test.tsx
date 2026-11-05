@@ -114,6 +114,7 @@ describe("user menu", () => {
     openMenu(/member@example\.com/);
     expect(screen.getByRole("link", { name: "Sessions" })).toHaveAttribute("href", "/account/sessions");
     expect(screen.getByRole("link", { name: "Change password" })).toHaveAttribute("href", "/account/password");
+    expect(screen.getByRole("link", { name: "Two-factor" })).toHaveAttribute("href", "/account/two-factor");
     expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Alerts" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Invites" })).toBeNull();

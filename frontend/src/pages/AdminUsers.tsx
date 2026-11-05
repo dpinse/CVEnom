@@ -15,7 +15,8 @@ type Pending =
   | { user: UserAdmin; action: "role"; role: Role }
   | { user: UserAdmin; action: "active"; active: boolean }
   | { user: UserAdmin; action: "revoke" }
-  | { user: UserAdmin; action: "reset" };
+  | { user: UserAdmin; action: "reset" }
+  | { user: UserAdmin; action: "mfa" };
 
 function confirmText(p: Pending) {
   const who = <Text value={p.user.email} as="strong" />;
@@ -32,6 +33,13 @@ function confirmText(p: Pending) {
       return <>Create a password reset link for {who}? Any earlier unused reset link for this user stops working.</>;
     case "revoke":
       return <>Revoke all sessions for {who}? Signs them out everywhere.</>;
+    case "mfa":
+      return (
+        <>
+          Reset two-factor for {who}? Signs them out everywhere; they must set up two-factor again at their next
+          sign-in.
+        </>
+      );
   }
 }
 
@@ -116,7 +124,22 @@ export default function AdminUsers() {
     onError: (e) => setError(adminError(e)),
   });
 
-  const busy = patch.isPending || revoke.isPending;
+  const resetMfa = useMutation({
+    mutationFn: (u: UserAdmin) => api(`/auth/users/${u.id}/mfa/reset`, { method: "POST" }),
+    onSuccess: async (_d, u) => {
+      setError(null);
+      flushSync(() => setPending(null));
+      await refresh();
+      backToRow(u.id);
+    },
+    onError: (e, u) => {
+      flushSync(() => setPending(null));
+      setError(adminError(e));
+      backToRow(u.id);
+    },
+  });
+
+  const busy = patch.isPending || revoke.isPending || resetMfa.isPending;
 
   const confirmNow = () => {
     if (!pending) return;
@@ -126,7 +149,8 @@ export default function AdminUsers() {
       lastReset.current = pending.user.id;
       setPending(null);
       reset.mutate(pending.user);
-    } else revoke.mutate(pending.user);
+    } else if (pending.action === "mfa") resetMfa.mutate(pending.user);
+    else revoke.mutate(pending.user);
   };
   const cancel = () => {
     const id = pending?.user.id;
@@ -161,6 +185,7 @@ export default function AdminUsers() {
                 <th scope="col">Role</th>
                 <th scope="col">Active</th>
                 <th scope="col">Active sessions</th>
+                <th scope="col">Two-factor</th>
                 <th scope="col">Created</th>
                 <th scope="col">
                   <span className="sr-only">Actions</span>
@@ -207,6 +232,7 @@ export default function AdminUsers() {
                       </label>
                     </td>
                     <td data-label="Active sessions">{u.active_sessions}</td>
+                    <td data-label="Two-factor">{u.mfa_enabled ? "On" : "Not set up"}</td>
                     <td data-label="Created">{relTime(u.created_at, now) || "—"}</td>
                     <td>
                       {mine ? (
@@ -245,6 +271,16 @@ export default function AdminUsers() {
                             onClick={() => setPending({ user: u, action: "reset" })}
                           >
                             Reset password
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            disabled={self || busy}
+                            title={self ? "Use the recovery codes on your own account" : undefined}
+                            aria-label={`Reset MFA for ${name}`}
+                            onClick={() => setPending({ user: u, action: "mfa" })}
+                          >
+                            Reset MFA
                           </button>
                         </span>
                       )}

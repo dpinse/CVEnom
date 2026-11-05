@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { test as base, expect, type Page } from "@playwright/test";
+import { test as base, expect, type Page, type Route } from "@playwright/test";
 
 const FIXTURES = join(import.meta.dirname, "fixtures");
 const fixture = (name: string): string => readFileSync(join(FIXTURES, `${name}.json`), "utf8");
@@ -80,6 +80,8 @@ export const test = base.extend<{ guards: Guards }>({
         // The browser logs the guest's mocked 401 from /api/auth/refresh as a console error by itself; it is the
         // only expected one (the app handles it and stays a guest).
         if (m.location().url.endsWith("/api/auth/refresh") && /401/.test(m.text())) return;
+        // Likewise the browser's own line for a mocked 401 from the MFA code step (mfa.spec's rejected-code test).
+        if (m.location().url.endsWith("/api/auth/mfa/verify") && /401/.test(m.text())) return;
         guards.consoleErrors.push(`console.error: ${m.text()}`);
       });
       page.on("request", (r) => {
@@ -102,6 +104,62 @@ export const test = base.extend<{ guards: Guards }>({
     { auto: true },
   ],
 });
+
+/** Two-step sign-in fixtures (password -> MFA ticket -> TOTP code or enrollment). Never real secrets. */
+export const MFA = {
+  member: { id: 7, email: "member@example.test", role: "member" },
+  password: "e2e correct horse battery",
+  ticket: "e2e-mfa-ticket-0123456789",
+  token: "e2e-access-token",
+  secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+  code: "123456",
+  recoveryCodes: Array.from({ length: 10 }, (_, i) => `e2e${i}-rcvr-code-abcd`),
+};
+
+/**
+ * Mock the two-step sign-in. `enroll` makes the account one that has not set up MFA yet. Returns the
+ * request log (method, path and JSON body) so specs can assert what was sent where. These routes are
+ * registered after the harness's catch-all, so Playwright consults them first.
+ */
+export async function mockTwoStepSignIn(page: Page, opts: { enroll?: boolean } = {}) {
+  const log: { method: string; path: string; url: string; body: unknown }[] = [];
+  const record = (route: Route) => {
+    const r = route.request();
+    log.push({ method: r.method(), path: new URL(r.url()).pathname, url: r.url(), body: r.postDataJSON() });
+  };
+  const token = { access_token: MFA.token, token_type: "bearer", expires_in: 900 };
+  await page.route("**/api/auth/login", (route) => {
+    record(route);
+    return route.fulfill(json(JSON.stringify({ ticket: MFA.ticket, enroll_required: !!opts.enroll, expires_in: 300 })));
+  });
+  await page.route("**/api/auth/mfa/verify", (route) => {
+    record(route);
+    return route.fulfill(json(JSON.stringify(token)));
+  });
+  await page.route("**/api/auth/mfa/enroll/start", (route) => {
+    record(route);
+    const uri = `otpauth://totp/CVEnom:member%40example.test?secret=${MFA.secret}&issuer=CVEnom&algorithm=SHA1&digits=6&period=30`;
+    return route.fulfill(json(JSON.stringify({ secret: MFA.secret, otpauth_uri: uri })));
+  });
+  await page.route("**/api/auth/mfa/enroll/finish", (route) => {
+    record(route);
+    return route.fulfill(json(JSON.stringify({ ...token, recovery_codes: MFA.recoveryCodes })));
+  });
+  await page.route("**/api/auth/me", (route) =>
+    route.request().headers()["authorization"] === `Bearer ${MFA.token}`
+      ? route.fulfill(json(JSON.stringify(MFA.member)))
+      : route.fulfill(json('{"error":"unauthorized"}', 401)),
+  );
+  return log;
+}
+
+/** Fill and submit the password step. */
+export async function passwordStep(page: Page) {
+  await page.goto("/login");
+  await page.getByLabel("Email").fill(MFA.member.email);
+  await page.getByLabel("Password").fill(MFA.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+}
 
 export async function loaded(page: Page) {
   await page.goto("/");

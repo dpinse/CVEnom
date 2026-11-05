@@ -20,6 +20,7 @@ const mk = (o: Partial<UserAdmin>): UserAdmin => ({
   is_active: true,
   created_at: "2026-10-01T00:00:00Z",
   active_sessions: 2,
+  mfa_enabled: true,
   ...o,
 });
 let users: UserAdmin[] = [];
@@ -228,5 +229,50 @@ describe("AdminUsers", () => {
     fireEvent.click(within(dan2).getByRole("button", { name: /Reset password/ }));
     fireEvent.click(within(dan2).getByRole("button", { name: "Confirm" }));
     expect(await screen.findByText("Reactivate the user before resetting their password")).toBeInTheDocument();
+  });
+
+  test("shows each user's two-factor status", async () => {
+    users = [mk({}), mk({ id: 3, email: "carol@example.com", mfa_enabled: false })];
+    mock();
+    open();
+    expect(within(await rowOf("bob@example.com")).getByText("On")).toBeInTheDocument();
+    expect(within(await rowOf("carol@example.com")).getByText("Not set up")).toBeInTheDocument();
+  });
+
+  test("Reset MFA confirms in-page, POSTs, and refetches; disabled for yourself", async () => {
+    mock();
+    server.use(
+      http.post(`${A}/users/2/mfa/reset`, async ({ request }) => {
+        await rec(request);
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    open();
+    const me = await rowOf("admin@example.com");
+    expect(within(me).getByRole("button", { name: /Reset MFA/ })).toBeDisabled();
+    const bob = await rowOf("bob@example.com");
+    fireEvent.click(within(bob).getByRole("button", { name: /Reset MFA for bob@example.com/ }));
+    expect(calls).toEqual([]);
+    expect(within(bob).getByText(/Signs them out everywhere/)).toBeInTheDocument();
+    expect(within(bob).getByText(/set up two-factor again/)).toBeInTheDocument();
+    fireEvent.click(within(bob).getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toMatchObject({ method: "POST", path: "/api/auth/users/2/mfa/reset" });
+    await waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(2));
+  });
+
+  test("Reset MFA cancel sends nothing; a 409 shows a message", async () => {
+    mock();
+    server.use(
+      http.post(`${A}/users/2/mfa/reset`, () => HttpResponse.json({ error: "cannot_modify_self" }, { status: 409 })),
+    );
+    open();
+    const bob = await rowOf("bob@example.com");
+    fireEvent.click(within(bob).getByRole("button", { name: /Reset MFA/ }));
+    fireEvent.click(within(bob).getByRole("button", { name: "Cancel" }));
+    expect(calls).toEqual([]);
+    fireEvent.click(within(bob).getByRole("button", { name: /Reset MFA/ }));
+    fireEvent.click(within(bob).getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText("You can't change your own role or status here")).toBeInTheDocument();
   });
 });

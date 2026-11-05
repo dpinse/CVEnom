@@ -37,6 +37,8 @@ export const qk = {
   country: (cc: string, windowHours: number) => ["geo", "country", cc, windowHours] as const,
   health: () => ["health"] as const,
   sessions: () => ["sessions"] as const,
+  /** status only (enabled, remaining count): never the secret or the recovery codes */
+  mfa: () => ["mfa"] as const,
   alerts: () => ["alerts"] as const,
   rules: () => ["alerts", "rules"] as const,
   deliveries: (p: { status: string; rule: string; page: number }) => ["alerts", "deliveries", p] as const,
