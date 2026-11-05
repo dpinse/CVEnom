@@ -23,7 +23,7 @@ export function useSelection() {
   const [sp, setSp] = useSearchParams();
   const selection = useMemo(() => parseSelection(sp), [sp]);
   const select = useCallback(
-    (s: Selection | null) => {
+    (s: Selection | null, opts?: { replace?: boolean }) => {
       setSp((prev) => {
         const next = new URLSearchParams(prev);
         next.delete("cve");
@@ -34,9 +34,11 @@ export function useSelection() {
           if (url !== null) next.set("story", url);
         }
         return next;
-      });
+      }, opts?.replace ? { replace: true } : undefined);
     },
     [setSp],
   );
-  return { selection, select };
+  /** Closes the drawer with `replace` history so Back does not re-open it. */
+  const clear = useCallback(() => select(null, { replace: true }), [select]);
+  return { selection, select, clear };
 }

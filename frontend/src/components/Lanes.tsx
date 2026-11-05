@@ -73,8 +73,9 @@ export function LanesView({ lanes, stories = [], loading, error, now, onSelect }
                 <span className="tick" aria-hidden="true" />
                 <h2 id={headId}>{d.title}</h2>
                 <span className="sub">{d.sub}</span>
-                <span className="n" aria-label={`${count} items`}>
+                <span className="n">
                   {showSkeleton ? "" : count}
+                  {!showSkeleton && <span className="sr-only"> items</span>}
                 </span>
               </header>
               <div className="lane-items">

@@ -3,6 +3,7 @@ import { Outlet, useLocation } from "react-router-dom";
 import { startBootstrap } from "../lib/useAuth";
 import { AlertBar } from "./AlertBar";
 import { CommandBar } from "./CommandBar";
+import { DrawerHost } from "./DrawerHost";
 
 const NOTICES: Record<string, string> = { "admins-only": "Admins only. You were sent back to the dashboard." };
 const NOTICE_MS = 6000;
@@ -42,6 +43,7 @@ export function Shell() {
       <main id="main" tabIndex={-1}>
         <Outlet />
       </main>
+      <DrawerHost />
     </>
   );
 }

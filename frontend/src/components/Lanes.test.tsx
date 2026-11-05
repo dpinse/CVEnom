@@ -33,6 +33,20 @@ const story = (o: Partial<LoudStory> = {}): LoudStory => ({
 const lane = (name: string) => screen.getByRole("region", { name });
 const noop = () => {};
 
+describe("LanesView double-encoded text", () => {
+  test("a summary of &amp;lt;b&amp;gt; renders as literal text &lt;b&gt;, never markup", () => {
+    const { container } = render(
+      <LanesView
+        lanes={{ EXPLOITED: [item({ summary: "&amp;lt;b&amp;gt;" })], LIKELY: [], LOUD: [], FRESH: [] }}
+        onSelect={noop}
+        now={NOW}
+      />,
+    );
+    expect(screen.getByText("&lt;b&gt;")).toBeInTheDocument();
+    expect(container.querySelector("b")).toBeNull();
+  });
+});
+
 describe("LanesView", () => {
   test("quiet foil appears only in Fresh, with no in-the-wild marker", () => {
     render(<LanesView lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [foil] }} onSelect={noop} now={NOW} />);

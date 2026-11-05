@@ -1,0 +1,75 @@
+/* Drill-down drawer. Tokens only. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--well) 72%, transparent);
+  z-index: 70;
+  animation: scrim-in 0.2s ease both;
+}
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(480px, 100vw);
+  max-width: 100vw;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  color: var(--text);
+  z-index: 71;
+  display: flex;
+  flex-direction: column;
+  padding-right: env(safe-area-inset-right, 0px);
+  animation: drawer-in 0.24s ease both;
+}
+@keyframes drawer-in { from { transform: translateX(104%); } to { transform: none; } }
+@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .drawer, .scrim { animation: none; }
+}
+.dhead { padding: 16px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: flex-start; }
+.dtitle { margin: 0; min-width: 0; overflow-wrap: anywhere; font-family: var(--font-display); font-weight: 600; font-size: 17px; line-height: 1.25; color: var(--scope); }
+.dtitle:focus { outline: none; }
+.drawer .close {
+  margin-left: auto; flex: none; width: 31px; height: 31px; border-radius: 7px;
+  background: transparent; border: 1px solid var(--line); color: var(--muted); cursor: pointer; font-size: 15px;
+}
+.drawer .close:focus-visible, .drawer .dlink:focus-visible, .drawer .chip:focus-visible { outline: 2px solid var(--scope); outline-offset: 2px; }
+.dbody { overflow-y: auto; overflow-x: hidden; padding: 16px; display: flex; flex-direction: column; gap: 20px; min-width: 0; overflow-wrap: anywhere; }
+.dmeta { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 12px; color: var(--muted); }
+.dmeta .wild { display: inline-flex; align-items: center; gap: 6px; color: var(--live); font-weight: 600; }
+.dstory-title { margin: 0; font-family: var(--font-display); font-size: 17px; line-height: 1.3; }
+.meters { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.meter .mtop { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.meter .mname { font-size: 11px; color: var(--muted); }
+.meter .mval { font-family: var(--font-display); font-weight: 700; font-size: 17px; }
+.track { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.track i { display: block; height: 100%; background: var(--muted); }
+.track i[data-tone="crit"] { background: var(--sev-crit); }
+.track i[data-tone="high"] { background: var(--sev-high); }
+.track i[data-tone="med"] { background: var(--sev-med); }
+.track i[data-tone="low"] { background: var(--sev-low); }
+.track i[data-tone="live"] { background: var(--live); }
+.seclabel { font-family: var(--font-display); font-weight: 600; font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
+.sum { margin: 0; font-size: 13.5px; line-height: 1.6; }
+.isolate { unicode-bidi: isolate; }
+.prods, .slinks, .gevs { list-style: none; margin: 0; padding: 0; }
+.prods { display: flex; flex-wrap: wrap; gap: 6px; }
+.slink { display: grid; grid-template-columns: minmax(0, 96px) minmax(0, 1fr); gap: 10px; font-size: 12.5px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.slink:last-child { border-bottom: 0; }
+.slink .s { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.dlink { color: var(--scope); text-decoration: underline; }
+.gev { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.gev:last-child { border-bottom: 0; }
+.gev-top { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.gev-mag, .gev-time { color: var(--muted); font-size: 11px; }
+.gev-label { margin-top: 4px; }
+.kv { margin: 6px 0 0; font-size: 11.5px; }
+.kv-row { display: grid; grid-template-columns: minmax(0, 40%) minmax(0, 1fr); gap: 8px; padding: 2px 0; }
+.kv dt { font-family: var(--font-mono); color: var(--muted); }
+.kv dd { margin: 0; font-family: var(--font-mono); }
+.kv-more { color: var(--muted); font-size: 11px; }
+.dnote { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.dskeleton { height: 120px; border-radius: var(--radius); background: var(--panel-2); }
+@media (prefers-reduced-motion: no-preference) { .dskeleton { animation: dsk 1.4s ease-in-out infinite; } }
+@keyframes dsk { 50% { opacity: 0.5; } }
