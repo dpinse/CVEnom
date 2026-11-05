@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from celery import Celery
@@ -20,6 +20,10 @@ from cvenom.pipeline import ingest
 log = logging.getLogger(__name__)
 
 LOCK_PREFIX = "cvenom:lock:"
+# Each incremental window starts this long before the previous run started, so a
+# record published/modified late (or with source-side clock skew) is not missed.
+# Upserts are idempotent, so the overlap is free.
+WINDOW_OVERLAP = timedelta(hours=1)
 
 celery_app = Celery("cvenom", broker=get_settings().redis_url)
 celery_app.conf.update(
@@ -85,7 +89,8 @@ def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLo
             if row is None:
                 row = CollectorRun(collector=name, last_run=None, state={})
                 session.add(row)
-            collector = cls(since=row.last_run, state=row.state or {})
+            since = row.last_run - WINDOW_OVERLAP if row.last_run is not None else None
+            collector = cls(since=since, state=row.state or {})
             result = asyncio.run(collector.run())
             if collector.last_error is not None:
                 log.error("collector %s failed; window not advanced", name)

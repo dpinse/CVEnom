@@ -130,8 +130,21 @@ def test_run_collector_passes_since_and_state(db_session, factory, fake_registry
     prior = datetime(2021, 5, 5, tzinfo=timezone.utc)
     db_session.add(CollectorRun(collector="fake_t", last_run=prior, state={"k": 1}))
     db_session.flush()
+    before = datetime.now(timezone.utc)
     run_collector("fake_t", session_factory=factory, lock=FakeLock())
-    assert seen == [(prior, {"k": 1})]
+    # The window overlaps the previous one by WINDOW_OVERLAP (upserts are idempotent).
+    assert seen == [(prior - timedelta(hours=1), {"k": 1})]
+    # last_run is still the run's START time, not the overlapped since.
+    assert db_session.get(CollectorRun, "fake_t").last_run >= before
+
+
+def test_window_overlap_constant_and_first_run_since_is_none(db_session, factory, fake_registry):
+    from cvenom import tasks
+    assert tasks.WINDOW_OVERLAP == timedelta(hours=1)
+    seen = []
+    fake_registry(make_fake(seen=seen))
+    tasks.run_collector("fake_t", session_factory=factory, lock=FakeLock())
+    assert seen == [(None, {})]
 
 
 def test_run_collector_enrich_only_creates_no_rows(db_session, factory, fake_registry):
