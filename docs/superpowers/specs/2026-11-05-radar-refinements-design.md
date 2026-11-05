@@ -122,6 +122,38 @@ Collect and store data the collectors currently throw away.
 - **Ports and secrets:** every published port is localhost-only. Dev secrets come from an untracked `.env.dev`, and an example file is committed.
 - **Docs:** one command, `docker compose -f docker-compose.dev.yml up`, documented in the README.
 
+### H. Mandatory MFA (added by the user, 2026-11-05: "MFA should be mandatory")
+Every account must use TOTP (authenticator-app) MFA. There is no opt-out and no per-role exception. The choices below are mine; please review them.
+
+**Method:** TOTP per RFC 6238: SHA-1, 6 digits, a 30 s step, and ±1 step of clock drift. This works with every common authenticator app.
+- It is implemented with the stdlib `hmac`, so no new backend dependency is needed, and it is tested against the RFC 6238 test vectors.
+- The TOTP secret is 160 random bits, encrypted at rest with the existing AES-256-GCM secretbox. It is never returned after enrollment.
+
+**Sign-in becomes two steps:**
+1. `POST /api/auth/login` with the email and password. It no longer issues a session. It returns a short-lived (5 min), single-use **MFA ticket**, plus whether the account still needs to enroll.
+2. One of:
+   - `POST /api/auth/mfa/verify` with `{ticket, code}` (a TOTP code or a recovery code). This issues the normal access token and refresh cookie.
+   - For an account that hasn't enrolled: `POST /api/auth/mfa/enroll/start` with the ticket returns the secret and `otpauth://` URI, then `POST /api/auth/mfa/enroll/finish` with the ticket and a first code issues the session. The user is shown **10 one-time recovery codes** exactly once.
+- Tickets are stored hashed, bound to the user, expire after 5 minutes, and are consumed on use. No session or refresh token exists until the second factor passes.
+- **Replay protection:** the last accepted TOTP time step is stored, and that step or anything earlier is rejected.
+- **Rate limits:** 5 failed codes per 15 minutes, counted per user and per IP. These fail closed when Redis is down, matching login. Each failure returns the same 401 bytes.
+- Recovery codes are stored as hashes and are single-use. A user can regenerate them (which needs a current TOTP code), and the remaining count is shown.
+
+**Existing accounts, invites and resets:**
+- Every existing user, the first admin included, is sent through enrollment at their next sign-in.
+- Accepting an invite leads straight into enrollment, and the account gets no session until enrollment is done.
+- A password reset doesn't touch MFA.
+- **Admin MFA reset:** an admin can reset another user's MFA. That revokes all of the user's sessions, and they must re-enroll at their next sign-in. An admin cannot reset their own MFA.
+- **CLI fallback:** `create-admin` is unchanged, and the admin enrolls at first sign-in. A new `reset-mfa --email` command is the break-glass path if the last admin loses their device.
+
+**Frontend:**
+- **Login:** the page gains a code step that accepts a TOTP or recovery code.
+- **Enrollment page:** shows a QR code rendered locally (an exact-pinned QR library, no remote calls, CSP unchanged), the secret for manual entry, a confirmation field, and the recovery codes in a one-time panel, like the existing secret panels.
+- **Account page:** "Two-factor" shows the status, the recovery codes remaining and a regenerate option.
+- **Admin users page:** gains "Reset MFA".
+
+**What stays the same:** refresh rotation, sessions and the WebSocket. A refresh never asks for MFA again, because the session already passed it.
+
 ## Approaches considered
 - **Lane windows: SQL filter vs a UI-only filter.** The SQL filter keeps payloads small and makes every consumer agree: lanes, the search `lane=` filter, and Situation. A UI-only filter would still ship 1,500 rows. **Chose SQL.**
 - **History: a new page vs extending Search.** Search already has most of the filters, so extending it and renaming it avoids two near-duplicate pages. **Chose to extend and rename.**

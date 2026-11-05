@@ -27,6 +27,10 @@ Users choose what they care about, and the radar tells them when it shows up in 
 
 ## Later
 
+- **Passkeys (WebAuthn).** Let users sign in with a passkey: Windows Hello, Touch ID, Android, or a security key such as a YubiKey. This would sit alongside the mandatory TOTP MFA and could eventually replace passwords.
+  - A passkey covers both factors on its own, so signing in with one skips the TOTP step.
+  - Needs work on: registration and management in the account page, attestation policy, and how a lost passkey is recovered (TOTP or recovery codes as the fallback).
+
 - **Telegram alerts.** This needs a bot token plus a chat id, which is a different payload from generic webhooks. It is deferred because the current users don't use Telegram.
 - **SMS alerts.** These were mentioned in the original vision.
 - **"Situation" strip.** This is the playful "meme garnish" status strip from the early brainstorm, and it remains a TODO.
