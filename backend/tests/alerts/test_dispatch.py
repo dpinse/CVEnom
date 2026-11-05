@@ -355,3 +355,129 @@ def test_concurrent_dispatchers_do_not_double_process(test_engine):
             s.execute(delete(AlertEvent))
             s.execute(delete(AlertRule))
             s.execute(delete(Cve).where(Cve.cve_id == "CVE-2099-7777"))
+
+
+def test_disabled_rule_at_send_time_defers(db_session, factory):
+    _cve(db_session)
+    r, _ = _rule(db_session)
+    _event(db_session)
+    dispatch_once(factory, NOW, {})  # pending delivery
+    r.enabled = False
+    d = _deliveries(db_session)[0]
+    d.next_attempt_at = None
+    db_session.flush()
+    sink = FakeSink()
+    out = dispatch_once(factory, NOW, {"email": sink})
+    assert out["deferred"] == 1 and out["sent"] == 0 and sink.calls == []
+    d = _deliveries(db_session)[0]
+    assert d.status == "pending" and d.attempts == 0 and d.next_attempt_at == NOW + timedelta(hours=1)
+
+
+def test_stale_pending_delivery_expires(db_session, factory):
+    _cve(db_session)
+    _rule(db_session)
+    _event(db_session)
+    dispatch_once(factory, NOW, {})
+    d = _deliveries(db_session)[0]
+    d.created_at = NOW - timedelta(days=8)
+    d.next_attempt_at = None
+    db_session.flush()
+    sink = FakeSink()
+    out = dispatch_once(factory, NOW, {"email": sink})
+    assert out["failed"] == 1 and out["sent"] == 0 and sink.calls == []
+    d = _deliveries(db_session)[0]
+    assert d.status == "failed" and d.last_error == "expired"
+
+
+def test_non_sink_error_stores_only_type_name(db_session, factory):
+    _cve(db_session)
+    _rule(db_session, n_email=0, n_hook=1)
+    _event(db_session)
+    dispatch_once(factory, NOW, {"webhook": FakeSink(RuntimeError("leak s3cr3t-value"))})
+    assert _deliveries(db_session)[0].last_error == "RuntimeError"
+
+
+def test_evaluate_failure_logged_and_send_stage_still_runs(db_session, factory, monkeypatch, caplog):
+    from cvenom.alerts import dispatch as dmod
+    _cve(db_session)
+    _rule(db_session)
+    _event(db_session)
+    dispatch_once(factory, NOW, {})  # pending delivery, deferred 1h
+
+    def boom(*a, **k):
+        raise ValueError("secret " + "row data")  # built at runtime: frames show source lines
+
+    monkeypatch.setattr(dmod, "_evaluate_batch", boom)
+    sink = FakeSink()
+    with caplog.at_level("ERROR", logger="cvenom.alerts.dispatch"):
+        out = dispatch_once(factory, NOW + timedelta(hours=1), {"email": sink})
+    assert out["sent"] == 1 and len(sink.calls) == 1
+    assert "ValueError" in caplog.text and "secret row data" not in caplog.text
+
+
+def test_send_deadline_stops_new_sends(db_session, factory):
+    from cvenom.alerts.dispatch import SEND_DEADLINE_S
+    _cve(db_session)
+    _rule(db_session, n_email=3)
+    _event(db_session)
+    sink = FakeSink()
+    ticks = iter([0, 0, SEND_DEADLINE_S + 1, SEND_DEADLINE_S + 2, SEND_DEADLINE_S + 3])
+    out = dispatch_once(factory, NOW, {"email": sink}, monotonic=lambda: next(ticks))
+    assert out["deliveries_created"] == 3 and out["sent"] == 1
+    assert len(sink.calls) == 1
+
+
+def test_overlapping_dispatcher_does_not_resend_retried_delivery(test_engine):
+    """A's sink runs dispatcher B mid-run; B fails delivery 2 into backoff; A must skip it."""
+    cid = "CVE-2099-8888"
+
+    @contextmanager
+    def real_factory():
+        s = Session(test_engine)
+        try:
+            yield s
+            s.commit()
+        except Exception:
+            s.rollback()
+            raise
+        finally:
+            s.close()
+
+    class Failing:
+        def __init__(self):
+            self.calls = []
+
+        def send(self, d, cve, rule, rec):
+            self.calls.append(d.id)
+            raise SinkError("boom")
+
+    class A:
+        def __init__(self):
+            self.calls = []
+            self.b_out = None
+            self.b_sink = Failing()
+
+        def send(self, d, cve, rule, rec):
+            self.calls.append(d.id)
+            if self.b_out is None:
+                self.b_out = dispatch_once(real_factory, NOW, {"email": self.b_sink})
+
+    try:
+        with real_factory() as s:
+            _cve(s, cve_id=cid)
+            _rule(s, n_email=2)
+            _event(s, cve_id=cid)
+        a = A()
+        dispatch_once(real_factory, NOW, {"email": a})
+        assert len(a.calls) == 1, a.calls
+        assert len(a.b_sink.calls) == 1 and a.b_sink.calls[0] not in a.calls
+        with real_factory() as s:
+            by_id = {d.id: (d.status, d.attempts, d.next_attempt_at)
+                     for d in s.scalars(select(AlertDelivery))}
+        assert by_id[a.b_sink.calls[0]] == ("pending", 1, NOW + timedelta(minutes=2))
+        assert by_id[a.calls[0]][0] == "sent"
+    finally:
+        with real_factory() as s:
+            s.execute(delete(AlertEvent))
+            s.execute(delete(AlertRule))
+            s.execute(delete(Cve).where(Cve.cve_id == cid))

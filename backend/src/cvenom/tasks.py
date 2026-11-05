@@ -6,6 +6,7 @@ import asyncio
 import logging
 import threading
 import time
+import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -245,7 +246,8 @@ def alerts_dispatch_job(*, lock: CollectorLock | None = None, session_factory=se
         sinks = sinks if sinks is not None else build_sinks()
         return {"ok": True, **dispatch_once(session_factory, now, sinks)}
     except Exception as exc:
-        log.error("alerts dispatch failed: %s", type(exc).__name__)
+        log.error("alerts dispatch failed: %s\n%s", type(exc).__name__,
+                  "".join(traceback.format_tb(exc.__traceback__)))
         return {"ok": False}
     finally:
         try:
@@ -269,7 +271,10 @@ def purge_sessions_job(*, lock: CollectorLock | None = None, session_factory=ses
             deleted = res.rowcount
         return {"ok": True, "deleted": deleted}
     finally:
-        lock.release(PURGE_SESSIONS_LOCK)
+        try:
+            lock.release(PURGE_SESSIONS_LOCK)
+        except Exception as exc:
+            log.warning("session purge lock release failed: %s", type(exc).__name__)
 
 
 @celery_app.task(name="cvenom.tasks.alerts_dispatch_task")

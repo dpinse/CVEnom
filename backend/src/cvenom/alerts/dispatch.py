@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import html
 import logging
+import time
+import traceback
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -11,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from cvenom import secretbox
-from cvenom.alerts.sinks import Sink, SinkNotConfigured
+from cvenom.alerts.sinks import Sink, SinkError, SinkNotConfigured
 from cvenom.models import (
     AlertDelivery, AlertEvent, AlertRecipient, AlertRule, Cve,
 )
@@ -22,6 +24,8 @@ EVENT_BATCH = 200
 SEND_BATCH = 100
 MAX_ATTEMPTS = 6
 DEFER = timedelta(hours=1)
+EXPIRE_AFTER = timedelta(days=7)
+SEND_DEADLINE_S = 90  # keeps a run inside the 120s dispatch lock TTL
 ERROR_MAX = 300
 DEDUPE_CONSTRAINT = "uq_alert_delivery_rule_recipient_cve"
 
@@ -122,11 +126,21 @@ def _send_one(session_factory, delivery_id: int, now: datetime, sinks: dict[str,
         ).first()
         if d is None or d.status != "pending":
             return
+        # Another run may have retried/deferred it since our candidate query.
+        if d.next_attempt_at is not None and d.next_attempt_at > now:
+            return
+        if d.created_at is not None and d.created_at < now - EXPIRE_AFTER:
+            d.status = "failed"
+            d.last_error = "expired"
+            d.next_attempt_at = None
+            counts["failed"] += 1
+            return
         recipient = session.get(AlertRecipient, d.recipient_id)
         rule = session.get(AlertRule, d.rule_id)
         cve = session.get(Cve, d.cve_id)
         sink = sinks.get(recipient.channel) if recipient is not None else None
-        if sink is None or recipient is None or rule is None or cve is None:
+        if (sink is None or recipient is None or rule is None or cve is None
+                or not rule.enabled):
             d.next_attempt_at = now + DEFER
             counts["deferred"] += 1
             return
@@ -138,7 +152,10 @@ def _send_one(session_factory, delivery_id: int, now: datetime, sinks: dict[str,
             return
         except Exception as exc:
             d.attempts += 1
-            d.last_error = _scrub(str(exc), recipient)[:ERROR_MAX]
+            if isinstance(exc, SinkError):
+                d.last_error = _scrub(str(exc), recipient)[:ERROR_MAX]
+            else:
+                d.last_error = type(exc).__name__[:ERROR_MAX]
             if d.attempts >= MAX_ATTEMPTS:
                 d.status = "failed"
                 d.next_attempt_at = None
@@ -154,15 +171,22 @@ def _send_one(session_factory, delivery_id: int, now: datetime, sinks: dict[str,
         counts["sent"] += 1
 
 
-def dispatch_once(session_factory, now: datetime, sinks: dict[str, Sink]) -> dict:
+def dispatch_once(session_factory, now: datetime, sinks: dict[str, Sink], *,
+                  monotonic=time.monotonic) -> dict:
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now must be timezone-aware")
     counts = {"events": 0, "deliveries_created": 0, "sent": 0, "failed": 0, "retry": 0, "deferred": 0}
-    while True:
-        with session_factory() as session:
-            n = _evaluate_batch(session, now, counts)
-        if n < EVENT_BATCH:
-            break
+    started = monotonic()
+    try:
+        while True:
+            with session_factory() as session:
+                n = _evaluate_batch(session, now, counts)
+            if n < EVENT_BATCH:
+                break
+    except Exception as exc:
+        # Message omitted: it could carry row data. The send stage still runs.
+        log.error("alert evaluate stage failed: %s\n%s", type(exc).__name__,
+                  "".join(traceback.format_tb(exc.__traceback__)))
     with session_factory() as session:
         ids = list(session.scalars(
             select(AlertDelivery.id)
@@ -171,5 +195,8 @@ def dispatch_once(session_factory, now: datetime, sinks: dict[str, Sink]) -> dic
             .order_by(AlertDelivery.id).limit(SEND_BATCH)
         ))
     for delivery_id in ids:
+        if monotonic() - started > SEND_DEADLINE_S:
+            log.warning("alert send deadline reached; remaining deliveries wait for the next run")
+            break
         _send_one(session_factory, delivery_id, now, sinks, counts)
     return counts

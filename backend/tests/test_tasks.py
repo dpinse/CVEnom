@@ -690,3 +690,31 @@ def test_purge_sessions_job_deletes_old_expired_and_revoked(db_session, factory)
 def test_purge_sessions_job_lock_held(factory):
     import cvenom.tasks as tasks
     assert tasks.purge_sessions_job(lock=FakeLock(held=True), session_factory=factory) == {"skipped": True}
+
+
+def test_purge_sessions_job_release_failure_swallowed(factory):
+    import cvenom.tasks as tasks
+
+    class BadRelease(FakeLock):
+        def release(self, name):
+            raise RuntimeError("redis down")
+
+    out = tasks.purge_sessions_job(lock=BadRelease(), session_factory=factory,
+                                   now=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    assert out["ok"] is True
+
+
+def test_alerts_dispatch_job_failure_logs_type_and_frames_not_message(caplog):
+    import cvenom.tasks as tasks
+
+    @contextmanager
+    def bad():
+        raise RuntimeError("topsecret-message")
+        yield
+
+    with caplog.at_level("ERROR", logger="cvenom.tasks"):
+        # evaluate-stage errors are absorbed; force a hard failure via sinks lookup
+        out = tasks.alerts_dispatch_job(lock=FakeLock(), session_factory=bad,
+                                        sinks=None, now=datetime(2026, 6, 1))  # naive now -> ValueError
+    assert out == {"ok": False}
+    assert "ValueError" in caplog.text and "File" in caplog.text
