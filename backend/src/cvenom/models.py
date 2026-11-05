@@ -150,8 +150,15 @@ class Invite(Base):
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("app_user.id", ondelete="SET NULL")
     )
+    purpose: Mapped[str] = mapped_column(
+        String(16), default="invite", server_default="invite"
+    )  # 'invite' creates an account; 'reset' sets an existing user's password
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
     __table_args__ = (
+        CheckConstraint("purpose in ('invite','reset')", name="ck_invite_purpose"),
         CheckConstraint("role in ('admin','member')", name="ck_invite_role"),
         CheckConstraint("email = lower(email)", name="ck_invite_email_lower"),
     )

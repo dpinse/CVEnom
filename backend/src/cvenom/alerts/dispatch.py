@@ -127,6 +127,15 @@ def _scrub(text: str, recipient: AlertRecipient) -> str:
     return text
 
 
+def error_text(exc: Exception, recipient: AlertRecipient) -> str:
+    """The only error string ever stored or returned for a failed send: SinkError
+    messages are secret-free by contract and scrubbed again; anything else is
+    reduced to its type name (it could carry URLs, headers or credentials)."""
+    if isinstance(exc, SinkError):
+        return _scrub(str(exc), recipient)[:ERROR_MAX]
+    return type(exc).__name__[:ERROR_MAX]
+
+
 def _send_one(session_factory, delivery_id: int, now: datetime, sinks: dict[str, Sink], counts: dict) -> None:
     with session_factory() as session:
         d = session.scalars(
@@ -161,10 +170,7 @@ def _send_one(session_factory, delivery_id: int, now: datetime, sinks: dict[str,
             return
         except Exception as exc:
             d.attempts += 1
-            if isinstance(exc, SinkError):
-                d.last_error = _scrub(str(exc), recipient)[:ERROR_MAX]
-            else:
-                d.last_error = type(exc).__name__[:ERROR_MAX]
+            d.last_error = error_text(exc, recipient)
             if d.attempts >= MAX_ATTEMPTS:
                 d.status = "failed"
                 d.next_attempt_at = None

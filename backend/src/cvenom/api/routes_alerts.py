@@ -6,17 +6,22 @@ import secrets
 from typing import Annotated, Literal, NoReturn
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+import anyio
+import anyio.to_thread
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from cvenom import secretbox
+from cvenom.alerts.dispatch import error_text
 from cvenom.alerts.rules import RuleInvalid, validate_rule
+from cvenom.alerts.sinks import SinkNotConfigured
 from cvenom.alerts.webhook import DEFAULT_PORT, UnsafeWebhookURL, validate_url
-from cvenom.models import AlertRecipient, AlertRule, User
+from cvenom.models import AlertDelivery, AlertRecipient, AlertRule, Cve, User
 
 from .deps import SessionDep, require_admin, require_user
 from .ratelimit import rate_limit
@@ -24,6 +29,7 @@ from .ratelimit import rate_limit
 router = APIRouter(prefix="/api/alerts", dependencies=[Depends(rate_limit("api"))])
 
 MAX_RECIPIENTS = 20
+TEST_SEND_TIMEOUT_S = 45
 MAX_ID = 2**31 - 1
 Kind = Literal["kev_added", "cvss_min", "epss_min", "keyword"]
 Name = Annotated[str, StringConstraints(min_length=1, max_length=200)]
@@ -284,3 +290,113 @@ def delete_recipient(
     session.delete(row)
     session.flush()
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------- operations
+
+
+@router.get("/deliveries")
+def list_deliveries(
+    status: Literal["pending", "sent", "failed"] | None = None,
+    rule_id: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
+    page: Annotated[int, Query(ge=1, le=10000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+    user: User = Depends(require_user),
+    session: Session = SessionDep,
+) -> dict:
+    # Only the channel is joined from the recipient: never its email/URL/secret.
+    conds = []
+    if status is not None:
+        conds.append(AlertDelivery.status == status)
+    if rule_id is not None:
+        conds.append(AlertDelivery.rule_id == rule_id)
+    total = session.scalar(select(func.count()).select_from(AlertDelivery).where(*conds))
+    rows = session.execute(
+        select(AlertDelivery, AlertRecipient.channel)
+        .join(AlertRecipient, AlertRecipient.id == AlertDelivery.recipient_id)
+        .where(*conds)
+        .order_by(AlertDelivery.created_at.desc(), AlertDelivery.id.desc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    ).all()
+    return jsonable_encoder(
+        {
+            "items": [
+                {
+                    "id": d.id,
+                    "rule_id": d.rule_id,
+                    "recipient_id": d.recipient_id,
+                    "channel": channel,
+                    "cve_id": d.cve_id,
+                    "status": d.status,
+                    "attempts": d.attempts,
+                    "last_error": d.last_error,
+                    "created_at": d.created_at,
+                    "sent_at": d.sent_at,
+                    "next_attempt_at": d.next_attempt_at,
+                }
+                for d, channel in rows
+            ],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+        }
+    )
+
+
+def _load_for_test(session: Session, rule_id: int) -> tuple[AlertRule, list[AlertRecipient]]:
+    rule = _get_rule(session, rule_id)
+    recips = list(
+        session.scalars(
+            select(AlertRecipient)
+            .where(AlertRecipient.rule_id == rule.id)
+            .order_by(AlertRecipient.id)
+        )
+    )
+    # Detach: the send thread may outlive the request, so it must not touch the session.
+    for obj in (rule, *recips):
+        session.expunge(obj)
+    return rule, recips
+
+
+def _send_test(sinks: dict, rule: AlertRule, recips: list[AlertRecipient]) -> list[dict]:
+    """Runs in a worker thread. Transient objects only: nothing is persisted."""
+    cve = Cve(cve_id="CVE-0000-0000", summary="CVEnom test alert", cvss=None,
+              epss_percentile=None, kev=True, kev_source="test", affected=[])
+    out = []
+    for r in recips:
+        delivery = AlertDelivery(id=0, rule_id=rule.id, recipient_id=r.id,
+                                 cve_id=cve.cve_id, status="pending", attempts=0)
+        ok, error = True, None
+        sink = sinks.get(r.channel)
+        try:
+            if sink is None:
+                raise SinkNotConfigured("no sink")
+            sink.send(delivery, cve, rule, r)
+        except SinkNotConfigured:
+            ok, error = False, "not configured"
+        except Exception as exc:  # same string policy as the dispatcher
+            ok, error = False, error_text(exc, r)
+        out.append({"recipient_id": r.id, "channel": r.channel, "ok": ok, "error": error})
+    return out
+
+
+@router.post(
+    "/rules/{rule_id}/test",
+    dependencies=[Depends(rate_limit("alert-test", per_min="rate_alert_test_per_min"))],
+)
+async def test_send(
+    rule_id: int,
+    request: Request,
+    admin: User = Depends(require_admin),
+    session: Session = SessionDep,
+) -> list[dict]:
+    rule, recips = await run_in_threadpool(_load_for_test, session, rule_id)
+    sinks = request.app.state.sinks_factory()
+    try:
+        with anyio.fail_after(TEST_SEND_TIMEOUT_S):
+            return await anyio.to_thread.run_sync(
+                _send_test, sinks, rule, recips, abandon_on_cancel=True
+            )
+    except TimeoutError:
+        _error(504, "timeout")

@@ -172,3 +172,35 @@ def test_geo_migration_matches_model(scratch_url):
     assert "now()" in cols["first_seen"][2]
     assert cols["magnitude"][2].startswith("'1'")
     assert cols["details"][2].startswith("'{}'")
+
+
+def test_invite_purpose_migration(scratch_url):
+    from sqlalchemy.exc import IntegrityError
+
+    cfg = _cfg()
+    command.upgrade(cfg, "0003")
+    eng = create_engine(scratch_url)
+    with eng.begin() as c:
+        c.execute(text(
+            "insert into invite (email, role, token_hash, expires_at) "
+            "values ('old@example.com','member','h1', now())"))
+    command.upgrade(cfg, "0004")
+    with eng.begin() as c:
+        row = c.execute(text("select purpose, created_at is not null from invite")).one()
+        assert tuple(row) == ("invite", True)
+        c.execute(text(
+            "insert into invite (email, role, token_hash, expires_at, purpose) "
+            "values ('r@example.com','member','h2', now(), 'reset')"))
+    with pytest.raises(IntegrityError):
+        with eng.begin() as c:
+            c.execute(text(
+                "insert into invite (email, role, token_hash, expires_at, purpose) "
+                "values ('x@example.com','member','h3', now(), 'bogus')"))
+    command.downgrade(cfg, "0003")
+    with eng.connect() as c:
+        cols = {r[0] for r in c.execute(text(
+            "select column_name from information_schema.columns where table_name='invite'"))}
+        left = c.execute(text("select email from invite")).scalars().all()
+    eng.dispose()
+    assert "purpose" not in cols and "created_at" not in cols
+    assert left == ["old@example.com"]  # reset invites are dropped on downgrade

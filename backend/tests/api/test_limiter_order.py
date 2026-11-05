@@ -114,6 +114,42 @@ def test_every_api_route_rate_limits_before_auth(db_session):
     assert checked >= 20
 
 
+NEW_ROUTES = {
+    ("/api/auth/users", "GET"), ("/api/auth/users/{user_id}", "PATCH"),
+    ("/api/auth/users/{user_id}/sessions/revoke", "POST"),
+    ("/api/auth/users/{user_id}/reset", "POST"), ("/api/auth/password", "POST"),
+    ("/api/auth/invites", "GET"), ("/api/auth/invites/{invite_id}", "DELETE"),
+    ("/api/alerts/deliveries", "GET"), ("/api/alerts/rules/{rule_id}/test", "POST"),
+}
+
+
+def test_task15_routes_exist_and_limit_before_auth(db_session):
+    app = make_app(db_session, api_docs=False)
+    seen = set()
+    for path, methods, dependant in _http_routes(app):
+        for m in methods:
+            if (path, m) not in NEW_ROUTES:
+                continue
+            seen.add((path, m))
+            calls = _execution_order(dependant)
+            limiter_at = [i for i, c in enumerate(calls) if _is_limiter(c)]
+            auth_at = [i for i, c in enumerate(calls) if c in AUTH_DEPS]
+            assert limiter_at and auth_at and limiter_at[0] < auth_at[0], (path, m)
+    assert seen == NEW_ROUTES
+
+
+def test_alert_test_route_has_its_own_limiter_scope(db_session):
+    app = make_app(db_session, api_docs=False)
+    for path, methods, dependant in _http_routes(app):
+        if path == "/api/alerts/rules/{rule_id}/test":
+            scopes = [c.cvenom_rate_limit_scope for c in _execution_order(dependant)
+                      if _is_limiter(c)]
+            assert scopes == ["api", "alert-test"]
+            break
+    else:
+        pytest.fail("route missing")
+
+
 def test_login_handler_limits_before_any_db_work():
     src = inspect.getsource(routes_auth.login)
     assert src.index("enforce_login_limits") < src.index("run_in_threadpool(_login_sync")

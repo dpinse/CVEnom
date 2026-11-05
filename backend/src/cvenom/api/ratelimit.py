@@ -98,7 +98,9 @@ async def _check(request: Request, scope: str, ident: str, limit: int, window_s:
 COUNTED_KEY = "cvenom_rl_counted"
 
 
-def rate_limit(scope: str, identity: Literal["auto", "ip"] = "auto"):
+def rate_limit(
+    scope: str, identity: Literal["auto", "ip"] = "auto", *, per_min: str | None = None
+):
     """Dependency: valid user -> bucket u:{id} (authed limit); anonymous OR an
     invalid token -> bucket ip:{ip} (anon limit). Identity is resolved without
     raising, so bad-token floods are counted; the 401 is raised after counting
@@ -107,7 +109,10 @@ def rate_limit(scope: str, identity: Literal["auto", "ip"] = "auto"):
     request's IP bucket, an anonymous request is not counted a second time.
 
     identity="ip": never inspects Authorization (a stale bearer must not break
-    endpoints like refresh), always keys ip:{client_ip}, never raises 401."""
+    endpoints like refresh), always keys ip:{client_ip}, never raises 401.
+
+    per_min: name of a Settings attribute that replaces BOTH the authed and
+    anonymous per-minute limits for this scope (e.g. a stricter dedicated bucket)."""
 
     if identity == "ip":
 
@@ -129,13 +134,14 @@ def rate_limit(scope: str, identity: Literal["auto", "ip"] = "auto"):
     ) -> None:
         user, failed = resolved
         settings = request.app.state.settings
+        authed = anon = getattr(settings, per_min) if per_min else None
         if user is not None:
-            await _check(request, scope, f"u:{user.id}", settings.rate_authed_per_min, 60)
+            limit = authed if authed is not None else settings.rate_authed_per_min
+            await _check(request, scope, f"u:{user.id}", limit, 60)
             return
         if request.scope.get(COUNTED_KEY) != scope:
-            await _check(
-                request, scope, f"ip:{client_ip(request)}", settings.rate_anon_per_min, 60
-            )
+            limit = anon if anon is not None else settings.rate_anon_per_min
+            await _check(request, scope, f"ip:{client_ip(request)}", limit, 60)
         if failed:
             raise HTTPException(
                 status_code=401,

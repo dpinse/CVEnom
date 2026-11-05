@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
 from cvenom import secretbox
+from cvenom.alerts.sinks import build_sinks
 from cvenom.config import Settings, get_settings
 from cvenom.db import session_scope
 
@@ -22,6 +23,7 @@ from .routes_alerts import router as alerts_router
 from .routes_auth import router as auth_router
 from .routes_read import CACHE_PATHS
 from .routes_read import router as read_router
+from .routes_users import router as users_router
 from .routes_ws import router as ws_router
 
 log = logging.getLogger(__name__)
@@ -91,6 +93,7 @@ def create_app(
     app.state.redis = redis  # None: created lazily on first use (ratelimit.get_redis)
     app.state.redis_owned = False
     app.state.session_factory = session_factory or session_scope
+    app.state.sinks_factory = build_sinks  # tests inject fakes (test-send)
 
     app.add_exception_handler(StarletteHTTPException, _http_exception)
     app.add_exception_handler(RequestValidationError, _validation_error)
@@ -115,6 +118,7 @@ def create_app(
     app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(auth_router)
+    app.include_router(users_router)
     app.include_router(alerts_router)
     app.include_router(read_router)
     app.include_router(ws_router)
