@@ -258,3 +258,57 @@ def test_exact_boundaries_consistent_between_sql_and_scoring(db_session):
     assert [v.cve_id for v in views[Lane.LIKELY]] == ["CVE-2026-9302"]
     loud = views[Lane.LOUD]
     assert [v.cve_id for v in loud] == ["CVE-2026-9303"] and loud[0].recent_story_count == 1
+
+
+# --- KEV overlap across CISA and VulnCheck (#1) ---
+
+from datetime import date as _date
+
+
+def _kev_result(cve_id, source, added):
+    return CollectorResult(
+        cves=[NormalizedCve(cve_id=cve_id, kev=True, kev_source=source, kev_added=added)],
+        events=[{"type": "kev_added", "cve_id": cve_id, "source": source}],
+    )
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        (("cisa", _date(2026, 11, 3)), ("vulncheck", _date(2026, 11, 1))),
+        (("vulncheck", _date(2026, 11, 1)), ("cisa", _date(2026, 11, 3))),
+    ],
+    ids=["cisa_then_vulncheck", "vulncheck_then_cisa"],
+)
+def test_kev_overlap_one_event_stable_source_earliest_date(db_session, first, second):
+    cid = "CVE-2026-7001"
+    events = []
+    # Two full hourly cycles of both feeds: no flip-flopping, no duplicate events.
+    for _ in range(2):
+        events += ingest(db_session, _kev_result(cid, *first))
+        events += ingest(db_session, _kev_result(cid, *second))
+    assert [e["cve_id"] for e in events] == [cid]
+    assert events[0]["source"] == first[0]
+    row = db_session.get(Cve, cid)
+    assert row.kev_source == "cisa"
+    assert row.kev_added == _date(2026, 11, 1)
+
+
+def test_reingest_already_kev_cve_emits_nothing(db_session):
+    _insert_cve(db_session, "CVE-2026-7002", kev=True, kev_source="cisa")
+    res = _kev_result("CVE-2026-7002", "cisa", _date(2026, 11, 3))
+    assert ingest(db_session, res) == []
+
+
+def test_kev_event_for_new_cve_passes_and_other_events_untouched(db_session):
+    _insert_cve(db_session, "CVE-2026-7003", kev=False)  # known, but not yet KEV
+    res = CollectorResult(
+        cves=[NormalizedCve(cve_id="CVE-2026-7003", kev=True, kev_source="cisa")],
+        events=[
+            {"type": "kev_added", "cve_id": "CVE-2026-7003", "source": "cisa"},
+            {"type": "other", "cve_id": "CVE-2026-7003"},
+        ],
+    )
+    assert ingest(db_session, res) == res.events
+    # Second time around the CVE is KEV in the DB: kev_added dropped, other kept.
+    assert ingest(db_session, res) == [{"type": "other", "cve_id": "CVE-2026-7003"}]

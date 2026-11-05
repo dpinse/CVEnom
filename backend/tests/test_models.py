@@ -41,3 +41,33 @@ def test_null_and_blank_fields_do_not_clobber(db_session):
     upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0004", cvss=7.5, summary="orig"))
     row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0004", cvss=None, summary=""))
     assert row.cvss == 7.5 and row.summary == "orig"
+
+
+def test_kev_added_keeps_earliest_date(db_session):
+    from datetime import date
+    from cvenom.db import upsert_cve
+    from cvenom.schemas import NormalizedCve
+    cid = "CVE-2026-0005"
+    upsert_cve(db_session, NormalizedCve(cve_id=cid, kev=True, kev_added=date(2026, 11, 3)))
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, kev=True, kev_added=date(2026, 11, 1)))
+    assert row.kev_added == date(2026, 11, 1)
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, kev=True, kev_added=date(2026, 11, 4)))
+    assert row.kev_added == date(2026, 11, 1)
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, kev=True, kev_added=None))
+    assert row.kev_added == date(2026, 11, 1)
+
+
+def test_kev_source_cisa_is_sticky(db_session):
+    from cvenom.db import upsert_cve
+    from cvenom.schemas import NormalizedCve
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0006", kev=True, kev_source="cisa"))
+    row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0006", kev=True, kev_source="vulncheck"))
+    assert row.kev_source == "cisa"
+
+
+def test_kev_source_cisa_overwrites_vulncheck(db_session):
+    from cvenom.db import upsert_cve
+    from cvenom.schemas import NormalizedCve
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0007", kev=True, kev_source="vulncheck"))
+    row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0007", kev=True, kev_source="cisa"))
+    assert row.kev_source == "cisa"

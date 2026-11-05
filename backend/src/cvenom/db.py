@@ -26,17 +26,19 @@ def session_scope() -> Iterator[Session]:
 
 
 # Fields overwritten only when the incoming value is not None.
-_MERGE_FIELDS = (
-    "published", "cvss", "epss", "epss_percentile", "kev_added", "kev_source",
-    "patch_available", "summary",
-)
+_MERGE_FIELDS = ("published", "cvss", "epss", "epss_percentile", "summary")
+
+# kev_source with precedence: an incoming non-CISA source never replaces CISA.
+_KEV_SOURCE_CISA = "cisa"
 
 
 def upsert_cve(session: Session, data: NormalizedCve) -> Cve:
     """Insert or merge a CVE by id.
 
-    Only non-null incoming fields overwrite; kev and poc_badge are sticky
-    (never True to False); affected is unioned, preserving order.
+    Only non-null incoming fields overwrite; kev, poc_badge and patch_available
+    are sticky (never True to False); kev_added keeps the EARLIEST date seen;
+    kev_source "cisa" is never replaced by another source; affected is
+    unioned, preserving order.
     """
     row = session.get(Cve, data.cve_id)
     if row is None:
@@ -46,6 +48,14 @@ def upsert_cve(session: Session, data: NormalizedCve) -> Cve:
         value = getattr(data, field)
         if value is not None and value != "":
             setattr(row, field, value)
+    if data.kev_added is not None:
+        row.kev_added = data.kev_added if row.kev_added is None else min(row.kev_added, data.kev_added)
+    if data.kev_source and not (
+        row.kev_source == _KEV_SOURCE_CISA and data.kev_source != _KEV_SOURCE_CISA
+    ):
+        row.kev_source = data.kev_source
+    if data.patch_available is not None:
+        row.patch_available = data.patch_available
     row.kev = bool(row.kev) or data.kev
     row.poc_badge = bool(row.poc_badge) or data.poc_badge
     existing = list(row.affected or [])

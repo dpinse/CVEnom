@@ -3,7 +3,7 @@
 ``ingest`` does not commit: it flushes and the caller owns the transaction.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, exists, func, or_, select
@@ -62,11 +62,46 @@ def _ingest_story(session: Session, story: NormalizedStory) -> None:
     link_story(session, row, cve_ids)
 
 
-def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = False) -> list[dict]:
-    """Persist a collector result. Returns ``result.events`` unchanged.
+_ID_CHUNK = 1000
 
-    enrich_only skips unknown CVEs and all stories (so nothing can stub-create CVEs).
+
+def _select_ids(session: Session, ids: Iterable[str], *conditions) -> set[str]:
+    """Return the subset of ``ids`` present in ``cve`` (and matching ``conditions``).
+
+    Chunked ``IN`` lists keep the statement count O(len(ids) / _ID_CHUNK).
     """
+    unique = list(dict.fromkeys(ids))
+    found: set[str] = set()
+    for i in range(0, len(unique), _ID_CHUNK):
+        chunk = unique[i : i + _ID_CHUNK]
+        found.update(session.scalars(select(Cve.cve_id).where(Cve.cve_id.in_(chunk), *conditions)))
+    return found
+
+
+def _drop_known_kev_events(session: Session, events: list[dict]) -> list[dict]:
+    """Drop ``kev_added`` events for CVEs that are ALREADY kev=True in the DB.
+
+    The sticky DB kev flag acts as a second seen-set: a CVE listed by both CISA
+    and VulnCheck (or re-emitted after lost/corrupt collector state) alerts once.
+    Must run before the result's CVEs are upserted.
+    """
+    kev_ids = [e.get("cve_id") for e in events if e.get("type") == "kev_added"]
+    if not kev_ids:
+        return events
+    already = _select_ids(session, kev_ids, Cve.kev.is_(True))
+    return [
+        e for e in events if not (e.get("type") == "kev_added" and e.get("cve_id") in already)
+    ]
+
+
+def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = False) -> list[dict]:
+    """Persist a collector result and return its events.
+
+    ``kev_added`` events for CVEs already KEV in the DB are dropped; all other
+    events pass through unchanged. enrich_only skips unknown CVEs and all
+    stories (so nothing can stub-create CVEs).
+    """
+    events = _drop_known_kev_events(session, result.events)
     for cve in result.cves:
         if enrich_only and session.get(Cve, cve.cve_id) is None:
             continue
@@ -81,7 +116,7 @@ def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = Fal
             _retry_unique(session, lambda story=story: _ingest_story(session, story))
 
     session.flush()
-    return result.events
+    return events
 
 
 def lane_views(session: Session, now: datetime) -> dict[Lane, list[CveView]]:
