@@ -6,6 +6,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -32,6 +33,10 @@ class CollectorResult:
 class Collector(ABC):
     name: str
     cadence_seconds: int
+
+    def __init__(self, since: datetime | None = None, state: dict | None = None) -> None:
+        self.since = since
+        self.state = dict(state or {})
 
     @abstractmethod
     async def fetch(self) -> Any: ...

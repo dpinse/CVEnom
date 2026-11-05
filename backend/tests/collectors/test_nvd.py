@@ -144,3 +144,14 @@ async def test_default_since_uses_backfill_days(page, settings):
 def test_registered():
     assert base.REGISTRY["nvd"] is NvdCollector
     assert NvdCollector.cadence_seconds == 7200
+
+
+@respx.mock
+async def test_fetch_honors_self_since(page, settings):
+    route = respx.get(NVD_URL).respond(json=page)
+    since = datetime.now(UTC) - timedelta(days=2)
+    await NvdCollector(since=since).fetch()
+    p = route.calls[0].request.url.params
+    start = datetime.strptime(p["lastModStartDate"], FMT)
+    end = datetime.strptime(p["lastModEndDate"], FMT)
+    assert timedelta(days=1, hours=23) < end - start < timedelta(days=2, minutes=1)

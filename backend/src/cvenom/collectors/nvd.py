@@ -64,6 +64,8 @@ class NvdCollector(Collector):
         settings = get_settings()
         end = datetime.now(UTC)
         if since is None:
+            since = self.since
+        if since is None:
             since = end - timedelta(days=settings.backfill_days)
         elif since.tzinfo is None:
             since = since.replace(tzinfo=UTC)
