@@ -36,3 +36,20 @@ def db_session(test_engine):
         session.close()
         trans.rollback()
         conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_key_cache():
+    from cvenom.auth import tokens
+
+    tokens.reset_key_cache()
+    yield
+    tokens.reset_key_cache()
+
+
+@pytest.fixture(autouse=True)
+def _no_live_publish(monkeypatch):
+    """run_collector must never reach a real Redis from the test suite."""
+    import cvenom.tasks
+
+    monkeypatch.setattr(cvenom.tasks, "_publish_live", lambda what: None)

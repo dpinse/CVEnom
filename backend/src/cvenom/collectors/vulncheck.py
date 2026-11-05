@@ -39,7 +39,7 @@ class VulnCheckCollector(Collector):
         return await super().run()
 
     async def fetch(self) -> list[dict]:
-        token = get_settings().vulncheck_api_token
+        token = get_settings().vulncheck_api_token.get_secret_value()
         headers = {"Authorization": f"Bearer {token}"}
         pages: list[dict] = []
         page_no = 1

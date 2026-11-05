@@ -87,3 +87,51 @@ def test_patch_available_is_sticky_true(db_session):
     assert row.patch_available is True  # never True -> False
     row = upsert_cve(db_session, NormalizedCve(cve_id=cid, patch_available=None))
     assert row.patch_available is True
+
+
+def _run_import(env_overrides, drop, tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    env.update(env_overrides)
+    code = (
+        "import cvenom.db as d; "
+        "assert d.get_engine.cache_info().currsize == 0; "
+        "assert d.get_sessionmaker.cache_info().currsize == 0"
+    )
+    return subprocess.run([sys.executable, "-c", code], env=env, cwd=tmp_path, capture_output=True, text=True)
+
+
+def test_import_db_without_env_does_not_create_engine(tmp_path):
+    r = _run_import({}, {"DATABASE_URL", "REDIS_URL"}, tmp_path)
+    assert r.returncode == 0, r.stderr
+
+
+def test_import_db_with_unreachable_url_does_not_connect(tmp_path):
+    r = _run_import({"DATABASE_URL": "postgresql+psycopg://x@256.256.256.256:1/x"}, set(), tmp_path)
+    assert r.returncode == 0, r.stderr
+
+
+def test_dev_compose_ports_are_loopback_only():
+    from pathlib import Path
+
+    import yaml
+
+    compose = yaml.safe_load((Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text())
+    for name in ("postgres", "redis"):
+        ports = compose["services"][name]["ports"]
+        assert ports and all(str(p).startswith("127.0.0.1:") for p in ports), (name, ports)
+
+
+def test_engine_hides_bound_parameters(monkeypatch):
+    # M-g: SQLAlchemy error messages must not echo bound values (emails, hashes).
+    from cvenom import db
+
+    db.get_engine.cache_clear()
+    try:
+        engine = db.get_engine()
+        assert engine.hide_parameters is True
+    finally:
+        db.get_engine.cache_clear()

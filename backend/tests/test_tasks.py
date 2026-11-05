@@ -32,7 +32,8 @@ def test_beat_schedule_has_entry_per_collector_and_maintenance():
     assert purge["task"] == purge_geo_task.name
     assert isinstance(purge["schedule"], crontab)
     assert purge["schedule"] == crontab(minute=23)
-    assert set(beat_schedule) == collect | {"maintenance-geoip", "maintenance-purge-geo"}
+    assert set(beat_schedule) == collect | {"maintenance-geoip", "maintenance-purge-geo",
+                                            "alerts-dispatch", "maintenance-purge-sessions"}
 
 
 def test_maintenance_tasks_registered_on_celery_app():
@@ -576,3 +577,351 @@ def test_worker_ready_handler_swallows_errors(monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="cvenom.tasks"):
         tasks.bootstrap_geoip()
     assert "geoip bootstrap" in caplog.text
+
+
+def test_worker_process_init_disposes_engine_without_closing(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from celery.signals import worker_process_init
+
+    from cvenom import tasks
+
+    engine = MagicMock()
+    monkeypatch.setattr(tasks, "get_engine", lambda: engine)
+    assert tasks.reset_db_engine_after_fork in list(worker_process_init._live_receivers(None))
+    tasks.reset_db_engine_after_fork()
+    engine.dispose.assert_called_once_with(close=False)
+
+
+def test_worker_process_init_handler_never_raises(monkeypatch):
+    from cvenom import tasks
+
+    def boom():
+        raise RuntimeError("no db")
+
+    monkeypatch.setattr(tasks, "get_engine", boom)
+    tasks.reset_db_engine_after_fork()
+
+
+def test_alerts_dispatch_and_purge_sessions_scheduled():
+    from celery.schedules import crontab
+    from cvenom.tasks import alerts_dispatch_task, beat_schedule, celery_app, purge_sessions_task
+    assert beat_schedule["alerts-dispatch"] == {"task": alerts_dispatch_task.name, "schedule": 60.0,
+                                                "options": {"expires": 55}}
+    assert beat_schedule["maintenance-purge-sessions"]["schedule"] == crontab(minute=41, hour=3)
+    assert beat_schedule["maintenance-purge-sessions"]["task"] == purge_sessions_task.name
+    assert alerts_dispatch_task.name in celery_app.tasks and purge_sessions_task.name in celery_app.tasks
+
+
+def test_alerts_dispatch_job_runs_with_lock(db_session, factory):
+    import cvenom.tasks as tasks
+    lock = FakeLock()
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    out = tasks.alerts_dispatch_job(lock=lock, session_factory=factory, sinks={}, now=now)
+    assert out["ok"] is True and out["events"] == 0
+    assert lock.acquired == [("alerts-dispatch", 120)]
+    assert lock.released == ["alerts-dispatch"]
+
+
+def test_alerts_dispatch_job_lock_held(factory):
+    import cvenom.tasks as tasks
+    lock = FakeLock(held=True)
+    assert tasks.alerts_dispatch_job(lock=lock, session_factory=factory) == {"skipped": True}
+    assert lock.released == []
+
+
+def test_alerts_dispatch_job_never_raises():
+    import cvenom.tasks as tasks
+
+    @contextmanager
+    def bad():
+        raise RuntimeError("db down")
+        yield
+
+    lock = FakeLock()
+    assert tasks.alerts_dispatch_job(lock=lock, session_factory=bad, sinks={}) == {"ok": False}
+    assert lock.released == ["alerts-dispatch"]
+
+
+def test_alerts_dispatch_job_defaults_to_build_sinks(factory, monkeypatch):
+    import cvenom.tasks as tasks
+    called = []
+    monkeypatch.setattr(tasks, "build_sinks", lambda: called.append(1) or {})
+    tasks.alerts_dispatch_job(lock=FakeLock(), session_factory=factory)
+    assert called == [1]
+
+
+def test_purge_sessions_job_deletes_old_expired_and_revoked(db_session, factory):
+    import uuid
+    import cvenom.tasks as tasks
+    from sqlalchemy import select
+    from cvenom.models import User, UserSession, UserSessionUsedRefresh
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    u = User(email="p@x.io", password_hash="h", role="member")
+    db_session.add(u)
+    db_session.flush()
+
+    def mk(name, expires, revoked=None):
+        s = UserSession(id=uuid.uuid4(), user_id=u.id, refresh_hash=name * 64, expires_at=expires,
+                        revoked_at=revoked)
+        db_session.add(s)
+        return s
+
+    old = now - timedelta(days=8)
+    recent = now - timedelta(days=2)
+    future = now + timedelta(days=5)
+    s_old_exp = mk("a", old)
+    mk("b", future, revoked=old)          # old revoked
+    mk("c", recent)                       # recently expired: kept
+    mk("d", future, revoked=recent)       # recently revoked: kept
+    mk("e", future)                       # live: kept
+    db_session.flush()
+    db_session.add(UserSessionUsedRefresh(hash="z" * 64, session_id=s_old_exp.id))
+    db_session.flush()
+    lock = FakeLock()
+    out = tasks.purge_sessions_job(lock=lock, session_factory=factory, now=now)
+    assert out == {"ok": True, "sessions": 2, "invites": 0, "signing_keys": 0,
+                   "alert_deliveries": 0, "alert_events": 0}
+    db_session.expire_all()
+    assert {s.refresh_hash[0] for s in db_session.scalars(select(UserSession))} == {"c", "d", "e"}
+    assert db_session.scalars(select(UserSessionUsedRefresh)).all() == []
+    assert lock.acquired == [("maintenance-purge-sessions", 3600)]
+    assert lock.released == ["maintenance-purge-sessions"]
+
+
+def test_purge_sessions_job_lock_held(factory):
+    import cvenom.tasks as tasks
+    assert tasks.purge_sessions_job(lock=FakeLock(held=True), session_factory=factory) == {"skipped": True}
+
+
+def test_purge_sessions_job_release_failure_swallowed(factory):
+    import cvenom.tasks as tasks
+
+    class BadRelease(FakeLock):
+        def release(self, name):
+            raise RuntimeError("redis down")
+
+    out = tasks.purge_sessions_job(lock=BadRelease(), session_factory=factory,
+                                   now=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    assert out["ok"] is True
+
+
+def test_alerts_dispatch_job_failure_logs_type_and_frames_not_message(caplog):
+    import cvenom.tasks as tasks
+
+    @contextmanager
+    def bad():
+        raise RuntimeError("topsecret-message")
+        yield
+
+    with caplog.at_level("ERROR", logger="cvenom.tasks"):
+        # evaluate-stage errors are absorbed; force a hard failure via sinks lookup
+        out = tasks.alerts_dispatch_job(lock=FakeLock(), session_factory=bad,
+                                        sinks=None, now=datetime(2026, 6, 1))  # naive now -> ValueError
+    assert out == {"ok": False}
+    assert "ValueError" in caplog.text and "File" in caplog.text
+
+
+def test_run_collector_publishes_after_commit(db_session, factory, fake_registry):
+    from cvenom.tasks import run_collector
+    fake_registry(make_fake())
+    seen = []
+
+    def pub(what):
+        # runs after the session block exited: the row is already written
+        seen.append((what, db_session.get(Cve, "CVE-2099-0001") is not None))
+
+    out = run_collector("fake_t", session_factory=factory, lock=FakeLock(), publisher=pub)
+    assert out["published"] is True and seen == [(["lanes"], True)]
+
+
+def test_run_collector_publish_failure_does_not_fail_run(db_session, factory, fake_registry, caplog):
+    from cvenom.tasks import run_collector
+    fake_registry(make_fake())
+
+    def pub(what):
+        raise ConnectionError("redis://user:secret@host")
+
+    out = run_collector("fake_t", session_factory=factory, lock=FakeLock(), publisher=pub)
+    assert out["ok"] is True and out["published"] is False and out["cves"] == 1
+    assert "secret" not in caplog.text and "ConnectionError" in caplog.text
+
+
+def test_run_collector_no_publish_on_failure_or_skip(db_session, factory, fake_registry):
+    from cvenom.tasks import run_collector
+    fake_registry(make_fake(fail=True))
+    calls = []
+    out = run_collector("fake_t", session_factory=factory, lock=FakeLock(), publisher=calls.append)
+    assert out["ok"] is False and out["published"] is False and calls == []
+
+
+def test_default_publisher_reaches_channel(db_session, factory, fake_registry, monkeypatch):
+    import json
+
+    import fakeredis
+
+    import cvenom.tasks as tasks
+    from cvenom import live
+
+    monkeypatch.undo()  # drop the autouse no-op so the real _publish_live runs
+    r = fakeredis.FakeRedis()
+    monkeypatch.setattr(tasks, "_default_redis_client", lambda: r)
+    sub = r.pubsub()
+    sub.subscribe(live.CHANNEL)
+    sub.get_message(timeout=1)
+    fake_registry(make_fake())
+    out = tasks.run_collector("fake_t", session_factory=factory, lock=FakeLock())
+    assert out["published"] is True
+    msg = sub.get_message(timeout=1)
+    assert json.loads(msg["data"])["what"] == ["lanes"]
+
+
+def test_worker_ready_checks_secrets_key_and_only_logs(monkeypatch, caplog):
+    import cvenom.tasks as tasks
+    from cvenom.config import get_settings
+
+    monkeypatch.setattr(tasks.refresh_geoip_task, "delay", lambda: None)
+    monkeypatch.delenv("SECRETS_KEY", raising=False)
+    get_settings.cache_clear()
+    try:
+        with caplog.at_level("ERROR", logger="cvenom.tasks"):
+            from celery.signals import worker_ready
+
+            worker_ready.send(sender=None)  # must not raise
+    finally:
+        get_settings.cache_clear()
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any("SECRETS_KEY" in m and "SecretsKeyMissing" in m for m in errors)
+
+
+# ------------------------------------------------------- M-j: retention
+
+
+PURGE_NOW = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+
+def _purge(factory):
+    import cvenom.tasks as tasks
+
+    return tasks.purge_sessions_job(lock=FakeLock(), session_factory=factory, now=PURGE_NOW)
+
+
+def test_purge_invites(db_session, factory):
+    from sqlalchemy import select
+    from cvenom.models import Invite
+
+    def mk(tag, expires, used=None):
+        db_session.add(Invite(email=f"{tag}@x.io", role="member", token_hash=tag * 64,
+                              expires_at=expires, used_at=used))
+
+    d = lambda n: PURGE_NOW - timedelta(days=n)  # noqa: E731
+    mk("a", d(8))                                  # expired > 7d: deleted
+    mk("b", d(6))                                  # expired < 7d: kept
+    mk("c", PURGE_NOW + timedelta(days=1))         # live: kept
+    mk("d", PURGE_NOW + timedelta(days=1), d(31))  # used > 30d: deleted
+    mk("e", PURGE_NOW + timedelta(days=1), d(29))  # used < 30d: kept
+    db_session.flush()
+    out = _purge(factory)
+    assert out["invites"] == 2
+    db_session.expire_all()
+    assert {i.email[0] for i in db_session.scalars(select(Invite))} == {"b", "c", "e"}
+
+
+def test_purge_signing_keys_past_grace(db_session, factory):
+    from sqlalchemy import select
+    from cvenom.config import get_settings
+    from cvenom.models import SigningKey
+
+    grace = timedelta(minutes=get_settings().access_ttl_minutes) + timedelta(hours=1)
+    cutoff = PURGE_NOW - grace - timedelta(days=1)
+
+    def mk(kid, retired):
+        db_session.add(SigningKey(kid=kid, private_enc="v1:x", public_pem="p",
+                                  created_at=PURGE_NOW - timedelta(days=30), retired_at=retired))
+
+    mk("old", cutoff - timedelta(minutes=1))     # deleted
+    mk("recent", cutoff + timedelta(minutes=1))  # kept (still near its grace window)
+    mk("active", None)                           # never deleted
+    db_session.flush()
+    out = _purge(factory)
+    assert out["signing_keys"] == 1
+    db_session.expire_all()
+    assert {k.kid for k in db_session.scalars(select(SigningKey))} == {"recent", "active"}
+
+
+def _alert_fixture(db_session):
+    from cvenom.models import AlertRecipient, AlertRule
+
+    rule = AlertRule(name="r", kind="kev_added")
+    db_session.add(rule)
+    db_session.flush()
+    rec = AlertRecipient(rule_id=rule.id, channel="email", email="a@x.io")
+    db_session.add(rec)
+    db_session.flush()
+    return rule, rec
+
+
+def test_purge_alert_events(db_session, factory):
+    from sqlalchemy import select
+    from cvenom.models import AlertDelivery, AlertEvent
+
+    rule, rec = _alert_fixture(db_session)
+    d = lambda n: PURGE_NOW - timedelta(days=n)  # noqa: E731
+
+    def ev(tag, processed):
+        e = AlertEvent(type="kev_added", cve_id=f"CVE-2099-{tag}", source=tag, processed_at=processed)
+        db_session.add(e)
+        db_session.flush()
+        return e
+
+    ev("0001", d(31))                       # old, no deliveries: deleted
+    ev("0002", d(29))                       # recent: kept
+    ev("0003", None)                        # unprocessed: kept
+    pend = ev("0004", d(31))                # old but a pending delivery: kept
+    sent = ev("0005", d(31))                # old, a recent sent delivery: kept (FK cascades)
+    db_session.add_all([
+        AlertDelivery(event_id=pend.id, rule_id=rule.id, recipient_id=rec.id, cve_id="CVE-2099-0004",
+                      status="pending", created_at=d(31)),
+        AlertDelivery(event_id=sent.id, rule_id=rule.id, recipient_id=rec.id, cve_id="CVE-2099-0005",
+                      status="sent", created_at=d(31)),
+    ])
+    db_session.flush()
+    out = _purge(factory)
+    assert out["alert_events"] == 1
+    db_session.expire_all()
+    assert {e.source for e in db_session.scalars(select(AlertEvent))} == {"0002", "0003", "0004", "0005"}
+    assert len(db_session.scalars(select(AlertDelivery)).all()) == 2
+
+
+def test_purge_alert_deliveries(db_session, factory):
+    from sqlalchemy import select
+    from cvenom.models import AlertDelivery, AlertEvent
+
+    rule, rec = _alert_fixture(db_session)
+    d = lambda n: PURGE_NOW - timedelta(days=n)  # noqa: E731
+    e = AlertEvent(type="kev_added", cve_id="CVE-2099-0001", source="s", processed_at=d(1))
+    db_session.add(e)
+    db_session.flush()
+    rows = {
+        "sent-old": ("sent", d(91)),        # deleted
+        "failed-old": ("failed", d(91)),    # deleted
+        "pending-old": ("pending", d(91)),  # kept: never purge pending
+        "sent-new": ("sent", d(89)),        # kept
+    }
+    for i, (tag, (status, created)) in enumerate(rows.items()):
+        db_session.add(AlertDelivery(event_id=e.id, rule_id=rule.id, recipient_id=rec.id,
+                                     cve_id=f"CVE-2099-{i:04d}", status=status, created_at=created,
+                                     last_error=tag))
+    db_session.flush()
+    out = _purge(factory)
+    assert out["alert_deliveries"] == 2
+    db_session.expire_all()
+    assert {x.last_error for x in db_session.scalars(select(AlertDelivery))} == {"pending-old", "sent-new"}
+    assert db_session.get(AlertEvent, e.id) is not None
+
+
+def test_alerts_dispatch_messages_expire():
+    # M-f: a backlog of 60 s dispatch messages (worker down) must not pile up.
+    from cvenom.tasks import beat_schedule
+
+    assert beat_schedule["alerts-dispatch"]["options"] == {"expires": 55}

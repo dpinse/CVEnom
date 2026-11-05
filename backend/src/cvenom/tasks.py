@@ -6,6 +6,7 @@ import asyncio
 import logging
 import threading
 import time
+import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,16 +15,21 @@ from typing import Any, Protocol
 import httpx
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_ready
-from sqlalchemy import func, select
+from celery.signals import worker_process_init, worker_ready
+from sqlalchemy import delete, exists, func, or_, select
 
 from cvenom.collectors import abusech, cfradar, dshield, epss, kev, news, nvd, osv, ransomware, vulncheck  # noqa: F401  (register)
 from cvenom.collectors.base import REGISTRY
 from cvenom.config import get_settings
-from cvenom.db import session_scope
-from cvenom.models import CollectorRun, Cve
+from cvenom.db import get_engine, session_scope
+from cvenom import live, secretbox
+from cvenom.alerts.dispatch import dispatch_once
+from cvenom.alerts.sinks import build_sinks
+from cvenom.models import (
+    AlertDelivery, AlertEvent, CollectorRun, Cve, Invite, SigningKey, UserSession,
+)
 from cvenom.geoip import ASN_FILE, COUNTRY_FILE, refresh_geoip
-from cvenom.pipeline import ingest, purge_old_geo_events
+from cvenom.pipeline import ingest, persist_events, purge_old_geo_events
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +74,8 @@ def _default_redis_client() -> Any:
             if _redis_client is None:
                 import redis
 
-                _redis_client = redis.Redis.from_url(get_settings().redis_url)
+                _redis_client = redis.Redis.from_url(
+                    get_settings().redis_url, socket_timeout=5, socket_connect_timeout=5)
     return _redis_client
 
 
@@ -91,10 +98,16 @@ class RedisLock:
         self.client.eval(_RELEASE_LUA, 1, LOCK_PREFIX + name, self._token)
 
 
-def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLock | None = None) -> dict:
+def _publish_live(what: list[str]) -> None:
+    live.publish(_default_redis_client(), what)
+
+
+def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLock | None = None,
+                  publisher=None) -> dict:
     cls = REGISTRY[name]
     lock = lock if lock is not None else RedisLock()
-    summary = {"collector": name, "ok": False, "cves": 0, "stories": 0, "events": [], "skipped": False}
+    summary = {"collector": name, "ok": False, "cves": 0, "stories": 0, "events": [], "events_persisted": 0, "skipped": False,
+               "published": False}
     # The Redis lock is the cheap skip; the row lock (FOR UPDATE) below is the
     # correctness guarantee. TTL is 2x cadence so a slow run rarely outlives it.
     if not lock.acquire(name, 2 * cls.cadence_seconds):
@@ -124,9 +137,19 @@ def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLo
                     session.expunge(row)
                 return summary
             events = ingest(session, result, enrich_only=enrich_only)
+            # Outbox: same transaction as the data and the seen-state.
+            persisted = persist_events(session, events, source_default=name)
             row.last_run = started_at
             row.state = collector.state
-        summary.update(ok=True, cves=len(result.cves), stories=len(result.stories), events=events)
+        summary.update(ok=True, cves=len(result.cves), stories=len(result.stories), events=events,
+                       events_persisted=persisted)
+        what = live.what_changed(result)
+        if what:  # after commit; best effort, never changes the result
+            try:
+                (publisher or _publish_live)(what)
+                summary["published"] = True
+            except Exception as exc:
+                log.warning("live publish failed: %s", type(exc).__name__)
         return summary
     finally:
         lock.release(name)
@@ -209,9 +232,117 @@ def bootstrap_geoip(*args: Any, **kwargs: Any) -> None:
         log.warning("geoip bootstrap enqueue failed: %s", type(exc).__name__)
 
 
+@worker_ready.connect
+def check_secrets_key(*args: Any, **kwargs: Any) -> None:
+    """Surface a missing/invalid SECRETS_KEY at worker start (log only: collectors
+    do not need it; webhook deliveries defer until it is fixed)."""
+    try:
+        secretbox.check_key()
+    except Exception as exc:
+        log.error("SECRETS_KEY unusable: %s", type(exc).__name__)
+
+
+@worker_process_init.connect
+def reset_db_engine_after_fork(*args: Any, **kwargs: Any) -> None:
+    """Drop pooled connections inherited from the parent so forked children never share sockets."""
+    try:
+        get_engine().dispose(close=False)
+    except Exception as exc:
+        log.warning("db engine reset after fork failed: %s", type(exc).__name__)
+
+
 @celery_app.task(name="cvenom.tasks.purge_geo_task")
 def purge_geo_task() -> dict:
     return purge_geo_job()
+
+
+ALERTS_DISPATCH_LOCK = "alerts-dispatch"
+ALERTS_DISPATCH_TTL = 120
+PURGE_SESSIONS_LOCK = "maintenance-purge-sessions"
+SESSION_RETENTION = timedelta(days=7)
+INVITE_EXPIRED_RETENTION = timedelta(days=7)
+INVITE_USED_RETENTION = timedelta(days=30)
+SIGNING_KEY_EXTRA_RETENTION = timedelta(days=1)  # beyond the verification grace window
+ALERT_EVENT_RETENTION = timedelta(days=30)
+ALERT_DELIVERY_RETENTION = timedelta(days=90)
+
+
+def alerts_dispatch_job(*, lock: CollectorLock | None = None, session_factory=session_scope,
+                        sinks=None, now: datetime | None = None) -> dict:
+    lock = lock if lock is not None else RedisLock()
+    if not lock.acquire(ALERTS_DISPATCH_LOCK, ALERTS_DISPATCH_TTL):
+        log.info("alerts dispatch already running; skipping")
+        return {"skipped": True}
+    try:
+        now = now if now is not None else datetime.now(timezone.utc)
+        sinks = sinks if sinks is not None else build_sinks()
+        return {"ok": True, **dispatch_once(session_factory, now, sinks)}
+    except Exception as exc:
+        log.error("alerts dispatch failed: %s\n%s", type(exc).__name__,
+                  "".join(traceback.format_tb(exc.__traceback__)))
+        return {"ok": False}
+    finally:
+        try:
+            lock.release(ALERTS_DISPATCH_LOCK)
+        except Exception as exc:
+            log.warning("alerts dispatch lock release failed: %s", type(exc).__name__)
+
+
+def _purge_rows(session, now: datetime) -> dict:
+    counts: dict[str, int] = {}
+    cutoff = now - SESSION_RETENTION
+    counts["sessions"] = session.execute(delete(UserSession).where(
+        or_(UserSession.expires_at < cutoff, UserSession.revoked_at < cutoff))).rowcount
+    counts["invites"] = session.execute(delete(Invite).where(or_(
+        Invite.expires_at < now - INVITE_EXPIRED_RETENTION,
+        Invite.used_at < now - INVITE_USED_RETENTION))).rowcount
+    # Past the verification grace window (access TTL + 1 h) plus a day: no token
+    # signed by these keys can verify any more. Active keys are never touched.
+    grace = timedelta(minutes=get_settings().access_ttl_minutes) + timedelta(hours=1)
+    counts["signing_keys"] = session.execute(delete(SigningKey).where(
+        SigningKey.retired_at < now - grace - SIGNING_KEY_EXTRA_RETENTION)).rowcount
+    # Deliveries first: a sent/failed delivery older than 90 d. Pending ones are
+    # never purged (the dispatcher expires them after 7 d).
+    counts["alert_deliveries"] = session.execute(delete(AlertDelivery).where(
+        AlertDelivery.status.in_(("sent", "failed")),
+        AlertDelivery.created_at < now - ALERT_DELIVERY_RETENTION)).rowcount
+    # alert_delivery.event_id cascades on delete, so an event is purged only once
+    # NO delivery references it (stricter than "no pending delivery"): deleting it
+    # earlier would also drop sent/failed history still inside its 90 d window.
+    counts["alert_events"] = session.execute(delete(AlertEvent).where(
+        AlertEvent.processed_at < now - ALERT_EVENT_RETENTION,
+        ~exists().where(AlertDelivery.event_id == AlertEvent.id))).rowcount
+    return counts
+
+
+def purge_sessions_job(*, lock: CollectorLock | None = None, session_factory=session_scope,
+                       now: datetime | None = None) -> dict:
+    """Daily retention: sessions, invites, retired signing keys, alert outbox
+    events and delivery history (name kept for beat/lock continuity)."""
+    lock = lock if lock is not None else RedisLock()
+    if not lock.acquire(PURGE_SESSIONS_LOCK, MAINTENANCE_LOCK_TTL):
+        log.info("session purge already running; skipping")
+        return {"skipped": True}
+    try:
+        now = now if now is not None else datetime.now(timezone.utc)
+        with session_factory() as session:
+            counts = _purge_rows(session, now)
+        return {"ok": True, **counts}
+    finally:
+        try:
+            lock.release(PURGE_SESSIONS_LOCK)
+        except Exception as exc:
+            log.warning("session purge lock release failed: %s", type(exc).__name__)
+
+
+@celery_app.task(name="cvenom.tasks.alerts_dispatch_task")
+def alerts_dispatch_task() -> dict:
+    return alerts_dispatch_job()
+
+
+@celery_app.task(name="cvenom.tasks.purge_sessions_task")
+def purge_sessions_task() -> dict:
+    return purge_sessions_job()
 
 
 beat_schedule = {
@@ -224,4 +355,8 @@ beat_schedule = {
 }
 beat_schedule["maintenance-geoip"] = {"task": refresh_geoip_task.name, "schedule": crontab(minute=17, hour="*/6")}
 beat_schedule["maintenance-purge-geo"] = {"task": purge_geo_task.name, "schedule": crontab(minute=23)}
+# expires: if workers are down, stale 60 s ticks are discarded instead of piling up.
+beat_schedule["alerts-dispatch"] = {"task": alerts_dispatch_task.name, "schedule": 60.0,
+                                    "options": {"expires": 55}}
+beat_schedule["maintenance-purge-sessions"] = {"task": purge_sessions_task.name, "schedule": crontab(minute=41, hour=3)}
 celery_app.conf.beat_schedule = beat_schedule
