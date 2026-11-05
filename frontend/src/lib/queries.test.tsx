@@ -168,3 +168,39 @@ describe("hooks", () => {
     expect(cveSearchPath({ q: "", page: 1 })).toBe("/cves?page=1");
   });
 });
+
+describe("mount gate", () => {
+  test("remounting a rate-limited query inside Retry-After does not refetch it", async () => {
+    fresh();
+    let n = 0;
+    server.use(
+      http.get(`${B}/lanes`, () => {
+        n++;
+        return HttpResponse.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": "30" } });
+      }),
+    );
+    const first = renderHook(() => useLanes(), { wrapper });
+    await waitFor(() => expect(first.result.current.isError).toBe(true));
+    first.unmount();
+    renderHook(() => useLanes(), { wrapper });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(n).toBe(1);
+  });
+
+  test("a non-429 error still retries on mount", async () => {
+    fresh();
+    qc.setDefaultOptions({ queries: { ...qc.getDefaultOptions().queries, retry: false } });
+    let n = 0;
+    server.use(
+      http.get(`${B}/lanes`, () => {
+        n++;
+        return HttpResponse.json({ error: "boom" }, { status: 500 });
+      }),
+    );
+    const first = renderHook(() => useLanes(), { wrapper });
+    await waitFor(() => expect(first.result.current.isError).toBe(true));
+    first.unmount();
+    renderHook(() => useLanes(), { wrapper });
+    await waitFor(() => expect(n).toBe(2));
+  });
+});

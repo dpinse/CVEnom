@@ -2,7 +2,7 @@ import { QueryClientProvider, QueryObserver, type QueryClient } from "@tanstack/
 import { act, render } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { AuthError, RateLimited } from "./api";
+import { AuthError, NetworkError, RateLimited } from "./api";
 import {
   createLiveController,
   liveUrl,
@@ -501,5 +501,146 @@ describe("useLiveUpdates", () => {
     expect(s.closeCode).toBe(1000);
     await vi.advanceTimersByTimeAsync(200_000);
     expect(MockWS.instances).toHaveLength(1);
+  });
+});
+
+describe("fix round 1", () => {
+  test("I1: a transient refresh failure (NetworkError) backs off and reconnects instead of going offline", async () => {
+    const r = await live({ publicRead: false, refresh: () => Promise.reject(new NetworkError()) });
+    r.rnd.v = 0.5;
+    last().drop(4401);
+    await flush();
+    expect(r.refresh).toHaveBeenCalledTimes(1);
+    expect(r.ctl.getState().status).toBe("reconnecting");
+    expect(MockWS.instances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(MockWS.instances).toHaveLength(2);
+    r.ctl.stop();
+  });
+
+  test("I1: AuthError on a public server connects anonymously", async () => {
+    const r = await live({ publicRead: true, refresh: () => Promise.reject(new AuthError()) });
+    last().drop(4401);
+    await flush();
+    expect(MockWS.instances).toHaveLength(2);
+    r.ctl.stop();
+  });
+
+  test("I2: back-to-back 4401s refresh once; the second reconnect waits for backoff; a healthy socket re-arms the refresh", async () => {
+    const r = await live({ publicRead: false });
+    r.rnd.v = 0.999;
+    last().drop(4401); // first: refresh + immediate reconnect
+    await flush();
+    expect(r.refresh).toHaveBeenCalledTimes(1);
+    expect(MockWS.instances).toHaveLength(2);
+    last().open();
+    await vi.advanceTimersByTimeAsync(2000); // live < 10s
+    last().drop(4401); // consecutive: no refresh, backoff
+    await flush();
+    expect(r.refresh).toHaveBeenCalledTimes(1);
+    expect(MockWS.instances).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(MockWS.instances).toHaveLength(3);
+    last().drop(4401); // still consecutive
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(r.refresh).toHaveBeenCalledTimes(1);
+    expect(MockWS.instances).toHaveLength(4);
+    last().open();
+    await vi.advanceTimersByTimeAsync(10_000); // healthy for 10s
+    last().drop(4401);
+    await flush();
+    expect(r.refresh).toHaveBeenCalledTimes(2);
+    expect(MockWS.instances).toHaveLength(5);
+    r.ctl.stop();
+  });
+
+  test("M6: health is re-fetched fresh after a 4401, and a 429 on health waits out Retry-After", async () => {
+    const r = setup({ publicRead: false });
+    const calls: (boolean | undefined)[] = [];
+    let fail = false;
+    r.deps.getHealth = (_qc, fresh) => {
+      calls.push(fresh);
+      return fail ? Promise.reject(new RateLimited(20)) : Promise.resolve({ status: "ok", public_read: false });
+    };
+    const ctl = createLiveController(r.qc, r.deps);
+    ctl.start();
+    await flush();
+    last().open();
+    last().drop(4401);
+    await flush();
+    expect(calls).toEqual([false, true]);
+    last().open();
+    fail = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+    last().drop(1006);
+    await vi.advanceTimersByTimeAsync(1000); // backoff (~999ms), then health 429s
+    expect(calls).toEqual([false, true, false]);
+    const n = calls.length;
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(calls.length).toBe(n); // honours Retry-After: 20s
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(calls.length).toBe(n + 1);
+    ctl.stop();
+  });
+
+  test("M5: private mode, token gone at open: offline directly, socket dropped, no backoff", async () => {
+    const r = await started({ publicRead: false });
+    const s = last();
+    r.auth.set(null); // logout while connecting
+    await flush();
+    // simulate a late open on a stale socket reference: the controller already dropped it
+    s.open();
+    expect(r.ctl.getState().status).toBe("offline");
+    await vi.advanceTimersByTimeAsync(200_000);
+    expect(MockWS.instances).toHaveLength(1);
+    r.ctl.stop();
+  });
+
+  test("M7: an update with no known keys does not bump lastUpdated", async () => {
+    const r = await live({ publicRead: true });
+    last().msg({ type: "updated", what: ["nope"] });
+    last().msg({ type: "updated", what: [] });
+    expect(r.ctl.getState().lastUpdated).toBeNull();
+    last().msg({ type: "updated", what: ["nope", "geo"] });
+    expect(r.ctl.getState().lastUpdated).not.toBeNull();
+    r.ctl.stop();
+  });
+
+  test("M1: two components calling the hook share one socket; it closes after the last unmounts", async () => {
+    const r = setup({ publicRead: true });
+    const a: { current: LiveState | null } = { current: null };
+    const b: { current: LiveState | null } = { current: null };
+    const A = () => {
+      a.current = useLiveUpdates(r.deps);
+      return null;
+    };
+    const B = () => {
+      b.current = useLiveUpdates(r.deps);
+      return null;
+    };
+    const va = render(
+      <QueryClientProvider client={r.qc}>
+        <A />
+        <B />
+      </QueryClientProvider>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(MockWS.instances).toHaveLength(1);
+    await act(async () => {
+      last().open();
+    });
+    expect(a.current?.status).toBe("live");
+    expect(b.current?.status).toBe("live");
+    const s = last();
+    va.rerender(
+      <QueryClientProvider client={r.qc}>
+        <A />
+      </QueryClientProvider>,
+    );
+    expect(s.closeCode).toBeUndefined();
+    va.unmount();
+    expect(s.closeCode).toBe(1000);
   });
 });

@@ -1,6 +1,6 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { getApiClient } from "./api";
+import { useEffect, useSyncExternalStore } from "react";
+import { AuthError, RateLimited, getApiClient } from "./api";
 import { getAuth } from "./auth";
 import { fetchHealth, isCoolingOff, qk } from "./queries";
 import type { Health } from "./types";
@@ -28,7 +28,8 @@ export interface LiveDeps {
   auth?: { getToken(): string | null; subscribe(fn: () => void): () => void };
   /** Single-flight token refresh (rejects if the session is gone). */
   refresh?: () => Promise<unknown>;
-  getHealth?: (qc: QueryClient) => Promise<Health>;
+  /** `fresh` forces a network fetch instead of the cached value. */
+  getHealth?: (qc: QueryClient, fresh?: boolean) => Promise<Health>;
   random?: () => number;
   now?: () => number;
   url?: string;
@@ -40,6 +41,8 @@ export const BACKOFF_CAP_MS = 60_000;
 export const STABLE_MS = 60_000;
 export const THROTTLE_MIN_MS = 60_000;
 export const THROTTLE_JITTER_MS = 15_000;
+/** A socket live for at least this long counts as healthy (ends a 4401 streak). */
+export const HEALTHY_MS = 10_000;
 
 /** Server `what` value -> query-key roots to invalidate. Unknown values are ignored. */
 const INVALIDATES = new Map<string, readonly string[]>(Object.entries({
@@ -65,7 +68,8 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
   const refresh = deps.refresh ?? (() => getApiClient().refresh());
   const getHealth =
     deps.getHealth ??
-    ((c: QueryClient) => c.fetchQuery({ queryKey: qk.health(), queryFn: fetchHealth, staleTime: Infinity }));
+    ((c: QueryClient, fresh?: boolean) =>
+      c.fetchQuery({ queryKey: qk.health(), queryFn: fetchHealth, staleTime: fresh ? 0 : Infinity }));
   const random = deps.random ?? Math.random;
   const now = deps.now ?? Date.now;
 
@@ -85,6 +89,9 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
   let gen = 0; // bumped by every connect() and dropSocket(): stale async work bails out
   let attempt = 0;
   let hasOpened = false;
+  let openedAt: number | null = null;
+  let consecutive4401 = 0;
+  let freshHealth = false;
   let publicRead = false;
   let wasAuthed = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -143,8 +150,10 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
       void connect();
     }, delayMs);
   }
-  function scheduleBackoff() {
-    const delay = random() * Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt);
+  /** Seconds a 429 asked us to wait, as ms; 0 for any other error. */
+  const minDelayOf = (e: unknown) => (e instanceof RateLimited ? e.retryAfter * 1000 : 0);
+  function scheduleBackoff(minMs = 0) {
+    const delay = Math.max(minMs, random() * Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt));
     attempt++;
     scheduleReconnect(delay);
   }
@@ -158,12 +167,15 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
     setState({ status: "reconnecting" });
 
     let health: Health;
+    const fresh = freshHealth;
+    freshHealth = false;
     try {
-      health = await getHealth(qc);
-    } catch {
+      health = await getHealth(qc, fresh);
+    } catch (e) {
       if (stopped || myGen !== gen) return;
       connecting = false;
-      scheduleBackoff();
+      if (fresh) freshHealth = true; // still owed
+      scheduleBackoff(minDelayOf(e)); // honours Retry-After on a 429
       return;
     }
     if (stopped || myGen !== gen) return;
@@ -191,9 +203,12 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
       const token = auth.getToken();
       if (token) ws.send(JSON.stringify({ type: "auth", token }));
       else if (!publicRead) {
-        ws.close(1000);
+        // The token vanished between connect and open: stand down directly (no backoff).
+        dropSocket(1000);
+        setState({ status: "offline" });
         return;
       }
+      openedAt = now();
       setState({ status: "live" });
       // Anything pushed while we were away was missed: refresh everything once.
       if (hasOpened) queueInvalidation([...INVALIDATES.keys()]);
@@ -214,8 +229,12 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
       if (typeof msg !== "object" || msg === null) return;
       const m = msg as { type?: unknown; what?: unknown };
       if (m.type !== "updated") return; // ping and anything else: ignore
+      const known = Array.isArray(m.what)
+        ? m.what.filter((w): w is string => typeof w === "string" && INVALIDATES.has(w))
+        : [];
+      if (known.length === 0) return; // nothing we recognise: not an update for us
       setState({ lastUpdated: now() });
-      if (Array.isArray(m.what)) queueInvalidation(m.what.filter((w): w is string => typeof w === "string"));
+      queueInvalidation(known);
     };
     ws.onerror = () => {
       // a close event always follows; reconnect is handled there
@@ -227,7 +246,21 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
       stableTimer = undefined;
       if (stopped) return;
       const code = typeof ev?.code === "number" ? ev.code : 1006;
-      if (code === 4401) void recoverFrom4401();
+      const healthy = openedAt !== null && now() - openedAt >= HEALTHY_MS;
+      openedAt = null;
+      if (healthy) consecutive4401 = 0;
+      if (code === 4401) {
+        freshHealth = true; // public_read may have flipped
+        // The server also sends 4401 on internal auth/DB errors. Only the first 4401 of a
+        // streak refreshes and reconnects at once; the rest back off without refreshing
+        // (each refresh rotates the cookie) until a socket has stayed live for HEALTHY_MS.
+        if (consecutive4401 === 0) {
+          consecutive4401 = 1;
+          void recoverFrom4401();
+        } else scheduleBackoff();
+      }
+      // Browsers report a rejected handshake (e.g. 4403 Origin) as 1006 and never expose the
+      // code, so 4403 normally arrives here as a plain failure and follows normal backoff.
       else if (code === 4429 || code === 4403) scheduleReconnect(THROTTLE_MIN_MS + random() * THROTTLE_JITTER_MS);
       else scheduleBackoff();
     };
@@ -238,9 +271,14 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
     setState({ status: "reconnecting" });
     try {
       await refresh(); // exactly one attempt per 4401
-    } catch {
+    } catch (e) {
       if (stopped || myGen !== gen || socket || connecting || reconnectTimer !== undefined) return;
-      // The failed refresh cleared the session. Public servers still serve anonymous clients.
+      if (!(e instanceof AuthError)) {
+        // Transient (network, 5xx, 429): the session is intact, so retry with backoff.
+        scheduleBackoff(minDelayOf(e));
+        return;
+      }
+      // The session is gone. Public servers still serve anonymous clients.
       if (publicRead) void connect();
       else setState({ status: "offline" });
       return;
@@ -302,23 +340,77 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
   };
 }
 
+// ---- shared controller (one socket per QueryClient, ref-counted) -------------
+
+interface Hub {
+  refs: number;
+  ctl: LiveController | null;
+  unsub: (() => void) | null;
+  state: LiveState;
+  listeners: Set<() => void>;
+  subscribe(fn: () => void): () => void;
+  getSnapshot(): LiveState;
+}
+const hubs = new WeakMap<QueryClient, Hub>();
+
+function hubFor(qc: QueryClient): Hub {
+  let hub = hubs.get(qc);
+  if (!hub) {
+    const h: Hub = {
+      refs: 0,
+      ctl: null,
+      unsub: null,
+      state: { status: "reconnecting", lastUpdated: null },
+      listeners: new Set(),
+      subscribe(fn) {
+        h.listeners.add(fn);
+        return () => {
+          h.listeners.delete(fn);
+        };
+      },
+      getSnapshot: () => h.state,
+    };
+    hubs.set(qc, h);
+    hub = h;
+  }
+  return hub;
+}
+
+function acquire(qc: QueryClient, deps?: LiveDeps): () => void {
+  const hub = hubFor(qc);
+  const emit = (s: LiveState) => {
+    hub.state = s;
+    for (const fn of [...hub.listeners]) fn();
+  };
+  if (hub.refs++ === 0) {
+    const ctl = createLiveController(qc, deps);
+    hub.ctl = ctl;
+    hub.unsub = ctl.subscribe(() => emit(ctl.getState()));
+    hub.state = ctl.getState();
+    ctl.start();
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--hub.refs === 0) {
+      hub.unsub?.();
+      hub.ctl?.stop();
+      hub.ctl = hub.unsub = null;
+      emit({ status: "offline", lastUpdated: null });
+    }
+  };
+}
+
 /**
- * Mount ONCE at the app root (inside QueryClientProvider). Each effect run owns its own
- * controller; connecting waits on the /health fetch, so StrictMode's mount/unmount/mount
- * stops the first controller before it ever opens a socket.
+ * Safe to call from any number of components under one QueryClientProvider: they share a
+ * single ref-counted controller, hence one socket. The first caller's `deps` win. Connecting
+ * waits on the /health fetch, so StrictMode's mount/unmount/mount stops the first controller
+ * before it ever opens a socket.
  */
 export function useLiveUpdates(deps?: LiveDeps): LiveState {
   const qc = useQueryClient();
-  const [state, setState] = useState<LiveState>({ status: "reconnecting", lastUpdated: null });
-  const [stableDeps] = useState(deps);
-  useEffect(() => {
-    const ctl = createLiveController(qc, stableDeps);
-    const unsub = ctl.subscribe(() => setState(ctl.getState()));
-    ctl.start();
-    return () => {
-      unsub();
-      ctl.stop();
-    };
-  }, [qc, stableDeps]);
-  return state;
+  const hub = hubFor(qc);
+  useEffect(() => acquire(qc, deps), [qc, deps]);
+  return useSyncExternalStore(hub.subscribe, hub.getSnapshot);
 }

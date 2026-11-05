@@ -1,4 +1,11 @@
-import { QueryClient, keepPreviousData, useQuery, type Query } from "@tanstack/react-query";
+import {
+  QueryClient,
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+  type Query,
+  type UseQueryOptions,
+} from "@tanstack/react-query";
 import { ApiError, AuthError, RateLimited, api } from "./api";
 import type { CveDetail, CveListOut, CveQuery, GeoSummaryItem, Health, LanesOut, LoudStory, VelocityOut } from "./types";
 
@@ -33,8 +40,9 @@ export function isCoolingOff(query: Pick<Query, "state">, now = Date.now()): boo
  * RateLimited policy (chosen: no retry at all): a 429 is not retried, and no automatic
  * refetch trigger (window focus, reconnect, mount, WebSocket invalidation) fires until its
  * Retry-After has elapsed. The error is on the query so the UI can show `retryAfterOf(error)`.
- * One residual: an observer mounting on a data-less errored query retries once (React Query's
- * retryOnMount); that is user navigation, not a loop.
+ * Mount gate: React Query's retryOnMount would re-fetch a data-less errored query on mount
+ * regardless of refetchOnMount, so `useRead` sets `retryOnMount` per observer to false while the
+ * query is inside its Retry-After window (not globally: other errors still retry on mount).
  */
 export function shouldRetry(failureCount: number, error: unknown): boolean {
   if (error instanceof AuthError || error instanceof RateLimited) return false;
@@ -58,6 +66,13 @@ export function createQueryClient(): QueryClient {
   });
 }
 
+/** useQuery plus the per-observer cooldown gate on retryOnMount (see shouldRetry). */
+function useRead<T>(options: UseQueryOptions<T, Error, T, readonly unknown[]>) {
+  const qc = useQueryClient();
+  const existing = qc.getQueryCache().find({ queryKey: options.queryKey, exact: true });
+  return useQuery({ ...options, retryOnMount: !(existing && isCoolingOff(existing)) });
+}
+
 // ---- hooks -----------------------------------------------------------------
 
 export function fetchHealth(): Promise<Health> {
@@ -65,35 +80,35 @@ export function fetchHealth(): Promise<Health> {
 }
 
 export function useLanes() {
-  return useQuery({
+  return useRead({
     queryKey: qk.lanes(),
     queryFn: ({ signal }) => api<LanesOut>("/lanes", { signal }),
   });
 }
 
 export function useVelocity(days = 30) {
-  return useQuery({
+  return useRead({
     queryKey: qk.velocity(days),
     queryFn: ({ signal }) => api<VelocityOut>(`/velocity?days=${days}`, { signal }),
   });
 }
 
 export function useGeo(windowHours = 24) {
-  return useQuery({
+  return useRead({
     queryKey: qk.geo(windowHours),
     queryFn: ({ signal }) => api<GeoSummaryItem[]>(`/geo?window_hours=${windowHours}`, { signal }),
   });
 }
 
 export function useLoudStories(limit = 50) {
-  return useQuery({
+  return useRead({
     queryKey: qk.loud(limit),
     queryFn: ({ signal }) => api<LoudStory[]>(`/stories/loud?limit=${limit}`, { signal }),
   });
 }
 
 export function useCve(id: string | undefined) {
-  return useQuery({
+  return useRead({
     queryKey: qk.cve(id ?? ""),
     queryFn: ({ signal }) => api<CveDetail>(`/cves/${encodeURIComponent(id ?? "")}`, { signal }),
     enabled: !!id,
@@ -111,7 +126,7 @@ export function cveSearchPath(params: CveQuery): string {
 }
 
 export function useCveSearch(params: CveQuery) {
-  return useQuery({
+  return useRead({
     queryKey: qk.cves(params),
     queryFn: ({ signal }) => api<CveListOut>(cveSearchPath(params), { signal }),
     placeholderData: keepPreviousData,
