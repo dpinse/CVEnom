@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # base64 of 32 random bytes; required only when the secret box is used.
     secrets_key: SecretStr | None = None
     public_read: bool = True
+    api_docs: bool = False
     cors_origins: list[str] = []
     trusted_proxy_cidrs: list[str] = []
     jwt_issuer: str = "cvenom"
