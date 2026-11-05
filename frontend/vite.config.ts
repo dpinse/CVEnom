@@ -12,8 +12,11 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
+      // Docker dev stack (docker-compose.dev.yml): the api is `http://api:8000` and bind mounts
+      // on Windows/OneDrive emit no file events, so poll. Host-only dev keeps both defaults.
+      watch: process.env.CVENOM_VITE_POLLING ? { usePolling: true, interval: 300 } : undefined,
       proxy: {
-        "/api": { target: "http://127.0.0.1:8000", ws: true },
+        "/api": { target: process.env.CVENOM_API_PROXY ?? "http://127.0.0.1:8000", ws: true },
       },
     },
     build: {
