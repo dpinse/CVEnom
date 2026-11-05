@@ -3,6 +3,7 @@
 ``ingest`` does not commit: it flushes and the caller owns the transaction.
 """
 
+import math
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 
@@ -110,6 +111,8 @@ def _sanitize_details(value, depth: int = 0):
     """Sanitize every string inside a details structure (keys untouched, depth-limited)."""
     if isinstance(value, str):
         return sanitize_text(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return None  # Postgres JSONB rejects NaN/Infinity
     if depth >= _DETAILS_MAX_DEPTH:
         return None if isinstance(value, (dict, list, tuple)) else value
     if isinstance(value, dict):

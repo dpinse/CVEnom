@@ -246,8 +246,44 @@ def test_epoch_and_z_timestamps():
     off = _norm(outages=[_outage(startDate="2026-11-04T10:00:00+00:00")])[0].observed_at
     epoch = _norm(outages=[_outage(startDate=1793786400)])[0].observed_at
     assert z == off == epoch == want
-    ms = _norm(hijacks=[_hijack(min_hijack_ts=1793786400.5)])[0].observed_at
-    assert ms.year == 2026
+    ms = _norm(hijacks=[_hijack(min_hijack_ts=1793786400000)])[0].observed_at
+    assert ms == want
+    assert _norm(hijacks=[_hijack(min_hijack_ts=1793786400.5)])[0].observed_at.year == 2026
+
+
+@pytest.mark.parametrize("bad", [1e30, 10**25, -5, 0, float("inf"), float("nan"), 99999999999999999])
+def test_absurd_epoch_skips_record_not_run(bad):
+    evs = _norm(
+        outages=[_outage(id="bad", startDate=bad), _outage(id="ok", locations=("FR",))],
+        hijacks=[_hijack(id=1, min_hijack_ts=bad), _hijack(id=2, victim_countries=["US"])],
+    )
+    assert [e.external_id for e in evs] == ["ok:FR", "bgp:2:US"]
+
+
+def test_absurd_epoch_does_not_fail_run(keyed, monkeypatch):
+    _stub(monkeypatch, _env(annotations=[_outage(startDate=1e30)]), _env(events=[_hijack()]))
+    c, res = _run()
+    assert c.last_error is None and len(res.geo_events) == 2
+
+
+@pytest.mark.parametrize("bad_id", [None, True, 1.5, [], {}, ""])
+def test_invalid_record_id_skipped(bad_id):
+    evs = _norm(outages=[_outage(id=bad_id)], hijacks=[_hijack(id=bad_id)])
+    assert evs == []
+
+
+def test_int_id_accepted():
+    assert _norm(outages=[_outage(id=5, locations=("FR",))])[0].external_id == "5:FR"
+
+
+def test_hijack_label_uses_validated_asn():
+    assert _norm(hijacks=[_hijack(hijacker_asn=-5)])[0].label == "BGP hijack"
+    assert _norm(hijacks=[_hijack(hijacker_asn="evil")])[0].label == "BGP hijack"
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf"), 11, "x"])
+def test_hijack_details_confidence_validated(score):
+    assert _norm(hijacks=[_hijack(confidence_score=score)])[0].details["confidence"] is None
 
 
 def test_naive_timestamp_treated_as_utc():

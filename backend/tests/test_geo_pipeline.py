@@ -104,3 +104,13 @@ def test_details_strings_sanitized_recursively(db_session):
     assert row.details["n"] == 5 and row.details["flag"] is True
     assert row.details["nested"]["k"] == 1.5 and row.details["none"] is None
     assert row.details["nested"]["a"][0] == "x"
+
+
+def test_non_finite_floats_in_details_stored_as_null(db_session):
+    nan, inf = float("nan"), float("inf")
+    details = {"a": nan, "b": inf, "c": -inf, "ok": 1.5, "n": {"x": [nan, 2, {"y": inf}]}}
+    run(db_session, ev(details=details))
+    row = rows(db_session)[0]
+    assert row.details["a"] is None and row.details["b"] is None and row.details["c"] is None
+    assert row.details["ok"] == 1.5
+    assert row.details["n"]["x"] == [None, 2, {"y": None}]

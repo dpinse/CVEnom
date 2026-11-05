@@ -25,7 +25,7 @@ OUTAGES_URL = f"{BASE}/radar/annotations/outages"
 HIJACKS_URL = f"{BASE}/radar/bgp/hijacks/events"
 OUTAGE_PARAMS = {"dateRange": "7d", "format": "json", "limit": 100}
 HIJACK_PARAMS = {"dateRange": "7d", "format": "json", "per_page": 100}
-_SKIP = (ValidationError, ValueError, TypeError, AttributeError, KeyError, OverflowError)
+_SKIP = (ValidationError, ValueError, TypeError, AttributeError, KeyError, OverflowError, OSError)
 
 
 def _parse_time(value: object) -> datetime:
@@ -33,7 +33,12 @@ def _parse_time(value: object) -> datetime:
     if isinstance(value, bool):
         raise TypeError("bool is not a timestamp")
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, UTC)
+        if not math.isfinite(value):
+            raise ValueError("non-finite timestamp")
+        secs = value / 1000 if abs(value) > 1e11 else value  # epoch milliseconds
+        if not 0 < secs < 4_102_444_800:  # 1970 .. 2100
+            raise ValueError("timestamp out of range")
+        return datetime.fromtimestamp(secs, UTC)
     if isinstance(value, str) and value.strip():
         dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
         return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
@@ -65,6 +70,12 @@ def _list(value: object) -> list:
 def _records(envelope: dict, key: str) -> list:
     result = envelope.get("result")
     return _list(result.get(key)) if isinstance(result, dict) else []
+
+
+def _record_id(value: object) -> str | int:
+    if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "":
+        raise ValueError("record id missing or invalid")
+    return value
 
 
 def _text(value: object) -> str:
@@ -112,7 +123,7 @@ class CloudflareRadarCollector(Collector):
         return CollectorResult(geo_events=events)
 
     def _outage(self, rec: dict) -> list[NormalizedGeoEvent]:
-        oid = rec["id"]
+        oid = _record_id(rec["id"])
         observed = _parse_time(rec["startDate"])
         details_codes = [
             d.get("code") for d in _list(rec.get("locationsDetails")) if isinstance(d, dict)
@@ -147,7 +158,7 @@ class CloudflareRadarCollector(Collector):
         ]
 
     def _hijack(self, rec: dict) -> list[NormalizedGeoEvent]:
-        hid = rec["id"]
+        hid = _record_id(rec["id"])
         observed = _parse_time(rec["min_hijack_ts"])
         asn = rec.get("hijacker_asn")
         if isinstance(asn, bool) or not isinstance(asn, int) or asn < 0:
@@ -159,15 +170,16 @@ class CloudflareRadarCollector(Collector):
             or not math.isfinite(score)
             or not 0 <= score <= 10
         ):
-            magnitude = 1.0
+            magnitude, confidence = 1.0, None
         else:
-            magnitude = float(score)
+            magnitude = confidence = float(score)
         codes = _codes(_list(rec.get("victim_countries")))
         if not codes:
             fallback = _cc(rec.get("hijacker_country"))
             codes = [fallback] if fallback else [None]
         victims = [v for v in _list(rec.get("victim_asns")) if isinstance(v, int)]
-        details = {"victim_asns": victims, "confidence": score}
+        details = {"victim_asns": victims, "confidence": confidence}
+        label = f"BGP hijack by AS{asn}" if asn is not None else "BGP hijack"
         return [
             NormalizedGeoEvent(
                 source=self.name,
@@ -177,7 +189,7 @@ class CloudflareRadarCollector(Collector):
                 asn=asn,
                 observed_at=observed,
                 magnitude=magnitude,
-                label=f"BGP hijack by AS{rec.get('hijacker_asn')}",
+                label=label,
                 details=details,
             )
             for cc in codes
