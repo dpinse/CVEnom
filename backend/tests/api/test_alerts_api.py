@@ -362,3 +362,78 @@ async def test_delete_rule_cascades(ctx):
         assert db.scalars(select(AlertRecipient)).first() is None
         assert db.scalars(select(AlertRule)).first() is None
         assert (await c.get(f"/api/alerts/rules/{rid}", headers=admin)).status_code == 404
+
+
+async def test_dns_flip_during_create_leaves_nothing(ctx, monkeypatch):
+    app, admin, member, db = ctx
+    calls = {"n": 0}
+
+    def flip(host, port, *a, **k):
+        calls["n"] += 1
+        ip = PUBLIC_IP if calls["n"] <= 3 else "10.0.0.7"
+        return [(socket.AF_INET, 0, 0, "", (ip, port))]
+
+    monkeypatch.setattr(webhook.socket, "getaddrinfo", flip)
+    body = hook_rule()
+    body["recipients"] = body["recipients"] * 4  # 4th resolution is private
+    async with client(app) as c:
+        r = await c.post("/api/alerts/rules", json=body, headers=admin)
+    assert r.status_code == 422 and r.json() == {"error": "unsafe_webhook_url"}
+    assert calls["n"] == 4  # one resolution per URL, no re-validation
+    assert db.scalars(select(AlertRule)).first() is None
+    assert db.scalars(select(AlertRecipient)).first() is None
+
+
+async def test_create_resolves_each_url_once(ctx, monkeypatch):
+    app, admin, *_ = ctx
+    calls = {"n": 0}
+
+    def count(host, port, *a, **k):
+        calls["n"] += 1
+        return [(socket.AF_INET, 0, 0, "", (PUBLIC_IP, port))]
+
+    monkeypatch.setattr(webhook.socket, "getaddrinfo", count)
+    async with client(app) as c:
+        r = await c.post("/api/alerts/rules", json=hook_rule(), headers=admin)
+    assert r.status_code == 201 and calls["n"] == 1
+
+
+async def test_webhook_url_encrypted_at_rest(ctx):
+    app, admin, member, db = ctx
+    async with client(app) as c:
+        r = await c.post("/api/alerts/rules", json=hook_rule(), headers=admin)
+        row = db.scalars(select(AlertRecipient)).one()
+        assert row.webhook_url.startswith("v1:")
+        assert "hooks.example.com" not in row.webhook_url
+        assert "XXXSECRETPATH" not in row.webhook_url
+        assert secretbox.decrypt(row.webhook_url).decode() == URL
+        rid = r.json()["id"]
+        add = await c.post(f"/api/alerts/rules/{rid}/recipients", headers=admin,
+                           json={"channel": "webhook", "url": URL})
+        assert add.status_code == 201
+        for frag in ("XXXSECRETPATH", "querysecret", "T000", "/services"):
+            assert frag not in add.text
+        assert add.json()["url_masked"] == "https://hooks.example.com/\u2026"
+
+
+async def test_undecryptable_url_masks_without_500(ctx, monkeypatch):
+    app, admin, member, db = ctx
+    async with client(app) as c:
+        rid = (await c.post("/api/alerts/rules", json=hook_rule(), headers=admin)).json()["id"]
+        monkeypatch.setenv("SECRETS_KEY", base64.b64encode(os.urandom(32)).decode())
+        get_settings.cache_clear()
+        r = await c.get(f"/api/alerts/rules/{rid}", headers=member)
+        assert r.status_code == 200
+        assert r.json()["recipients"][0]["url_masked"] == "https://(unavailable)/\u2026"
+        assert (await c.get("/api/alerts/rules", headers=member)).status_code == 200
+
+
+async def test_control_chars_in_name_422(ctx):
+    app, admin, *_ = ctx
+    async with client(app) as c:
+        for bad in (chr(0).join("ab"), "a"+chr(10)+"b", "a"+chr(127)+"b"):
+            r = await c.post("/api/alerts/rules", json=email_rule(name=bad), headers=admin)
+            assert r.status_code == 422
+        rid = (await c.post("/api/alerts/rules", json=email_rule(), headers=admin)).json()["id"]
+        r = await c.patch(f"/api/alerts/rules/{rid}", json={"name": chr(0).join("ab")}, headers=admin)
+        assert r.status_code == 422

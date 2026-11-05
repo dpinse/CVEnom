@@ -32,8 +32,12 @@ _BLOCKED = tuple(
         "fe80::/10",
         "224.0.0.0/4",
         "ff00::/8",
+        "::/96",  # IPv4-compatible
+        "::ffff:0:0:0/96",  # IPv4-translated
+        "64:ff9b:1::/48",  # local-use NAT64
     )
 )
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
 
 
 def _unsafe() -> UnsafeWebhookURL:
@@ -50,6 +54,8 @@ def _inner_addrs(ip: ipaddress._BaseAddress) -> list[ipaddress._BaseAddress]:
             out.append(ip.sixtofour)
         if ip.teredo is not None:
             out.extend(ip.teredo)
+        if ip in _NAT64:
+            out.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
     return out
 
 

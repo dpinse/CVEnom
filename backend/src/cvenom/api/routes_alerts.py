@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import secrets
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NoReturn
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -54,6 +54,11 @@ class RuleCreate(BaseModel):
     enabled: bool = True
     recipients: list[RecipientIn] = Field(min_length=1, max_length=MAX_RECIPIENTS)
 
+    @field_validator("name")
+    @classmethod
+    def _name_ok(cls, v: str) -> str:
+        return _no_control(v)
+
     @model_validator(mode="after")
     def _check(self) -> RuleCreate:
         try:
@@ -70,9 +75,21 @@ class RulePatch(BaseModel):
     keyword: str | None = Field(default=None, max_length=1000)
     enabled: bool | None = None
 
+    @field_validator("name")
+    @classmethod
+    def _name_ok(cls, v: str | None) -> str | None:
+        return v if v is None else _no_control(v)
 
-def _error(status: int, error: str) -> JSONResponse:
-    return JSONResponse({"error": error}, status_code=status)
+
+def _error(status: int, error: str) -> NoReturn:
+    # Raise (never return): a returned response lets session_scope commit prior writes.
+    raise HTTPException(status_code=status, detail={"error": error})
+
+
+def _no_control(v: str) -> str:
+    if any(ord(c) < 0x20 or ord(c) == 0x7F or 0x80 <= ord(c) <= 0x9F for c in v):
+        raise ValueError("invalid value")
+    return v
 
 
 def _not_found() -> HTTPException:
@@ -93,7 +110,10 @@ def _recipient_json(r: AlertRecipient) -> dict:
     if r.channel == "email":
         out["email"] = r.email
     elif r.webhook_url:
-        out["url_masked"] = mask_url(r.webhook_url)
+        try:
+            out["url_masked"] = mask_url(secretbox.decrypt(r.webhook_url).decode())
+        except Exception:  # key mismatch / corrupt row: never 500 a listing
+            out["url_masked"] = "https://(unavailable)/\u2026"
     return out
 
 
@@ -116,25 +136,32 @@ def _rule_json(session: Session, rule: AlertRule) -> dict:
 
 
 def _build_recipient(
-    rule_id: int, body: EmailRecipientIn | WebhookRecipientIn
+    body: EmailRecipientIn | WebhookRecipientIn,
 ) -> tuple[AlertRecipient, str | None]:
-    """Return (row, one-time secret or None); raises UnsafeWebhookURL."""
+    """Return (unattached row, one-time secret or None); raises HTTPException(422).
+
+    Resolves DNS exactly once (blocking: callers are sync handlers)."""
     if isinstance(body, EmailRecipientIn):
-        row = AlertRecipient(rule_id=rule_id, channel="email", email=str(body.email).lower())
-        return row, None
-    validate_url(body.url)  # blocking DNS: callers are sync handlers (threadpool)
+        return AlertRecipient(channel="email", email=str(body.email).lower()), None
+    try:
+        validate_url(body.url)
+    except UnsafeWebhookURL:
+        _error(422, "unsafe_webhook_url")
     secret = body.secret or secrets.token_urlsafe(32)
     row = AlertRecipient(
-        rule_id=rule_id,
         channel="webhook",
-        webhook_url=body.url,
+        webhook_url=secretbox.encrypt(body.url.encode()),
         webhook_secret_enc=secretbox.encrypt(secret.encode()),
     )
     return row, secret
 
 
-def _get_rule(session: Session, rule_id: int) -> AlertRule:
-    rule = session.get(AlertRule, rule_id) if 0 < rule_id <= MAX_ID else None
+def _get_rule(session: Session, rule_id: int, *, lock: bool = False) -> AlertRule:
+    rule = (
+        session.get(AlertRule, rule_id, with_for_update=lock)
+        if 0 < rule_id <= MAX_ID
+        else None
+    )
     if rule is None:
         raise _not_found()
     return rule
@@ -157,13 +184,8 @@ def get_rule(
 def create_rule(
     body: RuleCreate, admin: User = Depends(require_admin), session: Session = SessionDep
 ):
-    # Validate every URL before writing anything.
-    for r in body.recipients:
-        if isinstance(r, WebhookRecipientIn):
-            try:
-                validate_url(r.url)
-            except UnsafeWebhookURL:
-                return _error(422, "unsafe_webhook_url")
+    # Resolve/validate every URL once and build all rows BEFORE any write.
+    built = [_build_recipient(r) for r in body.recipients]
     rule = AlertRule(
         name=body.name,
         kind=body.kind,
@@ -175,11 +197,8 @@ def create_rule(
     session.add(rule)
     session.flush()
     new_secrets: dict[int, str] = {}  # recipient id -> one-time secret
-    for r in body.recipients:
-        try:
-            row, secret = _build_recipient(rule.id, r)
-        except UnsafeWebhookURL:
-            return _error(422, "unsafe_webhook_url")
+    for row, secret in built:
+        row.rule_id = rule.id
         session.add(row)
         session.flush()
         if secret is not None:
@@ -235,16 +254,14 @@ def add_recipient(
     admin: User = Depends(require_admin),
     session: Session = SessionDep,
 ):
-    rule = _get_rule(session, rule_id)
+    rule = _get_rule(session, rule_id, lock=True)  # serialize concurrent adds (cap race)
     existing = session.scalars(
         select(AlertRecipient.id).where(AlertRecipient.rule_id == rule.id)
     ).all()
     if len(existing) >= MAX_RECIPIENTS:
         return _error(422, "too_many_recipients")
-    try:
-        row, secret = _build_recipient(rule.id, body)
-    except UnsafeWebhookURL:
-        return _error(422, "unsafe_webhook_url")
+    row, secret = _build_recipient(body)
+    row.rule_id = rule.id
     session.add(row)
     session.flush()
     out = _recipient_json(row)

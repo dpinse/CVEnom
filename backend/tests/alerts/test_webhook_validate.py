@@ -109,3 +109,34 @@ def test_message_is_generic(monkeypatch):
         validate_url("https://h.example/secret/path?token=abc")
     s = str(e.value)
     assert "10.9.8.7" not in s and "secret" not in s and "token" not in s
+
+
+TRANSITION_FORMS = [
+    "64:ff9b::7f00:1",  # NAT64 -> 127.0.0.1
+    "64:ff9b::a9fe:a9fe",  # NAT64 -> 169.254.169.254
+    "64:ff9b::a00:1",  # NAT64 -> 10.0.0.1
+    "::7f00:1",  # IPv4-compatible
+    "::127.0.0.1",
+    "::ffff:0:7f00:1",  # IPv4-translated
+    "64:ff9b:1::1",  # local-use NAT64
+]
+
+
+@pytest.mark.parametrize("ip", TRANSITION_FORMS)
+def test_transition_forms_rejected_as_literal(ip):
+    with pytest.raises(UnsafeWebhookURL):
+        validate_url(f"https://[{ip}]/")
+
+
+@pytest.mark.parametrize("ip", TRANSITION_FORMS)
+def test_transition_forms_rejected_as_resolved(monkeypatch, ip):
+    fake_dns(monkeypatch, ip)
+    with pytest.raises(UnsafeWebhookURL):
+        validate_url("https://t.example/")
+
+
+def test_nat64_of_global_ipv4_accepted(monkeypatch):
+    t = validate_url("https://[64:ff9b::808:808]/")
+    assert t.ips == ("64:ff9b::808:808",)
+    fake_dns(monkeypatch, "64:ff9b::808:808")
+    assert validate_url("https://t.example/").ips == ("64:ff9b::808:808",)
