@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -13,7 +14,9 @@ from starlette.middleware.cors import CORSMiddleware
 from cvenom.config import Settings, get_settings
 from cvenom.db import session_scope
 
+from .cache import ResponseCacheMiddleware
 from .middleware import BodyLimitMiddleware, ErrorCatchMiddleware, SecurityHeadersMiddleware
+from .ratelimit import get_redis
 
 log = logging.getLogger(__name__)
 
@@ -43,10 +46,27 @@ async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse({"error": "internal_error"}, status_code=500)
 
 
-def create_app(settings: Settings | None = None, *, redis=None, session_factory=None) -> FastAPI:
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    yield
+    if getattr(app.state, "redis_owned", False) and app.state.redis is not None:
+        try:
+            await app.state.redis.aclose()
+        except Exception:  # shutdown must not fail on a dead connection
+            log.warning("error closing redis client", exc_info=True)
+
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    redis=None,
+    session_factory=None,
+    cache_paths: tuple[str, ...] = (),
+) -> FastAPI:
     settings = settings or get_settings()
     docs = settings.api_docs
     app = FastAPI(
+        lifespan=_lifespan,
         title="CVEnom",
         debug=False,
         docs_url="/docs" if docs else None,
@@ -54,7 +74,8 @@ def create_app(settings: Settings | None = None, *, redis=None, session_factory=
         openapi_url="/openapi.json" if docs else None,
     )
     app.state.settings = settings
-    app.state.redis = redis
+    app.state.redis = redis  # None: created lazily on first use (ratelimit.get_redis)
+    app.state.redis_owned = False
     app.state.session_factory = session_factory or session_scope
 
     app.add_exception_handler(StarletteHTTPException, _http_exception)
@@ -62,8 +83,12 @@ def create_app(settings: Settings | None = None, *, redis=None, session_factory=
     app.add_exception_handler(Exception, _unhandled)
 
     # add_middleware: last added is outermost. Order outer -> inner:
-    # security headers, CORS, body limit, error catch, router.
+    # security headers, CORS, body limit, response cache, error catch, router.
     app.add_middleware(ErrorCatchMiddleware)
+    if cache_paths and settings.public_read:
+        app.add_middleware(
+            ResponseCacheMiddleware, redis_getter=lambda: get_redis(app), paths=cache_paths
+        )
     app.add_middleware(BodyLimitMiddleware, max_bytes=settings.max_body_bytes)
     if settings.cors_origins:
         app.add_middleware(
