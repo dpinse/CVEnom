@@ -13,15 +13,13 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
 from cvenom.config import get_settings
-from cvenom.models import Cve, GeoEvent, Story, StoryCveLink
+from cvenom.models import Cve, GeoEvent, Story, StoryCveLink, User
 from cvenom.pipeline import lane_views
 from cvenom.readmodels import cve_velocity, geo_summary, loud_stories
 from cvenom.schemas import CVE_ID_RE
 from cvenom.scoring import Lane
 
-from cvenom.models import User
-
-from .deps import SessionDep, public_or_user, restricted_sources
+from .deps import SessionDep, current_user, public_or_user, restricted_sources
 from .ratelimit import rate_limit
 from .schemas_api import (
     CveDetail,
@@ -175,7 +173,7 @@ def search_cves(
 def cve_detail(
     cve_id: str,
     session: Session = SessionDep,
-    user: User | None = Depends(public_or_user),
+    user: User | None = Depends(current_user),  # gated by the router-level public_or_user
 ):
     hidden = restricted_sources(user)
     # Exact, case-sensitive match (the shared normalising validator is too lenient here).
@@ -232,6 +230,6 @@ def geo(
 def stories_loud(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     session: Session = SessionDep,
-    user: User | None = Depends(public_or_user),
+    user: User | None = Depends(current_user),  # gated by the router-level public_or_user
 ) -> list[dict]:
     return loud_stories(session, _now(), limit=limit, exclude_sources=restricted_sources(user))

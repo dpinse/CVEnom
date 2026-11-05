@@ -501,3 +501,61 @@ async def test_anon_cached_loud_has_no_ransomware_authed_does(db_session):
         r3 = await c.get("/api/stories/loud", headers=h)
         assert "x-cache" not in r3.headers
         assert "Victim Inc" in r3.text
+
+
+_RL_MARK = "Zyxwv Victim Holdings"
+
+
+def _rl_marked_fixture(db):
+    """A ransomware.live victim story and victim geo event with a distinctive name, linked
+    to a KEV CVE that the lanes surface (exploited) and that search finds."""
+    cve(db, "CVE-2024-8888", kev=True, kev_added=NOW.date(), cvss=9.8,
+        published=NOW - timedelta(days=1), summary="gateway flaw")
+    s = story(db, 950, ["CVE-2024-8888"], title=f"{_RL_MARK} listed by grp")
+    s.source = "ransomware.live"
+    geo(db, "rl-mark", source="ransomware_live", kind="victim", cve_id="CVE-2024-8888",
+        label=f"grp: {_RL_MARK}", country_code="CA", magnitude=1.0)
+    db.flush()
+
+
+async def test_c5_anon_search_and_lanes_never_carry_ransomware_victims(db_session):
+    """Compliance regression guard: no anonymous read (search, lanes, their anonymous cache,
+    or the other public reads) may ever contain ransomware.live victim data."""
+    _rl_marked_fixture(db_session)
+    app = make_app(db_session)
+    async with client(app) as c:
+        paths = [
+            "/api/lanes",
+            "/api/cves",
+            "/api/cves?q=CVE-2024-8888",
+            "/api/cves?q=Zyxwv",
+            "/api/cves?kev=true",
+            "/api/velocity",
+            "/api/geo",
+            "/api/stories/loud",
+            "/api/cves/CVE-2024-8888",
+        ]
+        for path in paths:
+            r = await c.get(path)
+            assert r.status_code == 200, path
+            assert _RL_MARK not in r.text, path
+        # the anonymous cache path: a second hit is served from cache and is still clean
+        hit = await c.get("/api/lanes")
+        assert hit.headers["x-cache"] == "HIT"
+        assert _RL_MARK not in hit.text
+        lane_ids = {i["cve_id"] for items in hit.json().values() for i in items}
+        assert "CVE-2024-8888" in lane_ids  # the guard is meaningful: the CVE is on the board
+        found = (await c.get("/api/cves?q=CVE-2024-8888")).json()
+        assert [i["cve_id"] for i in found["items"]] == ["CVE-2024-8888"]
+        assert (await c.get("/api/cves?q=Zyxwv")).json()["total"] == 0
+
+        # signed in: the same reads still work, and the detail carries the victim story
+        h, _ = bearer(db_session, mk_user(db_session))
+        for path in ("/api/lanes", "/api/cves?q=CVE-2024-8888"):
+            r = await c.get(path, headers=h)
+            assert r.status_code == 200, path
+            assert "x-cache" not in r.headers
+        authed_lanes = (await c.get("/api/lanes", headers=h)).json()
+        assert "CVE-2024-8888" in {i["cve_id"] for items in authed_lanes.values() for i in items}
+        detail = await c.get("/api/cves/CVE-2024-8888", headers=h)
+        assert _RL_MARK in detail.text
