@@ -43,7 +43,7 @@ class VulnCheckCollector(Collector):
         headers = {"Authorization": f"Bearer {token}"}
         pages: list[dict] = []
         page_no = 1
-        while page_no <= MAX_PAGES:
+        while True:
             if page_no > 1:
                 await base._sleep(PAGE_DELAY)
             page = await http_get_json(
@@ -55,7 +55,19 @@ class VulnCheckCollector(Collector):
                 break
             meta = page.get("_meta")
             total = meta.get("total_pages") if isinstance(meta, dict) else None
-            if not isinstance(total, int) or page_no >= total:
+            if not isinstance(total, int) or isinstance(total, bool):
+                log.warning(
+                    "%s: missing or non-int total_pages (%r) on page %d; feed may be truncated",
+                    self.name, total, page_no,
+                )
+                break
+            if page_no >= total:
+                break
+            if page_no >= MAX_PAGES:
+                log.warning(
+                    "%s: stopped at MAX_PAGES=%d of total_pages=%d; feed truncated",
+                    self.name, MAX_PAGES, total,
+                )
                 break
             page_no += 1
         return pages
@@ -93,9 +105,19 @@ class VulnCheckCollector(Collector):
                     except (TypeError, ValueError):  # incl. ValidationError
                         log.warning("vulncheck: skipping malformed cve id %r", cve_id)
 
+        # One id can appear in several records: keep its earliest known add date.
+        added_dates: dict[str, date | None] = {}
+        for c in cves:
+            prev = added_dates.get(c.cve_id)
+            if c.kev_added is not None and (prev is None or c.kev_added < prev):
+                added_dates[c.cve_id] = c.kev_added
+            else:
+                added_dates.setdefault(c.cve_id, prev)
         events = track_new(
             self.state,
             {c.cve_id for c in cves},
+            added_dates=added_dates,
+            max_age_days=get_settings().kev_alert_max_age_days,
             source="vulncheck",
             collector_name=self.name,
             logger=log,

@@ -7,6 +7,7 @@ from datetime import date
 
 from cvenom.collectors.base import Collector, CollectorResult, http_get_json, register
 from cvenom.collectors.seenstate import track_new
+from cvenom.config import get_settings
 from cvenom.schemas import NormalizedCve
 
 log = logging.getLogger(__name__)
@@ -50,8 +51,13 @@ class KevCollector(Collector):
             except (KeyError, TypeError, ValueError):  # incl. ValidationError
                 log.warning("kev: skipping malformed entry %s", cve_id)
 
-        current = {c.cve_id for c in cves}
         events = track_new(
-            self.state, current, source="cisa", collector_name=self.name, logger=log
+            self.state,
+            {c.cve_id for c in cves},
+            added_dates={c.cve_id: c.kev_added for c in cves},
+            max_age_days=get_settings().kev_alert_max_age_days,
+            source="cisa",
+            collector_name=self.name,
+            logger=log,
         )
         return CollectorResult(cves=cves, events=events)

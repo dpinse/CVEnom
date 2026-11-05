@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     loud_window_hours: int = 72
     velocity_window_days: int = 30
     backfill_days: int = 90
+    # KEV/VulnCheck: alert only for entries whose own add date is this recent.
+    kev_alert_max_age_days: int = 14
 
 
 @lru_cache

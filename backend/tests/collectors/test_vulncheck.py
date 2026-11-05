@@ -1,4 +1,5 @@
-from datetime import date
+import logging
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -22,19 +23,23 @@ def fast_sleep(monkeypatch):
 
 @pytest.fixture
 def token(monkeypatch):
-    s = SimpleNamespace(vulncheck_api_token="tok-123")
+    s = SimpleNamespace(vulncheck_api_token="tok-123", kev_alert_max_age_days=14)
     monkeypatch.setattr(vulncheck, "get_settings", lambda: s)
     return s
 
 
 @pytest.fixture
 def no_token(monkeypatch):
-    s = SimpleNamespace(vulncheck_api_token=None)
+    s = SimpleNamespace(vulncheck_api_token=None, kev_alert_max_age_days=14)
     monkeypatch.setattr(vulncheck, "get_settings", lambda: s)
     return s
 
 
-def _rec(cve, vendor="Acme", product="Widget", added="2026-11-01T00:00:00.000Z"):
+RECENT = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000Z")
+OLD = "2020-01-01T00:00:00.000Z"
+
+
+def _rec(cve, vendor="Acme", product="Widget", added=RECENT):
     return {
         "cve": cve,
         "vendorProject": vendor,
@@ -157,3 +162,65 @@ def test_invalid_cve_id_skipped_and_logged(token, caplog):
         res = VulnCheckCollector().normalize(raw)
     assert [c.cve_id for c in res.cves] == ["CVE-2026-1001"]
     assert "CVE-1<img src=x>" in caplog.text
+
+
+def test_old_new_id_silent_recent_new_id_emits(token):
+    k = VulnCheckCollector(state={"seen": ["CVE-2026-0001"]})
+    res = k.normalize(
+        [_page([_rec("CVE-2026-0001"), _rec("CVE-2026-0002", added=OLD), _rec("CVE-2026-0003")])]
+    )
+    assert res.events == [{"type": "kev_added", "cve_id": "CVE-2026-0003", "source": "vulncheck"}]
+    assert k.state["seen"] == ["CVE-2026-0001", "CVE-2026-0002", "CVE-2026-0003"]
+
+
+def test_unknown_added_date_still_emits(token):
+    k = VulnCheckCollector(state={"seen": ["CVE-2026-0001"]})
+    res = k.normalize([_page([_rec("CVE-2026-0002", added="garbage")])])
+    assert [e["cve_id"] for e in res.events] == ["CVE-2026-0002"]
+
+
+def test_empty_first_run_leaves_seen_absent(token):
+    k = VulnCheckCollector()
+    assert k.normalize([_page([])]).events == []
+    assert "seen" not in k.state
+
+
+@respx.mock
+async def test_truncation_at_max_pages_warns(token, monkeypatch, caplog):
+    monkeypatch.setattr(vulncheck, "MAX_PAGES", 2)
+    route = respx.get(VULNCHECK_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_page([_rec("CVE-2026-0001")], 1, 5)),
+            httpx.Response(200, json=_page([_rec("CVE-2026-0002")], 2, 5)),
+            httpx.Response(200, json=_page([_rec("CVE-2026-0003")], 3, 5)),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="cvenom.collectors.vulncheck"):
+        await VulnCheckCollector().fetch()
+    assert route.call_count == 2
+    assert any("MAX_PAGES" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("meta", [{}, {"total_pages": "3"}, {"total_pages": None}, None])
+@respx.mock
+async def test_missing_or_non_int_total_pages_warns(token, caplog, meta):
+    page = {"data": [_rec("CVE-2026-0001")]}
+    if meta is not None:
+        page["_meta"] = meta
+    respx.get(VULNCHECK_URL).mock(return_value=httpx.Response(200, json=page))
+    with caplog.at_level(logging.WARNING, logger="cvenom.collectors.vulncheck"):
+        await VulnCheckCollector().fetch()
+    assert any("total_pages" in r.getMessage() for r in caplog.records)
+
+
+@respx.mock
+async def test_complete_pagination_does_not_warn(token, caplog):
+    respx.get(VULNCHECK_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_page([_rec("CVE-2026-0001")], 1, 2)),
+            httpx.Response(200, json=_page([_rec("CVE-2026-0002")], 2, 2)),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="cvenom.collectors.vulncheck"):
+        await VulnCheckCollector().fetch()
+    assert not caplog.records

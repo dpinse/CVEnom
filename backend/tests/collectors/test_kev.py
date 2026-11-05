@@ -1,9 +1,14 @@
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from cvenom.collectors import base
 from cvenom.collectors.kev import KevCollector
+
+
+TODAY = datetime.now(UTC).date()
+D1, D2, D3 = (TODAY - timedelta(days=n) for n in (3, 2, 1))
+OLD = TODAY - timedelta(days=400)
 
 
 @pytest.fixture(autouse=True)
@@ -14,7 +19,8 @@ def fast_sleep(monkeypatch):
     monkeypatch.setattr(base, "_sleep", fake)
 
 
-def _entry(cve, vendor="Acme", product="Widget", added="2026-11-01"):
+def _entry(cve, vendor="Acme", product="Widget", added=None):
+    added = D1.isoformat() if added is None else added
     return {
         "cveID": cve,
         "vendorProject": vendor,
@@ -39,9 +45,9 @@ def _feed(*entries):
 
 def _three():
     return _feed(
-        _entry("CVE-2026-1001", "Acme", "Widget", "2026-11-01"),
-        _entry("CVE-2026-1002", "Globex", "Gadget", "2026-11-02"),
-        _entry("CVE-2026-1003", "Initech", "Printer", "2026-11-03"),
+        _entry("CVE-2026-1001", "Acme", "Widget", D1.isoformat()),
+        _entry("CVE-2026-1002", "Globex", "Gadget", D2.isoformat()),
+        _entry("CVE-2026-1003", "Initech", "Printer", D3.isoformat()),
     )
 
 
@@ -51,7 +57,7 @@ def test_normalize_maps_fields():
     assert set(by_id) == {"CVE-2026-1001", "CVE-2026-1002", "CVE-2026-1003"}
     c = by_id["CVE-2026-1002"]
     assert c.kev is True
-    assert c.kev_added == date(2026, 11, 2)
+    assert c.kev_added == D2
     assert c.kev_source == "cisa"
     assert c.affected == ["Globex Gadget"]
     assert c.summary is None
@@ -143,3 +149,38 @@ def test_invalid_cve_id_skipped_and_logged(caplog):
         res = KevCollector().normalize(feed)
     assert [c.cve_id for c in res.cves] == ["CVE-2026-1001"]
     assert "CVE-1<img src=x>" in caplog.text
+
+
+def test_empty_first_run_leaves_seen_absent_then_full_run_baselines_silently():
+    k = KevCollector()
+    assert k.normalize(_feed()).events == []
+    assert "seen" not in k.state
+    k2 = KevCollector(state=k.state)
+    assert k2.normalize(_three()).events == []
+    assert k2.state["seen"] == ["CVE-2026-1001", "CVE-2026-1002", "CVE-2026-1003"]
+
+
+def test_truncated_first_baseline_then_full_feed_emits_only_recent():
+    k = KevCollector()
+    k.normalize(_feed(_entry("CVE-2026-1001", added=OLD.isoformat())))  # truncated baseline
+    full = _feed(
+        _entry("CVE-2026-1001", added=OLD.isoformat()),
+        _entry("CVE-2026-1002", added=OLD.isoformat()),
+        _entry("CVE-2026-1003", added=D3.isoformat()),
+    )
+    k2 = KevCollector(state=k.state)
+    assert k2.normalize(full).events == [
+        {"type": "kev_added", "cve_id": "CVE-2026-1003", "source": "cisa"}
+    ]
+    assert k2.state["seen"] == ["CVE-2026-1001", "CVE-2026-1002", "CVE-2026-1003"]
+
+
+def test_new_entry_older_than_max_age_is_silent(monkeypatch):
+    from types import SimpleNamespace
+    from cvenom.collectors import kev
+
+    monkeypatch.setattr(kev, "get_settings", lambda: SimpleNamespace(kev_alert_max_age_days=1))
+    k = KevCollector(state={"seen": ["CVE-2026-1001"]})
+    res = k.normalize(_feed(_entry("CVE-2026-1001"), _entry("CVE-2026-1002", added=D1.isoformat())))
+    assert res.events == []  # D1 is 3 days ago > 1-day max age
+    assert "CVE-2026-1002" in k.state["seen"]
