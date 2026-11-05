@@ -29,6 +29,13 @@ command aborts.
 
   Export `ADMIN_PASSWORD` in your shell first (or pipe it on stdin with `-T`). Do not put it in
   `.env`: that file is handed to every app container.
+- Every account must use an authenticator app (TOTP MFA); the admin enrolls at the first sign-in.
+  If the last admin loses their device, this break-glass command forgets their MFA and revokes
+  their sessions. They enroll again at the next sign-in:
+
+  ```sh
+  docker compose --env-file ./.env -f deploy/docker-compose.prod.yml run --rm api reset-mfa --email you@example.com
+  ```
 - DB and Redis passwords must be URL-safe (`openssl rand -hex 24`): compose builds `DATABASE_URL`
   and `REDIS_URL` from them without escaping.
 - Sign in as the admin and invite further users from the admin UI (Admin → Invites). Invite and

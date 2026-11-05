@@ -116,7 +116,7 @@ async def test_list_users_shape_and_active_sessions(ctx):
     assert r.status_code == 200
     rows = {u["email"]: u for u in r.json()}
     assert set(rows["m@example.com"]) == {
-        "id", "email", "role", "is_active", "created_at", "active_sessions"}
+        "id", "email", "role", "is_active", "created_at", "active_sessions", "mfa_enabled"}
     assert rows["m@example.com"]["active_sessions"] == 2
     assert rows["a@example.com"]["active_sessions"] == 1
     assert "password" not in r.text

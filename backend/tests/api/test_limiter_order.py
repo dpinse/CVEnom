@@ -167,3 +167,32 @@ def test_mfa_scope_fails_closed():
     from cvenom.api.ratelimit import FAIL_CLOSED_SCOPES
 
     assert "mfa" in FAIL_CLOSED_SCOPES
+
+
+MFA_AUTHED_ROUTES = {
+    ("/api/auth/mfa", "GET"),
+    ("/api/auth/mfa/recovery-codes", "POST"),
+    ("/api/auth/users/{user_id}/mfa/reset", "POST"),
+}
+
+
+def test_mfa_account_and_admin_routes_limit_before_auth(db_session):
+    app = make_app(db_session, api_docs=False)
+    seen = set()
+    for path, methods, dependant in _http_routes(app):
+        for m in methods:
+            if (path, m) not in MFA_AUTHED_ROUTES:
+                continue
+            seen.add((path, m))
+            calls = _execution_order(dependant)
+            limiter_at = [i for i, c in enumerate(calls) if _is_limiter(c)]
+            auth_at = [i for i, c in enumerate(calls) if c in AUTH_DEPS]
+            assert limiter_at and auth_at and limiter_at[0] < auth_at[0], (path, m)
+    assert seen == MFA_AUTHED_ROUTES
+
+
+def test_regenerate_reserves_an_attempt_before_checking_the_code():
+    from cvenom.api import routes_mfa
+
+    src = inspect.getsource(routes_mfa.regenerate_recovery_codes)
+    assert src.index("reserve_mfa_attempt(") < src.index("run_in_threadpool")
