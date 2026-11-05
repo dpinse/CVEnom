@@ -18,6 +18,9 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       sourcemap: false,
+      // Never inline fonts as data: URIs: the production CSP says font-src 'self' (no data:), so the
+      // small Plex subsets must ship as real same-origin files. Other assets keep Vite's default.
+      assetsInlineLimit: (file: string) => (/\.(woff2?|ttf|otf)$/i.test(file) ? false : undefined),
       outDir: harness ? "dist-harness" : "dist",
       // The one chunk above Vite's 500 kB default is the lazy MapLibre globe chunk (~1.17 MB raw,
       // ~330 kB gzip), deliberately kept out of the initial bundle; the budget test guards that.

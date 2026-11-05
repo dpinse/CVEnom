@@ -48,11 +48,13 @@ def test_postgres_redis_publish_no_ports(compose):
     assert "ports" not in compose["services"]["redis"]
 
 
-def test_only_api_publishes_loopback(compose):
-    assert compose["services"]["api"]["ports"] == ["127.0.0.1:8000:8000"]
+def test_only_frontend_publishes_loopback(compose):
+    # The api is reachable only through nginx; nothing but the frontend publishes a port.
+    assert "ports" not in compose["services"]["api"]
+    assert compose["services"]["frontend"]["ports"] == ["127.0.0.1:8080:8080"]
     for name, svc in compose["services"].items():
-        if name != "api":
-            assert "ports" not in svc
+        if name != "frontend":
+            assert "ports" not in svc, name
 
 
 def test_no_literal_secrets_in_compose(compose):
@@ -184,14 +186,74 @@ def test_network_pinned_and_attached(compose):
         assert "cvenom" in svc["networks"], name
 
 
-def test_forwarded_allow_ips_defaults_to_gateway(compose):
+NGINX_IP = "172.28.0.10"
+
+
+def test_forwarded_allow_ips_defaults_to_gateway_and_nginx(compose):
     env = compose["services"]["api"]["environment"]
-    assert env["FORWARDED_ALLOW_IPS"] == "${FORWARDED_ALLOW_IPS:-" + GATEWAY + "}"
+    assert env["FORWARDED_ALLOW_IPS"] == "${FORWARDED_ALLOW_IPS:-" + GATEWAY + "," + NGINX_IP + "}"
 
 
-def test_env_example_trusted_proxy_cidrs_has_gateway():
+def test_env_example_trusted_proxy_cidrs_has_gateway_and_nginx():
     m = re.search(r"(?m)^TRUSTED_PROXY_CIDRS=(.*)$", ENV_EXAMPLE.read_text())
-    assert m and GATEWAY in m.group(1)
+    assert m
+    assert m.group(1) == """'["172.28.0.1/32","172.28.0.10/32"]'"""
+
+
+def test_frontend_service_hardened_and_pinned(compose):
+    f = compose["services"]["frontend"]
+    assert f["build"]["context"] == "../frontend"
+    assert f["networks"] == {"cvenom": {"ipv4_address": NGINX_IP}}
+    assert f["read_only"] is True
+    assert f["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in f["security_opt"]
+    assert "/tmp" in f["tmpfs"] and "/var/cache/nginx" in f["tmpfs"]
+    assert f["restart"] == "unless-stopped"
+    assert "api" in f["depends_on"]
+    assert f["healthcheck"]["test"]
+    assert "env_file" not in f  # nginx needs no secrets
+    # the api still gets the pinned network entry as a plain list (no fixed address needed)
+    assert "cvenom" in compose["services"]["api"]["networks"]
+
+
+FRONTEND_DIR = ROOT / "frontend"
+NGINX_CONF = FRONTEND_DIR / "nginx.conf"
+FRONTEND_DOCKERFILE = FRONTEND_DIR / "Dockerfile"
+
+
+def test_frontend_dockerfile_pinned_multistage_nonroot():
+    text = FRONTEND_DOCKERFILE.read_text()
+    froms = re.findall(r"(?mi)^FROM\s+(\S+)", text)
+    assert len(froms) == 2
+    node, nginx = froms
+    assert re.fullmatch(r"node:26\.\d+\.\d+-slim", node), node
+    assert re.fullmatch(r"nginxinc/nginx-unprivileged:\d+\.\d+\.\d+-alpine-slim", nginx), nginx
+    assert "npm ci" in text and "npm run build" in text
+    assert re.search(r"(?m)^USER\s+101$", text)
+    assert "HEALTHCHECK" in text and "/healthz" in text
+    assert (FRONTEND_DIR / ".dockerignore").exists()
+
+
+def test_nginx_conf_csp_and_headers():
+    text = NGINX_CONF.read_text()
+    assert "server_tokens off" in text and "listen 8080" in text
+    csp = re.search(r'add_header Content-Security-Policy "([^"]+)" always;', text)
+    assert csp, "CSP add_header with always"
+    for bad in ("unsafe-inline", "unsafe-eval", "blob:", "*"):
+        assert bad not in csp.group(1), bad
+    for d in ("default-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "base-uri 'none'",
+              "upgrade-insecure-requests"):
+        assert d in csp.group(1), d
+    for h in ("Strict-Transport-Security", "X-Content-Type-Options", "Referrer-Policy",
+              "Permissions-Policy", "Cross-Origin-Opener-Policy", "Cross-Origin-Resource-Policy",
+              "X-Frame-Options"):
+        assert re.search(rf"add_header {h} .* always;", text), h
+    # add_header only at server level: nginx would drop inherited headers in a location with its own
+    assert "add_header" not in text[text.index("\n  location "):]
+    assert "set $api_upstream api:8000;" in text and "proxy_pass http://$api_upstream;" in text
+    assert "proxy_set_header X-Forwarded-For $xff_to_api;" in text
+    assert "client_max_body_size 64k" in text
+    assert "proxy_read_timeout 75s" in text
 
 
 def test_postgres_healthcheck_uses_tcp(compose):

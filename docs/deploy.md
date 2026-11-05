@@ -31,8 +31,10 @@ command aborts.
   and `REDIS_URL` from them without escaping.
 - Sign in as the admin and invite further users from the admin API.
 
-Only `api` publishes a port, and only on `127.0.0.1:8000`. Postgres and Redis publish nothing.
-All app containers run read-only, as uid 10001, with all capabilities dropped. They receive `.env`
+Only `frontend` (nginx) publishes a port, and only on `127.0.0.1:8080`. The api, Postgres and Redis
+publish nothing: the api is reachable only through nginx. The `frontend` container runs
+unprivileged (uid 101) with a read-only root filesystem, tmpfs for `/tmp` and `/var/cache/nginx`,
+and all capabilities dropped. All app containers run read-only, as uid 10001, with all capabilities dropped. They receive `.env`
 through `env_file`, but compose blanks `POSTGRES_PASSWORD`, `APP_DB_PASSWORD` and `REDIS_PASSWORD`
 in their environment: the app only needs those inside `DATABASE_URL` / `REDIS_URL`.
 `REQUIRE_SECRETS_KEY=true` makes the API refuse to start when `SECRETS_KEY` is missing or invalid
@@ -40,68 +42,126 @@ in their environment: the app only needs those inside `DATABASE_URL` / `REDIS_UR
 
 ## Cloudflare and reverse proxies
 
-Compose pins the `cvenom` network to `172.28.0.0/24` with gateway `172.28.0.1`. This matters
-because the proxy address the app must trust depends on how the proxy reaches it.
+The `frontend` service is an unprivileged nginx (`frontend/nginx.conf`). It serves the built SPA
+and proxies `/api/` and the WebSocket `/api/ws/live` to `api:8000` on the same origin, so the
+browser only ever talks to one origin and the CSP needs no remote sources. It is the only
+service that publishes a port: `127.0.0.1:8080`. The api publishes nothing.
 
-**(a) Cloudflare Tunnel or any reverse proxy running on the host** and connecting to
-`127.0.0.1:8000`. Docker NATs the published port, so the container sees the bridge **gateway
-`172.28.0.1`** as its peer. Set both to it (these are the defaults in compose and `.env.example`):
+Compose pins the `cvenom` network to `172.28.0.0/24` with gateway `172.28.0.1`, and pins nginx to
+`172.28.0.10`. The chain is:
 
 ```
-TRUSTED_PROXY_CIDRS='["172.28.0.1/32"]'
-FORWARDED_ALLOW_IPS=172.28.0.1
+visitor -> Cloudflare -> cloudflared (host) -> 127.0.0.1:8080
+        -> bridge gateway 172.28.0.1 -> nginx 172.28.0.10 -> api:8000
 ```
 
-How the client IP is resolved: uvicorn runs with `--proxy-headers`, so when the peer matches
-`FORWARDED_ALLOW_IPS` it rewrites the peer to the right-most untrusted `X-Forwarded-For` hop. The
-app then applies its own check (`TRUSTED_PROXY_CIDRS`) to that peer. Cloudflare always sends
-`X-Forwarded-For`, so in practice the right-most `X-Forwarded-For` hop is the client IP that is
-used.
+**(a) Point cloudflared (or any reverse proxy on the host) at `http://127.0.0.1:8080`.** Docker
+NATs the published port, so nginx sees the bridge **gateway `172.28.0.1`** as its TCP peer.
+Cloudflare puts the visitor in `X-Forwarded-For`. These are the defaults in compose and
+`.env.example`:
 
-`TRUST_CF_CONNECTING_IP` is therefore close to inert: `CF-Connecting-IP` is consulted only when a
-request from a trusted proxy carries **no** `X-Forwarded-For`. Set it to `true` only for cloudflared
-(every request must come through Cloudflare). For a non-Cloudflare host proxy (nginx, Caddy): have
-it strip any client-supplied `CF-Connecting-IP`, set `X-Forwarded-For` itself, and leave
-`TRUST_CF_CONNECTING_IP=false`.
+```
+TRUSTED_PROXY_CIDRS='["172.28.0.1/32","172.28.0.10/32"]'
+FORWARDED_ALLOW_IPS=172.28.0.1,172.28.0.10
+```
 
-**(b) A reverse proxy running as a container on the `cvenom` network.** The peer is that
-container's IP on `172.28.0.0/24`: give it a fixed `ipv4_address` and use `<ip>/32` (or the
-subnet) for both settings.
+How the real client IP is resolved:
+
+1. nginx trusts only the gateway (`set_real_ip_from 172.28.0.1`, `real_ip_recursive on`). It uses
+   the real visitor for its own coarse `limit_req` (20 r/s, burst 40 per client), never as a
+   security decision.
+2. nginx hands the api `X-Forwarded-For: <incoming chain>, 172.28.0.1`, i.e. the gateway is
+   appended as the last hop. (This is written out explicitly instead of
+   `$proxy_add_x_forwarded_for`, because `real_ip` rewrites `$remote_addr` to the visitor and the
+   gateway hop would otherwise be lost.)
+3. The api's TCP peer is nginx, `172.28.0.10`, which is in `FORWARDED_ALLOW_IPS`. uvicorn
+   (`--proxy-headers`) walks `X-Forwarded-For` right to left, skips every trusted hop
+   (`172.28.0.1`) and takes the first untrusted address as the client. A client that forges
+   `X-Forwarded-For: 1.2.3.4` only ends up further left, behind the real address that Cloudflare
+   appended, so it is never reached.
+4. The app's own check (`client_ip`, using `TRUSTED_PROXY_CIDRS`) then sees the visitor as the
+   peer, which is not a trusted proxy, and uses it as is. Both settings hold the same two hops so
+   that either layer alone resolves the same client.
+
+`CF-Connecting-IP` is **stripped** by nginx (`proxy_set_header CF-Connecting-IP ""`), so it never
+reaches the api, and `TRUST_CF_CONNECTING_IP` must stay `false` (the default). Cloudflare's
+`X-Forwarded-For` is the source of truth. If you ever want the header forwarded, remove that line
+from `nginx.conf` deliberately and set `TRUST_CF_CONNECTING_IP=true` only when every request
+comes through Cloudflare.
+
+**(b) A different reverse proxy as a container on the `cvenom` network** (instead of cloudflared
+on the host): give it a fixed `ipv4_address`, and trust that `<ip>/32` plus nginx in both settings.
 
 **(c) `127.0.0.1` is wrong for the published-port topology.** The connection arrives from the
-bridge gateway, not loopback. If `FORWARDED_ALLOW_IPS` is `127.0.0.1`, uvicorn ignores the
-forwarded headers and the peer stays `172.28.0.1`; the app's own `X-Forwarded-For` walk still
-separates visitors as long as `TRUSTED_PROXY_CIDRS` contains the gateway. What actually collapses
-every visitor into one rate-limit and login-throttle bucket is a `TRUSTED_PROXY_CIDRS` that does
-not contain the real peer (for example `127.0.0.1/32`): the app then never reads the forwarded
-headers. Set both settings to the gateway.
+bridge gateway, not loopback. If `FORWARDED_ALLOW_IPS` omitted the gateway or nginx, uvicorn
+would ignore the forwarded headers, and every visitor would collapse into one rate-limit and
+login-throttle bucket (the nginx peer). Keep both hops in both settings. If you change the
+network subnet, also change `set_real_ip_from` in `frontend/nginx.conf`.
 
 **(d) Verify.**
 
 1. Confirm the gateway: `docker network inspect deploy_cvenom --format '{{(index .IPAM.Config 0).Gateway}}'`
    (the network is `<project>_cvenom`; the project name is `deploy` unless you pass `-p`). It
    should print `172.28.0.1`.
-2. Request `/api/health` through the tunnel or proxy, then read the access log. uvicorn logs
+2. Request `/api/health` through the tunnel or proxy, then read the api access log. uvicorn logs
    access by default, so no rebuild is needed:
 
    ```sh
    docker compose --env-file ./.env -f deploy/docker-compose.prod.yml logs api
    ```
 
-   The client address on that line must be the real visitor's, not `172.28.0.1`. It shows the
-   peer after uvicorn's rewrite, so `172.28.0.1` there means `FORWARDED_ALLOW_IPS` does not match.
+   The client address on that line must be the real visitor's, not `172.28.0.1` and not
+   `172.28.0.10`. It is the peer after uvicorn's rewrite, so one of those two addresses there
+   means `FORWARDED_ALLOW_IPS` does not match the chain.
 3. **Docker Desktop (Windows/macOS):** published ports are forwarded through Docker Desktop's VM,
-   so the peer the container sees may not be the bridge gateway. Check the address in the access
-   log for a request sent directly to `127.0.0.1:8000`, and set both settings to that peer.
+   so the peer nginx sees may not be the bridge gateway. Request `127.0.0.1:8080` directly, read
+   which address nginx forwards (`docker compose --env-file ./.env -f deploy/docker-compose.prod.yml logs frontend`, and the api log), and adjust
+   `set_real_ip_from`, `FORWARDED_ALLOW_IPS` and `TRUSTED_PROXY_CIDRS` to that hop.
 
-**Lock down the origin.** Do not rely on Cloudflare alone. Keep `127.0.0.1:8000` bound to loopback
+**Lock down the origin.** Do not rely on Cloudflare alone. Keep `127.0.0.1:8080` bound to loopback
 (or firewall the port to the proxy), and if the origin is reachable from the internet, require
 Cloudflare Authenticated Origin Pulls (mTLS) or restrict the firewall to Cloudflare's published
-ranges. A request that bypasses Cloudflare must not be able to spoof client IPs or skip its rate
-limits.
+ranges. nginx's own limits (64 KB request bodies, bounded headers, a per-client request rate) are a
+backstop, not a replacement. A request that bypasses Cloudflare must not be able to spoof client
+IPs or skip its rate limits.
 
-`FORWARDED_ALLOW_IPS` is passed to uvicorn `--forwarded-allow-ips`; it must match the proxy that
-connects to the container, otherwise forwarded headers are ignored (default `127.0.0.1`).
+`FORWARDED_ALLOW_IPS` is passed to uvicorn `--forwarded-allow-ips`; it must match the proxies that
+connect to the container, otherwise forwarded headers are ignored (the image default is
+`127.0.0.1`; compose sets `172.28.0.1,172.28.0.10`).
+
+## Content Security Policy and security headers
+
+nginx sends these on every response (`always`, including errors); proxied `/api` responses also
+keep the API's own headers and `Cache-Control`:
+
+```
+Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;
+  font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none';
+  base-uri 'none'; form-action 'self'; upgrade-insecure-requests
+Strict-Transport-Security: max-age=63072000; includeSubDomains
+X-Content-Type-Options: nosniff    Referrer-Policy: no-referrer    X-Frame-Options: DENY
+Cross-Origin-Opener-Policy: same-origin    Cross-Origin-Resource-Policy: same-origin
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()
+```
+
+There is no `unsafe-inline`, `unsafe-eval`, `blob:` or remote origin. `connect-src 'self'` covers
+the same-origin `wss://` live socket in current Chromium and Firefox (checked by
+`frontend/e2e/csp.spec.ts`, which serves `dist/` with exactly the headers parsed from
+`nginx.conf`). Fonts are real files (never `data:` URIs) because of `font-src 'self'`; the map
+worker is a same-origin module worker; React and MapLibre set styles through the CSSOM, which
+`style-src 'self'` allows. `index.html` carries no inline script or style.
+
+- **API docs vs CSP.** `/docs` and `/redoc` (`API_DOCS=true`) load Swagger UI / ReDoc from a CDN
+  with inline scripts, which this policy blocks: they render blank. That is intentional; keep
+  `API_DOCS=false`. `/openapi.json` still works. To read the docs, hit the api directly from a
+  trusted host (publish a loopback port in a local override) rather than loosening the CSP.
+- **Adding an origin.** Only when you truly need one (for example a tile server): add it to the
+  one directive that needs it in `frontend/nginx.conf` (for tiles, `connect-src 'self'
+  https://tiles.example.com`), never to `default-src`, then rebuild the frontend image. The
+  packaging tests still require no `unsafe-*`, no `blob:` and no wildcard. Update the e2e and
+  `src/test/project.test.ts` (which forbids remote URLs in the bundle) in the same change.
+- Headers are declared only at server level in `nginx.conf`: nginx drops inherited `add_header`
+  lines in any `location` that declares its own, so do not add one inside a `location`.
 
 ## Exposure settings
 
@@ -109,9 +169,9 @@ connects to the container, otherwise forwarded headers are ignored (default `127
   login for everything.
 - `CORS_ORIGINS`: JSON list of exact origins, e.g. `'["https://cvenom.example.com"]'`. No wildcards.
   Empty means same-origin only.
-- `API_DOCS` (default `false`): enables `/docs` and `/redoc`. Keep off in production. Note that
-  the strict `Content-Security-Policy` (`default-src 'none'`) blocks the Swagger UI / ReDoc assets,
-  so those pages render blank; `/openapi.json` itself works.
+- `API_DOCS` (default `false`): enables `/docs` and `/redoc`. Keep off in production. The strict
+  `Content-Security-Policy` blocks the Swagger UI / ReDoc assets, so those pages render blank;
+  `/openapi.json` itself works (see "Content Security Policy" above).
 
 ## Alert rules
 
@@ -176,6 +236,9 @@ path is a mounted `redis.conf` or a Docker secret.
   to anonymous viewers.
 - Use a single key; do not rotate multiple keys to avoid quotas.
 - Raw ransomware.live data must not be exported or published.
+- The UI credits the source wherever a ransomware.live story is shown ("Ransomware data:
+  ransomware.live", a link to https://www.ransomware.live). Anonymous viewers of a CVE whose story
+  count includes hidden sources see "Some sources are visible to signed-in users only."
 - Story and per-CVE counts (`recent_story_count`) and lane placement include ransomware.live
   stories for everyone: they are aggregate statistics, not records.
 

@@ -18,10 +18,19 @@ export default defineConfig({
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
     { name: "firefox", use: { ...devices["Desktop Firefox"] } },
   ],
-  webServer: {
-    command: "npm run build && npm run preview -- --port 4173 --strictPort",
-    url: "http://localhost:4173",
-    reuseExistingServer: false,
-    timeout: 180_000,
-  },
+  webServer: [
+    {
+      command: "npm run build && npm run preview -- --port 4173 --strictPort",
+      url: "http://localhost:4173",
+      reuseExistingServer: false,
+      timeout: 180_000,
+    },
+    {
+      // csp.spec.ts: the same dist/ with the headers parsed from nginx.conf. Started after the build above.
+      command: "node e2e/csp-server.mjs",
+      url: "http://127.0.0.1:4174/healthz",
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+  ],
 });
