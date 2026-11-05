@@ -110,3 +110,26 @@ def test_second_run_no_change_emits_nothing():
 def test_registered():
     assert base.REGISTRY["cisa_kev"] is KevCollector
     assert KevCollector.cadence_seconds == 3600
+
+
+def test_truncated_feed_does_not_shrink_seen_or_replay():
+    ids = ["CVE-2026-1001", "CVE-2026-1002", "CVE-2026-1003"]
+    k = KevCollector(state={"seen": list(ids)})
+    assert k.normalize(_feed()).events == []
+    assert k.state["seen"] == ids
+    assert k.normalize(_three()).events == []
+    assert k.state["seen"] == ids
+
+
+def test_non_dict_element_skipped():
+    feed = _feed(_entry("CVE-2026-1001"), "garbage", None, 5, _entry("CVE-2026-1002"))
+    res = KevCollector().normalize(feed)
+    assert {c.cve_id for c in res.cves} == {"CVE-2026-1001", "CVE-2026-1002"}
+
+
+@pytest.mark.parametrize("bad", [None, "CVE-2026-1001", 7, {"a": 1}])
+def test_corrupt_seen_state_treated_as_empty_prior(bad):
+    k = KevCollector(state={"seen": bad})
+    res = k.normalize(_three())
+    assert len(res.events) == 3
+    assert k.state["seen"] == ["CVE-2026-1001", "CVE-2026-1002", "CVE-2026-1003"]

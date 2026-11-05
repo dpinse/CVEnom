@@ -32,11 +32,11 @@ class KevCollector(Collector):
     def normalize(self, raw: dict) -> CollectorResult:
         cves: list[NormalizedCve] = []
         for rec in raw.get("vulnerabilities") or []:
-            cve_id = rec.get("cveID")
-            if not cve_id:
-                log.warning("kev: skipping entry without cveID")
-                continue
+            cve_id = None
             try:
+                cve_id = rec["cveID"]
+                if not cve_id:
+                    raise ValueError("empty cveID")
                 cves.append(
                     NormalizedCve(
                         cve_id=cve_id,
@@ -52,7 +52,11 @@ class KevCollector(Collector):
         current = {c.cve_id for c in cves}
         if "seen" not in self.state:
             events: list[dict] = []  # first run: baseline only, no alert flood
+            prior: set[str] = set()
         else:
-            events = self.diff(set(self.state["seen"]), current)
-        self.state["seen"] = sorted(current)
+            stored = self.state["seen"]
+            prior = {x for x in stored if isinstance(x, str)} if isinstance(stored, list) else set()
+            events = self.diff(prior, current)
+        # KEV is append-only: union so a truncated feed never shrinks the baseline.
+        self.state["seen"] = sorted(prior | current)
         return CollectorResult(cves=cves, events=events)

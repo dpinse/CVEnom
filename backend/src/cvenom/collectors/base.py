@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -36,7 +37,7 @@ class Collector(ABC):
 
     def __init__(self, since: datetime | None = None, state: dict | None = None) -> None:
         self.since = since
-        self.state = dict(state or {})
+        self.state = copy.deepcopy(state or {})
 
     @abstractmethod
     async def fetch(self) -> Any: ...

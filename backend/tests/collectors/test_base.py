@@ -160,3 +160,20 @@ def test_collector_init_stores_since_and_copies_state():
     c.state["seen"] = ["b"]
     assert state == {"seen": ["a"]}
     assert C().state == {}
+
+
+def test_collector_init_deep_copies_nested_state():
+    class C(Collector):
+        name = "c2"
+        cadence_seconds = 1
+
+        async def fetch(self):
+            return None
+
+        def normalize(self, raw):
+            return CollectorResult()
+
+    state = {"seen": ["a"]}
+    c = C(state=state)
+    state["seen"].append("z")
+    assert c.state == {"seen": ["a"]}
