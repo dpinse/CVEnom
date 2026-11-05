@@ -50,13 +50,24 @@ function open(qc: QueryClient = createQueryClient()) {
 const rowOf = async (email: string) => (await screen.findByText(email)).closest("tr")!;
 const cacheDump = (qc: QueryClient) =>
   JSON.stringify([
-    qc.getQueryCache().getAll().map((q) => ({ k: q.queryKey, d: q.state.data })),
-    qc.getMutationCache().getAll().map((m) => ({ v: m.state.variables, d: m.state.data })),
+    qc
+      .getQueryCache()
+      .getAll()
+      .map((q) => ({ k: q.queryKey, d: q.state.data })),
+    qc
+      .getMutationCache()
+      .getAll()
+      .map((m) => ({ v: m.state.variables, d: m.state.data })),
   ]);
 
 beforeEach(() => {
   signIn(admin);
-  users = [mk({ id: 1, email: "admin@example.com", role: "admin" }), mk({}), mk({ id: 3, email: "carol@example.com", role: "admin" }), mk({ id: 4, email: "dan@example.com", is_active: false })];
+  users = [
+    mk({ id: 1, email: "admin@example.com", role: "admin" }),
+    mk({}),
+    mk({ id: 3, email: "carol@example.com", role: "admin" }),
+    mk({ id: 4, email: "dan@example.com", is_active: false }),
+  ];
 });
 
 describe("AdminUsers", () => {

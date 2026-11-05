@@ -17,7 +17,12 @@ const SIGNED_IN_CVE = {
   ...CVE_FIXTURE,
   stories: [
     ...CVE_FIXTURE.stories,
-    { title: VICTIM, url: "https://www.ransomware.live/e2e", source: "ransomware.live", published: "2026-11-05T09:00:00Z" },
+    {
+      title: VICTIM,
+      url: "https://www.ransomware.live/e2e",
+      source: "ransomware.live",
+      published: "2026-11-05T09:00:00Z",
+    },
   ],
 };
 

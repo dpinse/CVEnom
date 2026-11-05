@@ -61,7 +61,12 @@ export function StoryDetail({ url }: { url: string }) {
           ) : (
             ids.map((id, i) =>
               typeof id === "string" && CVE_ID_RE.test(id) ? (
-                <button key={`${id}#${i}`} type="button" className="chip linked" onClick={() => select({ kind: "cve", id })}>
+                <button
+                  key={`${id}#${i}`}
+                  type="button"
+                  className="chip linked"
+                  onClick={() => select({ kind: "cve", id })}
+                >
                   {id}
                 </button>
               ) : (

@@ -90,7 +90,9 @@ test("per-URI CSP: the SPA shell, its fallback and /assets/* get the SPA policy,
   expect(CSP).toContain("script-src 'self'");
 });
 
-test("per-URI CSP: /api/ responses (here nginx's own 502) get the api's strict policy, exactly once", async ({ request }) => {
+test("per-URI CSP: /api/ responses (here nginx's own 502) get the api's strict policy, exactly once", async ({
+  request,
+}) => {
   expect(API_CSP).not.toBe(CSP);
   expect(API_CSP).toMatch(/^default-src 'none';/);
   expect(API_CSP).toContain("frame-ancestors 'none'");
@@ -110,7 +112,10 @@ test("per-URI CSP: the /api/ws/live WebSocket handshake gets the api's strict po
   expect(API_CSP).not.toBe(CSP);
 });
 
-test("dashboard under the production CSP: zero violations, the globe draws, no console errors", async ({ page, guards }) => {
+test("dashboard under the production CSP: zero violations, the globe draws, no console errors", async ({
+  page,
+  guards,
+}) => {
   await loaded(page);
   await expect(page.locator(".globe-map canvas").first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Couldn't load the map")).toHaveCount(0);
@@ -163,7 +168,9 @@ test("positive controls: the violation collector sees off-origin fetches and Web
       /* a synchronous block is fine too */
     }
   });
-  await expect.poll(async () => (await violations(page)).map((v) => v.directive).sort()).toEqual(["connect-src", "connect-src"]);
+  await expect
+    .poll(async () => (await violations(page)).map((v) => v.directive).sort())
+    .toEqual(["connect-src", "connect-src"]);
   // The blocked attempts also log console errors / show up as requests; they are the expected outcome here.
   guards.consoleErrors.length = 0;
   guards.offOrigin.length = 0;

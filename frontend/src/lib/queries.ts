@@ -9,7 +9,16 @@ import {
 import { useSyncExternalStore } from "react";
 import { ApiError, AuthError, RateLimited, api, authStore } from "./api";
 import type { AuthSnapshot } from "./tokenStore";
-import type { CveDetail, CveListOut, CveQuery, GeoSummaryItem, Health, LanesOut, LoudStory, VelocityOut } from "./types";
+import type {
+  CveDetail,
+  CveListOut,
+  CveQuery,
+  GeoSummaryItem,
+  Health,
+  LanesOut,
+  LoudStory,
+  VelocityOut,
+} from "./types";
 
 /** Query keys. Shared with the live-update invalidation map (live.ts) and later tasks. */
 export const qk = {
@@ -152,10 +161,13 @@ export function fetchHealth(): Promise<Health> {
 }
 
 export function useHealth() {
-  return useRead({
-    queryKey: qk.health(),
-    queryFn: () => fetchHealth(),
-  }, true);
+  return useRead(
+    {
+      queryKey: qk.health(),
+      queryFn: () => fetchHealth(),
+    },
+    true,
+  );
 }
 
 export function useLanes() {
@@ -215,4 +227,3 @@ export function useCveSearch(params: CveQuery) {
     placeholderData: keepPreviousData,
   });
 }
-

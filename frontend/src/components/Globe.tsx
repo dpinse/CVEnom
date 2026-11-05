@@ -24,7 +24,10 @@ export default function Globe() {
   const ctlRef = useRef<GlobeController | null>(null);
   const [failed, setFailed] = useState<GlobeFailure | null>(null);
 
-  const data = useMemo(() => ({ countries: withShading(toCountryShading(items)), hotspots: toHotspots(items) }), [items]);
+  const data = useMemo(
+    () => ({ countries: withShading(toCountryShading(items)), hotspots: toHotspots(items) }),
+    [items],
+  );
 
   // Create the map once; tear everything down on unmount.
   useEffect(() => {

@@ -24,17 +24,20 @@ export function useSelection() {
   const selection = useMemo(() => parseSelection(sp), [sp]);
   const select = useCallback(
     (s: Selection | null, opts?: { replace?: boolean }) => {
-      setSp((prev) => {
-        const next = new URLSearchParams(prev);
-        next.delete("cve");
-        next.delete("story");
-        if (s?.kind === "cve" && CVE_ID_RE.test(s.id)) next.set("cve", s.id);
-        else if (s?.kind === "story") {
-          const url = safeHref(s.url);
-          if (url !== null) next.set("story", url);
-        }
-        return next;
-      }, opts?.replace ? { replace: true } : undefined);
+      setSp(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("cve");
+          next.delete("story");
+          if (s?.kind === "cve" && CVE_ID_RE.test(s.id)) next.set("cve", s.id);
+          else if (s?.kind === "story") {
+            const url = safeHref(s.url);
+            if (url !== null) next.set("story", url);
+          }
+          return next;
+        },
+        opts?.replace ? { replace: true } : undefined,
+      );
     },
     [setSp],
   );

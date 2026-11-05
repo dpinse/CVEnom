@@ -48,7 +48,8 @@ export function recipientProblem(d: RecipientDraft): string | null {
   if (raw.length > 4096 || u.protocol !== "https:") return "Webhook address must use https";
   if (u.username !== "" || u.password !== "") return "Webhook address must not contain a username or password";
   const s = d.secret;
-  if (s !== "" && (s.length < 16 || s.length > 256)) return "Webhook secret must be 16 to 256 characters (or leave blank to generate one)";
+  if (s !== "" && (s.length < 16 || s.length > 256))
+    return "Webhook secret must be 16 to 256 characters (or leave blank to generate one)";
   return null;
 }
 
@@ -76,20 +77,29 @@ export function conditionProblem(
   if (kind === "keyword") {
     const k = keywordRaw.trim();
     if (k.length < 1 || k.length > 100 || hasControl(k)) {
-      return { threshold: null, keyword: null, problem: "Keyword must be 1 to 100 characters with no control characters" };
+      return {
+        threshold: null,
+        keyword: null,
+        problem: "Keyword must be 1 to 100 characters with no control characters",
+      };
     }
     return { threshold: null, keyword: k, problem: null };
   }
   const hi = kind === "cvss_min" ? 10 : 1;
   const n = parseNumber(thresholdRaw);
   if (n === null || n < 0 || n > hi) {
-    return { threshold: null, keyword: null, problem: `${kind === "cvss_min" ? "CVSS" : "EPSS"} threshold must be a number between 0 and ${hi}` };
+    return {
+      threshold: null,
+      keyword: null,
+      problem: `${kind === "cvss_min" ? "CVSS" : "EPSS"} threshold must be a number between 0 and ${hi}`,
+    };
   }
   return { threshold: n, keyword: null, problem: null };
 }
 
 export function nameProblem(name: string): string | null {
   const n = name.trim();
-  if (n.length < 1 || n.length > 200 || hasControl(n)) return "Name must be 1 to 200 characters with no control characters";
+  if (n.length < 1 || n.length > 200 || hasControl(n))
+    return "Name must be 1 to 200 characters with no control characters";
   return null;
 }

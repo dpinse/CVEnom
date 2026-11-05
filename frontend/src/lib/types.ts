@@ -198,8 +198,7 @@ export interface AlertRule {
 /** The member-role view of a rule: the recipient list is never sent. */
 export type MemberAlertRule = Omit<AlertRule, "recipients">;
 export type RecipientIn =
-  | { channel: "email"; email: string }
-  | { channel: "webhook"; url: string; secret?: string | null };
+  { channel: "email"; email: string } | { channel: "webhook"; url: string; secret?: string | null };
 export interface RuleCreate {
   name: string;
   kind: RuleKind;

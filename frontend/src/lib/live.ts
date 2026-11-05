@@ -48,11 +48,13 @@ export const THROTTLE_JITTER_MS = 15_000;
 export const HEALTHY_MS = 10_000;
 
 /** Server `what` value -> query-key roots to invalidate. Unknown values are ignored. */
-const INVALIDATES = new Map<string, readonly string[]>(Object.entries({
-  lanes: ["lanes", "velocity", "cve", "cves"],
-  stories: ["loud"],
-  geo: ["geo"],
-}));
+const INVALIDATES = new Map<string, readonly string[]>(
+  Object.entries({
+    lanes: ["lanes", "velocity", "cve", "cves"],
+    stories: ["loud"],
+    geo: ["geo"],
+  }),
+);
 
 export function liveUrl(loc: Pick<Location, "protocol" | "host"> = location): string {
   return `${loc.protocol === "https:" ? "wss:" : "ws:"}//${loc.host}/api/ws/live`;

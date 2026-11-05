@@ -42,7 +42,9 @@ export function parseNginxHeaders(conf: string): (uri: string) => Header[] {
   const maps = parseUriMaps(conf);
   const literal: Header[] = [];
   const mapped: [string, UriMap][] = [];
-  for (const [, name, value, variable] of conf.matchAll(/^\s*add_header\s+([A-Za-z-]+)\s+(?:"([^"]*)"|\$(\w+))\s+always;/gm)) {
+  for (const [, name, value, variable] of conf.matchAll(
+    /^\s*add_header\s+([A-Za-z-]+)\s+(?:"([^"]*)"|\$(\w+))\s+always;/gm,
+  )) {
     if (value !== undefined) literal.push([name, value]);
     else if (maps.has(variable)) mapped.push([name, maps.get(variable)!]);
   }

@@ -482,7 +482,10 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
     if (destroyed) return;
     loaded = true;
     tokens = readGlobeTokens();
-    const d = pending ?? { countries: { type: "FeatureCollection", features: [] }, hotspots: { type: "FeatureCollection", features: [] } };
+    const d = pending ?? {
+      countries: { type: "FeatureCollection", features: [] },
+      hotspots: { type: "FeatureCollection", features: [] },
+    };
     map.addSource("countries", { type: "geojson", data: d.countries });
     map.addSource("hotspots", { type: "geojson", data: d.hotspots });
     for (const layer of dataLayers(tokens)) map.addLayer(layer);

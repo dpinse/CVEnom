@@ -33,7 +33,9 @@ export const fill = (label: RegExp | string, value: string) =>
 
 export function loginOk() {
   server.use(
-    http.post("http://localhost/api/auth/login", () => HttpResponse.json({ access_token: "tok", token_type: "bearer", expires_in: 900 })),
+    http.post("http://localhost/api/auth/login", () =>
+      HttpResponse.json({ access_token: "tok", token_type: "bearer", expires_in: 900 }),
+    ),
     http.get("http://localhost/api/auth/me", () => HttpResponse.json(member)),
   );
 }

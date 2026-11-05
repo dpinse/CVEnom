@@ -28,7 +28,14 @@ const mkInvite = (o: Partial<InviteOut> = {}): InviteOut => ({
   created_by: 1,
   ...o,
 });
-const adminUser: UserAdmin = { id: 1, email: "admin@example.com", role: "admin", is_active: true, created_at: "2026-10-01T00:00:00Z", active_sessions: 1 };
+const adminUser: UserAdmin = {
+  id: 1,
+  email: "admin@example.com",
+  role: "admin",
+  is_active: true,
+  created_at: "2026-10-01T00:00:00Z",
+  active_sessions: 1,
+};
 
 let invites: InviteOut[] = [];
 let usersStatus = 200;
@@ -41,13 +48,21 @@ function mock() {
   calls.length = 0;
   server.use(
     http.get(`${A}/invites`, () => HttpResponse.json(invites)),
-    http.get(`${A}/users`, () => (usersStatus === 200 ? HttpResponse.json([adminUser]) : HttpResponse.json({ error: "x" }, { status: usersStatus }))),
+    http.get(`${A}/users`, () =>
+      usersStatus === 200 ? HttpResponse.json([adminUser]) : HttpResponse.json({ error: "x" }, { status: usersStatus }),
+    ),
   );
 }
 const cacheDump = (qc: QueryClient) =>
   JSON.stringify([
-    qc.getQueryCache().getAll().map((q) => ({ k: q.queryKey, d: q.state.data })),
-    qc.getMutationCache().getAll().map((m) => ({ v: m.state.variables, d: m.state.data })),
+    qc
+      .getQueryCache()
+      .getAll()
+      .map((q) => ({ k: q.queryKey, d: q.state.data })),
+    qc
+      .getMutationCache()
+      .getAll()
+      .map((m) => ({ v: m.state.variables, d: m.state.data })),
   ]);
 function open(qc: QueryClient = createQueryClient()) {
   renderAt(
@@ -116,7 +131,11 @@ describe("AdminInvites", () => {
 
   test("the link is discarded when the page unmounts", async () => {
     mock();
-    server.use(http.post(`${A}/invites`, () => HttpResponse.json({ token: TOKEN, expires_at: "2026-11-08T12:00:00Z" }, { status: 201 })));
+    server.use(
+      http.post(`${A}/invites`, () =>
+        HttpResponse.json({ token: TOKEN, expires_at: "2026-11-08T12:00:00Z" }, { status: 201 }),
+      ),
+    );
     open();
     fireEvent.change(await screen.findByLabelText("Email"), { target: { value: "a@example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Create invite" }));
@@ -136,7 +155,10 @@ describe("AdminInvites", () => {
   });
 
   test("lists pending invites with created-by from the users list, falls back to the id, and revokes after an in-page confirm", async () => {
-    invites = [mkInvite({ id: 1, created_by: 1 }), mkInvite({ id: 2, email: "reset@example.com", purpose: "reset", created_by: 77 })];
+    invites = [
+      mkInvite({ id: 1, created_by: 1 }),
+      mkInvite({ id: 2, email: "reset@example.com", purpose: "reset", created_by: 77 }),
+    ];
     mock();
     const confirm = vi.spyOn(window, "confirm");
     server.use(
@@ -179,7 +201,9 @@ describe("admin guard", () => {
   test.each(["/admin/invites", "/admin/users", "/admin/alerts"])("a member never renders %s", async (path) => {
     server.use(
       http.get("http://localhost/api/health", () => HttpResponse.json({ status: "ok", public_read: true })),
-      http.get("http://localhost/api/lanes", () => HttpResponse.json({ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] })),
+      http.get("http://localhost/api/lanes", () =>
+        HttpResponse.json({ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] }),
+      ),
     );
     signIn(member);
     let hit = 0;

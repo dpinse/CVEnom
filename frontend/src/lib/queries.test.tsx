@@ -148,7 +148,9 @@ describe("hooks", () => {
     const g = renderHook(() => useGeo(), { wrapper });
     const l = renderHook(() => useLoudStories(10), { wrapper });
     const c = renderHook(() => useCve("CVE-2025-1"), { wrapper });
-    const s = renderHook(() => useCveSearch({ q: "log4j", kev: true, min_cvss: 7, page: 2, lane: undefined }), { wrapper });
+    const s = renderHook(() => useCveSearch({ q: "log4j", kev: true, min_cvss: 7, page: 2, lane: undefined }), {
+      wrapper,
+    });
     await waitFor(() => {
       for (const h of [v, g, l, c, s]) expect(h.result.current.isSuccess).toBe(true);
     });
@@ -241,7 +243,9 @@ describe("I3: error-state polling", () => {
       server.use(
         http.get(`${B}/lanes`, () => {
           calls++;
-          return calls === 1 ? HttpResponse.json({ error: "gone" }, { status: 404 }) : HttpResponse.json({ EXPLOITED: [] });
+          return calls === 1
+            ? HttpResponse.json({ error: "gone" }, { status: 404 })
+            : HttpResponse.json({ EXPLOITED: [] });
         }),
       );
       const { result } = renderHook(() => useLanes(), { wrapper });

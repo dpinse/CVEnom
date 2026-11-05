@@ -96,8 +96,7 @@ export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
       if (err instanceof ApiError && err.status === 400) fail([INVALID]);
       else if (err instanceof ApiError && err.status === 422) {
         fail([err.code === "weak_password" ? POLICY_MESSAGE : INVALID]);
-      }
-      else fail([commonError(err)]);
+      } else fail([commonError(err)]);
     } finally {
       busy.current = false;
       setPending(false);
@@ -109,8 +108,23 @@ export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
     <AuthCard title={mode === "reset" ? "Reset password" : "Accept invite"}>
       <form className="authform" onSubmit={(e) => void onSubmit(e)}>
         <ErrorSummary errors={errors} tick={tick} />
-        <Field label="New password" hint={`At least ${MIN_PASSWORD} characters.`} type={type} value={pw} onChange={setPw} autoComplete="new-password" maxLength={MAX_PASSWORD_INPUT} />
-        <Field label="Confirm password" type={type} value={confirm} onChange={setConfirm} autoComplete="new-password" maxLength={MAX_PASSWORD_INPUT} />
+        <Field
+          label="New password"
+          hint={`At least ${MIN_PASSWORD} characters.`}
+          type={type}
+          value={pw}
+          onChange={setPw}
+          autoComplete="new-password"
+          maxLength={MAX_PASSWORD_INPUT}
+        />
+        <Field
+          label="Confirm password"
+          type={type}
+          value={confirm}
+          onChange={setConfirm}
+          autoComplete="new-password"
+          maxLength={MAX_PASSWORD_INPUT}
+        />
         <ShowToggle shown={show} onToggle={() => setShow((s) => !s)} />
         <button type="submit" className="btn primary" disabled={pending}>
           {mode === "reset" ? "Set new password" : "Create account"}

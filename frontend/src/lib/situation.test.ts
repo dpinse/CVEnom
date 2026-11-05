@@ -3,7 +3,8 @@ import { item } from "../test/shell";
 import { recentKev, situationLevel } from "./situation";
 
 const NOW = new Date("2026-11-05T12:00:00Z");
-const many = (n: number) => Array.from({ length: n }, (_, i) => item({ cve_id: `CVE-2020-${i}`, kev_added: "2026-01-01" }));
+const many = (n: number) =>
+  Array.from({ length: n }, (_, i) => item({ cve_id: `CVE-2020-${i}`, kev_added: "2026-01-01" }));
 
 describe("situationLevel", () => {
   test.each([

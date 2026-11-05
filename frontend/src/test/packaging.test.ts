@@ -11,7 +11,13 @@ describe("nginx.conf", () => {
   const conf = existsSync(join(root, "nginx.conf")) ? read("nginx.conf") : "";
   const API_CSP = "default-src 'none'; frame-ancestors 'none'";
   const csp = conf ? cspFor(conf, "/") : "";
-  const directives = new Map(csp.split(";").map((d) => d.trim()).filter(Boolean).map((d) => [d.split(" ")[0], d] as const));
+  const directives = new Map(
+    csp
+      .split(";")
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => [d.split(" ")[0], d] as const),
+  );
 
   it("exists and hides the version", () => {
     expect(conf).toContain("server_tokens off;");
@@ -40,8 +46,19 @@ describe("nginx.conf", () => {
     expect(conf).not.toMatch(/map \$request_uri/);
   });
   it("/api/ responses get exactly the api's strict policy; nothing else does", () => {
-    for (const uri of ["/api/", "/api/health", "/api/auth/refresh", "/api/ws/live"]) expect(cspFor(conf, uri), uri).toBe(API_CSP);
-    for (const uri of ["/", "/index.html", "/assets/index-abc.js", "/healthz", "/login", "/apix", "/api", "/x/api/", "/API/x"]) {
+    for (const uri of ["/api/", "/api/health", "/api/auth/refresh", "/api/ws/live"])
+      expect(cspFor(conf, uri), uri).toBe(API_CSP);
+    for (const uri of [
+      "/",
+      "/index.html",
+      "/assets/index-abc.js",
+      "/healthz",
+      "/login",
+      "/apix",
+      "/api",
+      "/x/api/",
+      "/API/x",
+    ]) {
       expect(cspFor(conf, uri), uri).toBe(csp);
     }
     expect(csp).not.toBe(API_CSP);
@@ -89,7 +106,13 @@ describe("nginx.conf", () => {
     expect(serverLevel).not.toContain("limit_req zone=");
     expect(conf.match(/limit_req zone=/g)).toHaveLength(2);
     // the api's own copies of these five headers are hidden in both proxied locations
-    for (const h of ["Content-Security-Policy", "Strict-Transport-Security", "X-Content-Type-Options", "Referrer-Policy", "X-Frame-Options"]) {
+    for (const h of [
+      "Content-Security-Policy",
+      "Strict-Transport-Security",
+      "X-Content-Type-Options",
+      "Referrer-Policy",
+      "X-Frame-Options",
+    ]) {
       expect(conf.match(new RegExp(`proxy_hide_header ${h};`, "g")), h).toHaveLength(2);
     }
     expect(conf).not.toMatch(/proxy_hide_header (Permissions-Policy|Cache-Control|Cross-Origin)/);

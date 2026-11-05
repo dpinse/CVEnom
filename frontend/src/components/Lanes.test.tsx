@@ -62,9 +62,15 @@ describe("LanesView ransomware credit", () => {
     );
     const rows = screen.getAllByTestId("story-row");
     expect(rows).toHaveLength(2);
-    expect(within(rows[0]).queryAllByTestId("ransomware-credit").length + within(rows[1]).queryAllByTestId("ransomware-credit").length).toBe(1);
+    expect(
+      within(rows[0]).queryAllByTestId("ransomware-credit").length +
+        within(rows[1]).queryAllByTestId("ransomware-credit").length,
+    ).toBe(1);
     const credit = screen.getByTestId("ransomware-credit");
-    expect(within(credit).getByRole("link", { name: "ransomware.live" })).toHaveAttribute("href", "https://www.ransomware.live/");
+    expect(within(credit).getByRole("link", { name: "ransomware.live" })).toHaveAttribute(
+      "href",
+      "https://www.ransomware.live/",
+    );
   });
 });
 
@@ -80,7 +86,12 @@ describe("LanesView", () => {
     const k = (id: string) => item({ cve_id: id, kev: true });
     const { container } = render(
       <LanesView
-        lanes={{ EXPLOITED: [k("CVE-2026-0001")], LIKELY: [k("CVE-2026-0002")], LOUD: [k("CVE-2026-0003")], FRESH: [k("CVE-2026-0004")] }}
+        lanes={{
+          EXPLOITED: [k("CVE-2026-0001")],
+          LIKELY: [k("CVE-2026-0002")],
+          LOUD: [k("CVE-2026-0003")],
+          FRESH: [k("CVE-2026-0004")],
+        }}
         onSelect={noop}
         now={NOW}
       />,
@@ -93,7 +104,11 @@ describe("LanesView", () => {
 
   test("null cvss and epss omit their chips without crashing", () => {
     const { container } = render(
-      <LanesView lanes={{ EXPLOITED: [item({ cvss: null, epss_percentile: null, kev: false })] }} onSelect={noop} now={NOW} />,
+      <LanesView
+        lanes={{ EXPLOITED: [item({ cvss: null, epss_percentile: null, kev: false })] }}
+        onSelect={noop}
+        now={NOW}
+      />,
     );
     expect(container.querySelector(".chip.num")).toBeNull();
     expect(screen.queryByText(/EPSS/)).toBeNull();
@@ -104,7 +119,15 @@ describe("LanesView", () => {
       <LanesView
         lanes={{
           EXPLOITED: [
-            item({ cvss: 7.5, epss_percentile: 0.876, kev_added: "2026-11-01", kev_source: "cisa", poc_badge: true, patch_available: false, recent_story_count: 3 }),
+            item({
+              cvss: 7.5,
+              epss_percentile: 0.876,
+              kev_added: "2026-11-01",
+              kev_source: "cisa",
+              poc_badge: true,
+              patch_available: false,
+              recent_story_count: 3,
+            }),
           ],
         }}
         onSelect={noop}
@@ -120,13 +143,25 @@ describe("LanesView", () => {
   });
 
   test("patch_available true or null shows no 'no patch' chip", () => {
-    render(<LanesView lanes={{ EXPLOITED: [item({ patch_available: true }), item({ cve_id: "CVE-2026-0002", patch_available: null })] }} onSelect={noop} now={NOW} />);
+    render(
+      <LanesView
+        lanes={{
+          EXPLOITED: [item({ patch_available: true }), item({ cve_id: "CVE-2026-0002", patch_available: null })],
+        }}
+        onSelect={noop}
+        now={NOW}
+      />,
+    );
     expect(screen.queryByText("no patch")).toBeNull();
   });
 
   test("summary with &lt;script&gt; renders literally with no script element", () => {
     const { container } = render(
-      <LanesView lanes={{ FRESH: [item({ kev: false, summary: "&lt;script&gt;alert(1)&lt;/script&gt;" })] }} onSelect={noop} now={NOW} />,
+      <LanesView
+        lanes={{ FRESH: [item({ kev: false, summary: "&lt;script&gt;alert(1)&lt;/script&gt;" })] }}
+        onSelect={noop}
+        now={NOW}
+      />,
     );
     expect(screen.getByText("<script>alert(1)</script>")).toBeInTheDocument();
     expect(container.querySelector("script")).toBeNull();
@@ -141,14 +176,18 @@ describe("LanesView", () => {
     [4.0, "med"],
     [null, "low"],
   ])("severity bucket for cvss %s is %s", (cvss, sev) => {
-    const { container } = render(<LanesView lanes={{ FRESH: [item({ cvss, kev: false })] }} onSelect={noop} now={NOW} />);
+    const { container } = render(
+      <LanesView lanes={{ FRESH: [item({ cvss, kev: false })] }} onSelect={noop} now={NOW} />,
+    );
     const row = container.querySelector(".row")!;
     expect(row).toHaveAttribute("data-sev", sev);
     expect(row).toHaveAttribute("data-edge", sev);
   });
 
   test("KEV overrides the severity edge", () => {
-    const { container } = render(<LanesView lanes={{ EXPLOITED: [item({ cvss: 2, kev: true })] }} onSelect={noop} now={NOW} />);
+    const { container } = render(
+      <LanesView lanes={{ EXPLOITED: [item({ cvss: 2, kev: true })] }} onSelect={noop} now={NOW} />,
+    );
     const row = container.querySelector(".row")!;
     expect(row).toHaveClass("live");
     expect(row).toHaveAttribute("data-edge", "live");
@@ -265,15 +304,15 @@ describe("LanesView", () => {
 
   test("I3: the banner counts down to the real next refetch, then says it is retrying now", () => {
     const t0 = NOW.getTime();
-    const { rerender } = render(
-      <LanesView error={new Error("x")} retryAt={t0 + 30_000} now={NOW} onSelect={noop} />,
-    );
+    const { rerender } = render(<LanesView error={new Error("x")} retryAt={t0 + 30_000} now={NOW} onSelect={noop} />);
     expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load the lanes — retrying in 30s");
     rerender(<LanesView error={new Error("x")} retryAt={t0 + 30_000} now={new Date(t0 + 17_500)} onSelect={noop} />);
     expect(screen.getByRole("alert")).toHaveTextContent("retrying in 13s");
     rerender(<LanesView error={new Error("x")} retryAt={t0 + 30_000} now={new Date(t0 + 31_000)} onSelect={noop} />);
     expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load the lanes — retrying now");
-    rerender(<LanesView error={new RateLimited(90)} retryAt={t0 + 90_000} now={new Date(t0 + 30_000)} onSelect={noop} />);
+    rerender(
+      <LanesView error={new RateLimited(90)} retryAt={t0 + 90_000} now={new Date(t0 + 30_000)} onSelect={noop} />,
+    );
     expect(screen.getByRole("alert")).toHaveTextContent("Rate limited — retrying in 60s");
   });
 
@@ -345,12 +384,16 @@ describe("selection", () => {
     expect(result.current.selection).toEqual({ kind: "cve", id: "CVE-2026-1234" });
   });
   test("rejects a javascript: story url", () => {
-    const { result } = renderHook(() => useSelection(), { wrapper: wrap(`/?story=${encodeURIComponent("javascript:alert(1)")}`) });
+    const { result } = renderHook(() => useSelection(), {
+      wrapper: wrap(`/?story=${encodeURIComponent("javascript:alert(1)")}`),
+    });
     expect(result.current.selection).toBeNull();
     expect(parseSelection(new URLSearchParams({ story: "data:text/html,x" }))).toBeNull();
   });
   test("accepts an https story url", () => {
-    const { result } = renderHook(() => useSelection(), { wrapper: wrap(`/?story=${encodeURIComponent("https://n.example/a")}`) });
+    const { result } = renderHook(() => useSelection(), {
+      wrapper: wrap(`/?story=${encodeURIComponent("https://n.example/a")}`),
+    });
     expect(result.current.selection).toEqual({ kind: "story", url: "https://n.example/a" });
   });
   test("select writes and clears the params", () => {

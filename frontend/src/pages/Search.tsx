@@ -174,7 +174,8 @@ export default function Search() {
   const [seenCvss, setSeenCvss] = useState(filters.min_cvss);
   if (seenCvss !== filters.min_cvss) {
     setSeenCvss(filters.min_cvss);
-    if (validCvss(cvssText) !== filters.min_cvss) setCvssText(filters.min_cvss === undefined ? "" : String(filters.min_cvss));
+    if (validCvss(cvssText) !== filters.min_cvss)
+      setCvssText(filters.min_cvss === undefined ? "" : String(filters.min_cvss));
   }
 
   const params: CveQuery = { ...filters, page_size: PAGE_SIZE };
@@ -202,7 +203,8 @@ export default function Search() {
     const el = countRef.current;
     if (el) {
       el.focus({ preventScroll: true });
-      const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const reduce =
+        typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       el.scrollIntoView?.({ behavior: reduce ? "auto" : "smooth", block: "start" });
     }
   };
@@ -238,7 +240,13 @@ export default function Search() {
       <form className="sfilters" role="search" onSubmit={(e) => e.preventDefault()}>
         <label className="f f-q">
           <span>Search CVEs</span>
-          <input type="search" maxLength={MAX_Q} value={qText} onChange={(e) => onQ(e.target.value)} autoComplete="off" />
+          <input
+            type="search"
+            maxLength={MAX_Q}
+            value={qText}
+            onChange={(e) => onQ(e.target.value)}
+            autoComplete="off"
+          />
         </label>
         <label className="f">
           <span>Lane</span>
@@ -314,12 +322,24 @@ export default function Search() {
             {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- mobile display:block table semantics */}
             <thead role="rowgroup">
               <tr role="row">
-                <th scope="col" role="columnheader">CVE</th>
-                <th scope="col" role="columnheader">CVSS</th>
-                <th scope="col" role="columnheader">EPSS</th>
-                <th scope="col" role="columnheader">KEV</th>
-                <th scope="col" role="columnheader">Published</th>
-                <th scope="col" role="columnheader">Summary</th>
+                <th scope="col" role="columnheader">
+                  CVE
+                </th>
+                <th scope="col" role="columnheader">
+                  CVSS
+                </th>
+                <th scope="col" role="columnheader">
+                  EPSS
+                </th>
+                <th scope="col" role="columnheader">
+                  KEV
+                </th>
+                <th scope="col" role="columnheader">
+                  Published
+                </th>
+                <th scope="col" role="columnheader">
+                  Summary
+                </th>
               </tr>
             </thead>
             {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- mobile display:block table semantics */}

@@ -104,7 +104,9 @@ export function Deliveries({ rules }: { rules: AlertRule[] }) {
                       <Text value={d.cve_id} />
                     </button>
                   </td>
-                  <td data-label="Rule">{names.has(d.rule_id) ? <Text value={names.get(d.rule_id) ?? ""} /> : `Rule #${d.rule_id}`}</td>
+                  <td data-label="Rule">
+                    {names.has(d.rule_id) ? <Text value={names.get(d.rule_id) ?? ""} /> : `Rule #${d.rule_id}`}
+                  </td>
                   <td data-label="Channel">{d.channel}</td>
                   <td data-label="Attempts">{d.attempts}</td>
                   <td data-label="Last error">{d.last_error ? <Text value={d.last_error} /> : "—"}</td>

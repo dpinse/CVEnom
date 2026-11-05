@@ -58,7 +58,9 @@ const server = createServer((req, res) => {
     uri = "/index.html";
   }
   const cache = isAsset ? "public, max-age=31536000, immutable" : "no-store";
-  send(res, uri, 200, MIME[extname(file)] ?? "application/octet-stream", readFileSync(file), { "Cache-Control": cache });
+  send(res, uri, 200, MIME[extname(file)] ?? "application/octet-stream", readFileSync(file), {
+    "Cache-Control": cache,
+  });
 });
 
 server.on("upgrade", (req, socket) => {

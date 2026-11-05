@@ -107,7 +107,9 @@ test("XSS fixtures render as literal text on the dashboard and in the CVE and st
 
 test("the live socket is only ever same-origin /api/ws/live with no query string or token", async ({ page }) => {
   await loaded(page);
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __wsAttempts: string[] }).__wsAttempts.length)).toBeGreaterThan(0);
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __wsAttempts: string[] }).__wsAttempts.length))
+    .toBeGreaterThan(0);
   const attempts = await page.evaluate(() => (window as unknown as { __wsAttempts: string[] }).__wsAttempts);
   const pageOrigin = new URL(page.url()).origin;
   for (const raw of attempts) {

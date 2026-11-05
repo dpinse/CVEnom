@@ -131,7 +131,10 @@ describe("api client basics", () => {
       http.get(`${B}/a`, () => HttpResponse.json({ error: "not_found" }, { status: 404 })),
       http.get(`${B}/b`, () => new HttpResponse("<html>bad gateway</html>", { status: 502 })),
       http.get(`${B}/c`, () =>
-        HttpResponse.json({ error: "validation_error", detail: [{ loc: ["q"], msg: "m", type: "t" }] }, { status: 422 }),
+        HttpResponse.json(
+          { error: "validation_error", detail: [{ loc: ["q"], msg: "m", type: "t" }] },
+          { status: 422 },
+        ),
       ),
     );
     const { client } = mk();
@@ -241,7 +244,9 @@ describe("401 handling", () => {
         }),
       );
       if (path !== "/auth/refresh")
-        server.use(http.post(`${B}${path}`, () => HttpResponse.json({ error: "invalid_credentials" }, { status: 401 })));
+        server.use(
+          http.post(`${B}${path}`, () => HttpResponse.json({ error: "invalid_credentials" }, { status: 401 })),
+        );
       const { client, store } = mk();
       client.adopt("keep", 900);
       store.setUser({ id: 1, email: "a@b.co", role: "member" });

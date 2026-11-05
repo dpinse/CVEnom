@@ -46,19 +46,24 @@ export default function AdminUsers() {
   const roleSelects = useRef(new Map<number, HTMLSelectElement>());
   const lastReset = useRef<number | null>(null);
 
-  const users = useQuery({ queryKey: qk.users(), queryFn: ({ signal }) => api<UserAdmin[]>("/auth/users", { signal }) });
+  const users = useQuery({
+    queryKey: qk.users(),
+    queryFn: ({ signal }) => api<UserAdmin[]>("/auth/users", { signal }),
+  });
 
   useEffect(() => {
     if (pending !== null) confirmBtn.current?.focus();
   }, [pending]);
 
-  const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: qk.users() }), qc.invalidateQueries({ queryKey: qk.invites() })]);
+  const refresh = () =>
+    Promise.all([qc.invalidateQueries({ queryKey: qk.users() }), qc.invalidateQueries({ queryKey: qk.invites() })]);
   const backToRow = (id: number) => {
     roleSelects.current.get(id)?.focus();
   };
 
   const patch = useMutation({
-    mutationFn: (v: { user: UserAdmin; body: UserPatch }) => api(`/auth/users/${v.user.id}`, { method: "PATCH", body: v.body }),
+    mutationFn: (v: { user: UserAdmin; body: UserPatch }) =>
+      api(`/auth/users/${v.user.id}`, { method: "PATCH", body: v.body }),
     onSuccess: async (_d, v) => {
       setError(null);
       flushSync(() => setPending(null));
@@ -207,7 +212,13 @@ export default function AdminUsers() {
                       {mine ? (
                         <span className="confirm" role="group" aria-label="Confirm">
                           <span>{confirmText(mine)}</span>
-                          <button ref={confirmBtn} type="button" className="btn danger" disabled={busy} onClick={confirmNow}>
+                          <button
+                            ref={confirmBtn}
+                            type="button"
+                            className="btn danger"
+                            disabled={busy}
+                            onClick={confirmNow}
+                          >
                             Confirm
                           </button>
                           <button type="button" className="btn" onClick={cancel}>

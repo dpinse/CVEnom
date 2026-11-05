@@ -171,7 +171,15 @@ export function RuleCreateForm({
     <form className="admin-form" onSubmit={(e) => void submit(e)} noValidate aria-label="New alert rule">
       <h2>New alert rule</h2>
       <ErrorSummary errors={errors} tick={tick} />
-      <Field label="Name" type="text" value={name} onChange={setName} autoComplete="off" maxLength={200} required={false} />
+      <Field
+        label="Name"
+        type="text"
+        value={name}
+        onChange={setName}
+        autoComplete="off"
+        maxLength={200}
+        required={false}
+      />
       <label className="field">
         <span>Kind</span>
         <select className="admin-select" value={kind} onChange={(e) => setKind(e.target.value as RuleKind)}>
@@ -194,7 +202,15 @@ export function RuleCreateForm({
         />
       )}
       {kind === "keyword" && (
-        <Field label="Keyword (1 to 100 characters)" type="text" value={keyword} onChange={setKeyword} autoComplete="off" maxLength={100} required={false} />
+        <Field
+          label="Keyword (1 to 100 characters)"
+          type="text"
+          value={keyword}
+          onChange={setKeyword}
+          autoComplete="off"
+          maxLength={100}
+          required={false}
+        />
       )}
       <label className="check">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled
@@ -211,7 +227,12 @@ export function RuleCreateForm({
         </fieldset>
       ))}
       <div className="admin-row">
-        <button type="button" className="btn" disabled={drafts.length >= MAX_RECIPIENTS} onClick={() => setDrafts((l) => [...l, newDraft()])}>
+        <button
+          type="button"
+          className="btn"
+          disabled={drafts.length >= MAX_RECIPIENTS}
+          onClick={() => setDrafts((l) => [...l, newDraft()])}
+        >
           Add another recipient
         </button>
         <span className="form-hint">
@@ -278,7 +299,8 @@ export function RuleEditForm({
       // name/keyword/threshold are sent only when the user changed them (raw values are never rewritten).
       const patch: RulePatch = { enabled };
       if (name !== rule.name) patch.name = name.trim();
-      if ((rule.kind === "cvss_min" || rule.kind === "epss_min") && threshold !== String(rule.threshold ?? "")) patch.threshold = cond.threshold;
+      if ((rule.kind === "cvss_min" || rule.kind === "epss_min") && threshold !== String(rule.threshold ?? ""))
+        patch.threshold = cond.threshold;
       if (rule.kind === "keyword" && keyword !== (rule.keyword ?? "")) patch.keyword = cond.keyword;
       await api(`/alerts/rules/${rule.id}`, { method: "PATCH", body: patch });
       await refresh();
@@ -303,7 +325,10 @@ export function RuleEditForm({
     setAdding(true);
     setRecErrors([]);
     try {
-      const rec = await api<Recipient>(`/alerts/rules/${rule.id}/recipients`, { method: "POST", body: toRecipientIn(draft) });
+      const rec = await api<Recipient>(`/alerts/rules/${rule.id}/recipients`, {
+        method: "POST",
+        body: toRecipientIn(draft),
+      });
       onSecrets(takeSecrets([rec]).secrets);
       setDraft(newDraft());
       await refresh();
@@ -340,7 +365,15 @@ export function RuleEditForm({
         <p className="form-hint">
           Kind: <strong>{KIND_LABEL[rule.kind]}</strong> (can&apos;t be changed)
         </p>
-        <Field label="Name" type="text" value={name} onChange={setName} autoComplete="off" maxLength={200} required={false} />
+        <Field
+          label="Name"
+          type="text"
+          value={name}
+          onChange={setName}
+          autoComplete="off"
+          maxLength={200}
+          required={false}
+        />
         {(rule.kind === "cvss_min" || rule.kind === "epss_min") && (
           <Field
             label={rule.kind === "cvss_min" ? "CVSS threshold (0 to 10)" : "EPSS threshold (0 to 1)"}
@@ -353,7 +386,15 @@ export function RuleEditForm({
           />
         )}
         {rule.kind === "keyword" && (
-          <Field label="Keyword (1 to 100 characters)" type="text" value={keyword} onChange={setKeyword} autoComplete="off" maxLength={100} required={false} />
+          <Field
+            label="Keyword (1 to 100 characters)"
+            type="text"
+            value={keyword}
+            onChange={setKeyword}
+            autoComplete="off"
+            maxLength={100}
+            required={false}
+          />
         )}
         <label className="check">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled
@@ -380,7 +421,12 @@ export function RuleEditForm({
               {removing === r.id ? (
                 <span className="confirm">
                   <span>Remove this recipient? A webhook&apos;s secret is lost permanently.</span>
-                  <button type="button" className="btn danger" ref={(el) => el?.focus()} onClick={() => void removeRecipient(r)}>
+                  <button
+                    type="button"
+                    className="btn danger"
+                    ref={(el) => el?.focus()}
+                    onClick={() => void removeRecipient(r)}
+                  >
                     Confirm remove
                   </button>
                   <button type="button" className="btn" onClick={() => setRemoving(null)}>

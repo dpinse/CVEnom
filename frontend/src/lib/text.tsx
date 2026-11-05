@@ -62,15 +62,7 @@ export function safeHref(u: string): string | null {
 }
 
 /** An external link: an anchor only when the URL passes safeHref, else plain text. */
-export function ExternalLink({
-  href,
-  children,
-  className,
-}: {
-  href: string;
-  children: ReactNode;
-  className?: string;
-}) {
+export function ExternalLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
   const safe = safeHref(href);
   if (safe === null) return <span className={className}>{children}</span>;
   return (
