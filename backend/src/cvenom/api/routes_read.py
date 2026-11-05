@@ -19,7 +19,9 @@ from cvenom.readmodels import cve_velocity, geo_summary, loud_stories
 from cvenom.schemas import CVE_ID_RE
 from cvenom.scoring import Lane
 
-from .deps import SessionDep, public_or_user
+from cvenom.models import User
+
+from .deps import SessionDep, public_or_user, restricted_sources
 from .ratelimit import rate_limit
 from .schemas_api import (
     CveDetail,
@@ -170,7 +172,12 @@ def search_cves(
 
 
 @router.get("/cves/{cve_id:path}", response_model=CveDetail)
-def cve_detail(cve_id: str, session: Session = SessionDep):
+def cve_detail(
+    cve_id: str,
+    session: Session = SessionDep,
+    user: User | None = Depends(public_or_user),
+):
+    hidden = restricted_sources(user)
     # Exact, case-sensitive match (the shared normalising validator is too lenient here).
     if not CVE_ID_RE.fullmatch(cve_id):
         return JSONResponse({"error": "not_found"}, status_code=404)
@@ -180,7 +187,7 @@ def cve_detail(cve_id: str, session: Session = SessionDep):
     stories = session.execute(
         select(Story.title, Story.url, Story.source, Story.published)
         .join(StoryCveLink, StoryCveLink.story_id == Story.id)
-        .where(StoryCveLink.cve_id == cve_id)
+        .where(StoryCveLink.cve_id == cve_id, Story.source.not_in(hidden))
         .order_by(Story.published.desc(), Story.id.desc())
         .limit(50)
     ).all()
@@ -193,7 +200,7 @@ def cve_detail(cve_id: str, session: Session = SessionDep):
             GeoEvent.observed_at,
             GeoEvent.details,
         )
-        .where(GeoEvent.cve_id == cve_id)
+        .where(GeoEvent.cve_id == cve_id, GeoEvent.source.not_in(hidden))
         .order_by(GeoEvent.observed_at.desc(), GeoEvent.id.desc())
         .limit(100)
     ).all()
@@ -223,6 +230,8 @@ def geo(
 
 @router.get("/stories/loud", response_model=list[LoudStory])
 def stories_loud(
-    limit: Annotated[int, Query(ge=1, le=100)] = 50, session: Session = SessionDep
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    session: Session = SessionDep,
+    user: User | None = Depends(public_or_user),
 ) -> list[dict]:
-    return loud_stories(session, _now(), limit=limit)
+    return loud_stories(session, _now(), limit=limit, exclude_sources=restricted_sources(user))

@@ -168,6 +168,17 @@ path is a mounted `redis.conf` or a Docker secret.
 | `ABUSECH_AUTH_KEY` | https://auth.abuse.ch/ |
 | `RANSOMWARE_LIVE_API_KEY` | ransomware.live Pro API. This one is a paid Pro key; leave it blank to use the free public data. |
 
+### ransomware.live fair use
+
+- CVEnom polls ransomware.live hourly, which respects their 30-minute cache.
+- Anonymous/public viewers see only aggregated per-country victim counts; individual victim
+  records (names, groups, post URLs) are shown only to signed-in users and never re-served
+  to anonymous viewers.
+- Use a single key; do not rotate multiple keys to avoid quotas.
+- Raw ransomware.live data must not be exported or published.
+- Story and per-CVE counts (`recent_story_count`) and lane placement include ransomware.live
+  stories for everyone: they are aggregate statistics, not records.
+
 All are optional; sources run unauthenticated or are skipped when a key is blank.
 
 ## Lock file

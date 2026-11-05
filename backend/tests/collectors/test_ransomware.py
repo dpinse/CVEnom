@@ -92,7 +92,7 @@ def test_wrappers(wrap):
 
 def test_registration():
     assert REGISTRY["ransomware_live"] is RansomwareLiveCollector
-    assert RansomwareLiveCollector.cadence_seconds == 900
+    assert RansomwareLiveCollector.cadence_seconds == 3600
 
 
 def test_normalize_maps_fixture():
@@ -261,3 +261,7 @@ def test_disabled_message_logged_at_info_once(monkeypatch, caplog):
         asyncio.run(RansomwareLiveCollector().run())
     disabled = [r for r in caplog.records if "disabled" in r.getMessage()]
     assert [r.levelno for r in disabled] == [logging.INFO, logging.DEBUG]
+
+
+def test_cadence_respects_fair_use_cache():
+    assert RansomwareLiveCollector.cadence_seconds >= 1800

@@ -435,3 +435,69 @@ async def test_datetimes_serialized_utc(db_session):
     assert d["stories"][0]["published"].startswith("2024-03-01T07:00:00")
     assert d["geo_events"][0]["observed_at"].startswith("2024-03-01T07:00:00")
     assert d["stories"][0]["published"].endswith(("Z", "+00:00"))
+
+
+# ------------------------------------------------ ransomware.live fair use
+
+
+def _rl_fixture(db):
+    cve(db, "CVE-2024-7777")
+    s = story(db, 900, ["CVE-2024-7777"], title="Victim Inc listed by grp")
+    s.source = "ransomware.live"
+    story(db, 901, ["CVE-2024-7777"], title="normal news")
+    geo(db, "rl1", source="ransomware_live", kind="victim", cve_id="CVE-2024-7777",
+        label="grp: Victim Inc", country_code="CA", magnitude=1.0)
+    db.flush()
+
+
+async def test_loud_ransomware_anon_excluded_authed_included(db_session):
+    _rl_fixture(db_session)
+    anon = await get(db_session, "/api/stories/loud")
+    assert {b["source"] for b in anon.json()} == {"src"}
+    assert "Victim Inc" not in anon.text
+    h, _ = bearer(db_session, mk_user(db_session))
+    authed = await get(db_session, "/api/stories/loud", headers=h)
+    assert "ransomware.live" in {b["source"] for b in authed.json()}
+
+
+async def test_geo_ransomware_aggregate_visible_without_details(db_session):
+    _rl_fixture(db_session)
+    r = await get(db_session, "/api/geo")
+    row = next(i for i in r.json() if i["kind"] == "victim")
+    assert row["country_code"] == "CA" and row["events"] == 1
+    assert set(row) == {"country_code", "kind", "magnitude", "events", "last_seen"}
+    assert "Victim Inc" not in r.text
+
+
+async def test_detail_ransomware_anon_excluded_authed_included(db_session):
+    _rl_fixture(db_session)
+    anon = (await get(db_session, "/api/cves/CVE-2024-7777")).json()
+    assert [s["source"] for s in anon["stories"]] == ["src"]
+    assert anon["geo_events"] == []
+    h, _ = bearer(db_session, mk_user(db_session))
+    authed = (await get(db_session, "/api/cves/CVE-2024-7777", headers=h)).json()
+    assert {s["source"] for s in authed["stories"]} == {"src", "ransomware.live"}
+    assert [g["label"] for g in authed["geo_events"]] == ["grp: Victim Inc"]
+    assert authed["recent_story_count"] == anon["recent_story_count"] == 2
+
+
+async def test_public_read_off_everyone_authed_sees_ransomware(db_session):
+    _rl_fixture(db_session)
+    h, _ = bearer(db_session, mk_user(db_session))
+    r = await get(db_session, "/api/stories/loud", headers=h, public_read=False)
+    assert "ransomware.live" in {b["source"] for b in r.json()}
+    assert (await get(db_session, "/api/stories/loud", public_read=False)).status_code == 401
+
+
+async def test_anon_cached_loud_has_no_ransomware_authed_does(db_session):
+    _rl_fixture(db_session)
+    app = make_app(db_session)
+    async with client(app) as c:
+        r1 = await c.get("/api/stories/loud")
+        r2 = await c.get("/api/stories/loud")
+        assert r1.headers["x-cache"] == "MISS" and r2.headers["x-cache"] == "HIT"
+        assert "Victim Inc" not in r2.text
+        h, _ = bearer(db_session, mk_user(db_session))
+        r3 = await c.get("/api/stories/loud", headers=h)
+        assert "x-cache" not in r3.headers
+        assert "Victim Inc" in r3.text

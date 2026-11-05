@@ -69,13 +69,18 @@ def geo_summary(session, now: datetime, *, window_hours: int = 24) -> list[dict]
     ]
 
 
-def loud_stories(session, now: datetime, *, limit: int = 50) -> list[dict]:
+def loud_stories(
+    session, now: datetime, *, limit: int = 50, exclude_sources: frozenset[str] = frozenset()
+) -> list[dict]:
     now = _utc(now)
     limit = max(1, min(100, limit))
     since = now - timedelta(hours=get_settings().loud_window_hours)
+    conds = [Story.published >= since]
+    if exclude_sources:
+        conds.append(Story.source.not_in(exclude_sources))
     stories = session.scalars(
         select(Story)
-        .where(Story.published >= since)
+        .where(*conds)
         .order_by(Story.published.desc(), Story.id.desc())
         .limit(limit)
     ).all()
