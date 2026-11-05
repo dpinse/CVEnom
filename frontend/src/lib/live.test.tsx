@@ -2,7 +2,7 @@ import { QueryClientProvider, QueryObserver, type QueryClient } from "@tanstack/
 import { act, render } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { AuthError, NetworkError, RateLimited } from "./api";
+import { AuthError, NetworkError, RateLimited, createApiClient } from "./api";
 import {
   createLiveController,
   liveUrl,
@@ -13,6 +13,7 @@ import {
   type SocketLike,
 } from "./live";
 import { createQueryClient, qk } from "./queries";
+import { createTokenStore } from "./tokenStore";
 
 class MockWS implements SocketLike {
   static instances: MockWS[] = [];
@@ -300,6 +301,54 @@ describe("messages and invalidation", () => {
 });
 
 describe("close handling", () => {
+  test("M1: a 4401 with a newer token already stored makes no refresh call and re-auths with the newer token", async () => {
+    const store = createTokenStore();
+    store.setToken("tok-old");
+    const refreshCalls: string[] = [];
+    const client = createApiClient({
+      store,
+      locks: null,
+      channel: null,
+      fetchFn: ((u: RequestInfo | URL) => {
+        refreshCalls.push(String(u));
+        return Promise.resolve(Response.json({ access_token: "tok-rotated-again", token_type: "bearer", expires_in: 900 }));
+      }) as typeof fetch,
+    });
+    const qc = createQueryClient();
+    const ctl = createLiveController(qc, {
+      wsFactory: (u) => new MockWS(u),
+      auth: { getToken: store.getToken, subscribe: store.subscribe },
+      refresh: (stale) => client.refresh(stale),
+      getHealth: () => Promise.resolve({ status: "ok", public_read: false }),
+      random: () => 0.999,
+      url: "ws://app.test/api/ws/live",
+    });
+    ctl.start();
+    await flush();
+    last().open();
+    expect(JSON.parse(last().sent[0])).toEqual({ type: "auth", token: "tok-old" });
+    // a proactive refresh rotates the token while the socket stays on the old one...
+    store.setToken("tok-new");
+    // ...until the server closes it when the old token expires
+    last().drop(4401);
+    await flush();
+    expect(refreshCalls).toEqual([]);
+    expect(MockWS.instances).toHaveLength(2);
+    last().open();
+    expect(JSON.parse(last().sent[0])).toEqual({ type: "auth", token: "tok-new" });
+    expect(store.getToken()).toBe("tok-new");
+    ctl.stop();
+    client.dispose();
+  });
+
+  test("M1: the 4401 refresh names the token the socket authenticated with as stale", async () => {
+    const r = await live({ publicRead: false, token: "tok-1" });
+    last().drop(4401);
+    await flush();
+    expect(r.refresh).toHaveBeenCalledWith("tok-1");
+    r.ctl.stop();
+  });
+
   test("4401 does exactly one refresh, then reconnects immediately", async () => {
     const r = await live({ publicRead: false });
     last().drop(4401);

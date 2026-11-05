@@ -5,7 +5,7 @@ import type { VelocityOut } from "../lib/types";
 import { renderAt, server, setupMsw } from "../test/shell";
 import { Velocity, VelocityView, sparkPath } from "./Velocity";
 
-setupMsw();
+setupMsw({ ready: true });
 afterEach(cleanup);
 
 const points = (d: string) => (d.match(/-?\d+(\.\d+)?,-?\d+(\.\d+)?/g) ?? []).length;

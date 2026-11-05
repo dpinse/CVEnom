@@ -3,11 +3,13 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
 import type { ReactNode } from "react";
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
-import { ApiError, AuthError, NetworkError, RateLimited } from "./api";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { ApiError, AuthError, NetworkError, RateLimited, authStore } from "./api";
 import {
   createQueryClient,
   cveSearchPath,
+  errorRefetchInterval,
+  errorRefetchMs,
   isCoolingOff,
   qk,
   retryAfterOf,
@@ -30,9 +32,11 @@ beforeAll(() => {
     mswFetch(new URL(String(u), "http://localhost"), i),
   );
 });
+beforeEach(() => authStore.setReady(true)); // data reads wait for the auth bootstrap
 afterEach(() => {
   cleanup();
   server.resetHandlers();
+  authStore.setReady(false);
 });
 afterAll(() => {
   server.close();
@@ -202,5 +206,64 @@ describe("mount gate", () => {
     first.unmount();
     renderHook(() => useLanes(), { wrapper });
     await waitFor(() => expect(n).toBe(2));
+  });
+});
+
+describe("I3: error-state polling", () => {
+  test("errorRefetchMs: 30 s by default, Retry-After for a 429, never under 15 s", () => {
+    expect(errorRefetchMs(new ApiError(500, "x"))).toBe(30_000);
+    expect(errorRefetchMs(new RateLimited(90))).toBe(90_000);
+    expect(errorRefetchMs(new RateLimited(3))).toBe(15_000);
+    expect(errorRefetchInterval({ state: { status: "success" } } as never)).toBe(false);
+    expect(errorRefetchInterval({ state: { status: "error", error: new RateLimited(45) } } as never)).toBe(45_000);
+  });
+
+  test("an errored lanes query refetches after 30 s", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fresh();
+      let calls = 0;
+      server.use(
+        http.get(`${B}/lanes`, () => {
+          calls++;
+          return calls === 1 ? HttpResponse.json({ error: "gone" }, { status: 404 }) : HttpResponse.json({ EXPLOITED: [] });
+        }),
+      );
+      const { result } = renderHook(() => useLanes(), { wrapper });
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a 429 on lanes waits its Retry-After (not 30 s) before refetching", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fresh();
+      let calls = 0;
+      server.use(
+        http.get(`${B}/lanes`, () => {
+          calls++;
+          return calls === 1
+            ? HttpResponse.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": "75" } })
+            : HttpResponse.json({ EXPLOITED: [] });
+        }),
+      );
+      const { result } = renderHook(() => useLanes(), { wrapper });
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

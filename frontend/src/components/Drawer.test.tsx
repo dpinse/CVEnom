@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -13,7 +13,7 @@ import { DrawerHost } from "./DrawerHost";
 const flyTo = vi.fn();
 vi.mock("./GlobeContext", () => ({ useGlobe: () => ({ flyTo }) }));
 
-setupMsw();
+setupMsw({ ready: true });
 beforeEach(() => flyTo.mockClear());
 afterEach(cleanup);
 
@@ -407,12 +407,25 @@ describe("anonymous story-count note and ransomware credit (CveDetail)", () => {
     renderHost(["/?cve=" + CVE]);
     expect(await screen.findByText(NOTE)).toBeInTheDocument();
   });
-  test("no note while auth is not ready yet", async () => {
+  test("no fetch and no note while auth is not ready yet; the guest view loads once it settles", async () => {
     authStore.setReady(false);
-    serveCve(detail({ recent_story_count: 3, stories: [] }));
+    let calls = 0;
+    server.use(
+      http.get(`http://localhost/api/cves/${CVE}`, () => {
+        calls++;
+        return HttpResponse.json(detail({ recent_story_count: 3, stories: [] }));
+      }),
+    );
     renderHost(["/?cve=" + CVE]);
-    await screen.findByText("A summary");
+    await dialog();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls).toBe(0);
+    expect(screen.queryByText("A summary")).toBeNull();
     expect(screen.queryByText(NOTE)).toBeNull();
+    act(() => guest());
+    expect(await screen.findByText("A summary")).toBeInTheDocument();
+    expect(calls).toBe(1);
+    expect(screen.getByText(NOTE)).toBeInTheDocument();
   });
   test("no note when the story list is just capped at the backend limit", async () => {
     guest();
@@ -494,20 +507,31 @@ describe("StoryDetail", () => {
     expect(screen.queryByTestId("ransomware-credit")).toBeNull();
   });
 
-  test("not in the feed shows the fallback with a safe link built from the url", async () => {
-    serveStories([]);
+  test("I2: an unknown ?story= URL renders a neutral not-found state with no anchor and no URL", async () => {
+    const evil = "https://evil.example/login";
+    serveStories([story()]);
+    renderHost(["/?story=" + encodeURIComponent(evil)]);
+    const d = await dialog();
+    expect(await within(d).findByText("Story not found (it may have aged out of the feed).")).toBeInTheDocument();
+    expect(d.querySelector("a")).toBeNull();
+    expect(d).not.toHaveTextContent("evil.example");
+  });
+
+  test("M7: duplicate CVE ids on a story render without React key warnings", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    serveStories([story({ cve_ids: [CVE, CVE, "junk", "junk"] })]);
     open();
-    expect(await screen.findByText("This story is no longer in the live feed.")).toBeInTheDocument();
-    const a = screen.getByRole("link", { name: url });
-    expect(a).toHaveAttribute("href", url);
-    expect(a).toHaveAttribute("rel", "noopener noreferrer");
+    await dialog();
+    expect(await screen.findAllByRole("button", { name: CVE })).toHaveLength(2);
+    expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key/);
+    errors.mockRestore();
   });
 
   test("a failed loud-stories query says it could not load, not that the story is gone", async () => {
     server.use(http.get("http://localhost/api/stories/loud", () => new HttpResponse(null, { status: 500 })));
     open();
     expect(await screen.findByText("Couldn't load stories — try again")).toBeInTheDocument();
-    expect(screen.queryByText("This story is no longer in the live feed.")).toBeNull();
+    expect(screen.queryByText("Story not found (it may have aged out of the feed).")).toBeNull();
   });
 
   test("an unsafe story param never opens a drawer", async () => {

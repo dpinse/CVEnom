@@ -1,5 +1,5 @@
 import { RateLimited } from "../lib/api";
-import { useLanes, useLoudStories } from "../lib/queries";
+import { errorRefetchMs, nextRetryAt, useLanes, useLoudStories } from "../lib/queries";
 import { useSelection, type Selection } from "../lib/selection";
 import type { CveItem, Lane, LoudStory } from "../lib/types";
 import { useNow } from "../lib/useNow";
@@ -34,6 +34,8 @@ interface ViewProps {
   stories?: LoudStory[];
   loading?: boolean;
   error?: unknown;
+  /** When the errored lanes query will next be refetched (epoch ms); defaults to a full interval. */
+  retryAt?: number;
   now?: Date;
   onSelect: (s: Selection) => void;
 }
@@ -48,15 +50,21 @@ function Skeleton() {
   );
 }
 
-export function LanesView({ lanes, stories = [], loading, error, now, onSelect }: ViewProps) {
+export function LanesView({ lanes, stories = [], loading, error, retryAt, now, onSelect }: ViewProps) {
   const clock = now ?? new Date();
   const rate = error instanceof RateLimited ? error : null;
+  // The same schedule the query polls on (errorRefetchInterval), so the countdown is the truth.
+  const secs = Math.max(
+    0,
+    Math.ceil((retryAt === undefined ? errorRefetchMs(error) : retryAt - clock.getTime()) / 1000),
+  );
+  const when = secs > 0 ? `retrying in ${secs}s` : "retrying now";
   const selectCve = (id: string) => onSelect({ kind: "cve", id });
   return (
     <div className="lanes-wrap">
       {error ? (
         <div className="lanes-error" role="alert">
-          {rate ? `Rate limited — retrying in ${rate.retryAfter}s` : "Couldn't load the lanes. Retrying shortly."}
+          {rate ? `Rate limited — ${when}` : `Couldn't load the lanes — ${when}`}
         </div>
       ) : null}
       <div className="lanes">
@@ -88,9 +96,9 @@ export function LanesView({ lanes, stories = [], loading, error, now, onSelect }
                     {cves.map((c) => (
                       <LaneRow key={c.cve_id} item={c} onSelect={selectCve} />
                     ))}
-                    {storyShown.map((s) => (
+                    {storyShown.map((s, i) => (
                       <StoryRow
-                        key={s.url}
+                        key={`${s.url}#${i}`}
                         story={s}
                         now={clock}
                         onOpen={(url) => onSelect({ kind: "story", url })}
@@ -111,7 +119,8 @@ export function LanesView({ lanes, stories = [], loading, error, now, onSelect }
 export function Lanes() {
   const lanes = useLanes();
   const stories = useLoudStories();
-  const now = useNow();
+  // Tick every second while the error countdown is on screen.
+  const now = useNow(lanes.isError ? 1000 : 60_000);
   const { select } = useSelection();
   return (
     <LanesView
@@ -119,6 +128,7 @@ export function Lanes() {
       stories={stories.data}
       loading={lanes.isPending && !lanes.isError}
       error={lanes.isError ? lanes.error : undefined}
+      retryAt={lanes.isError ? nextRetryAt(lanes) : undefined}
       now={now}
       onSelect={select}
     />

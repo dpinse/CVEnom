@@ -4,15 +4,19 @@ import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { afterAll, afterEach, beforeAll, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { authStore } from "../lib/api";
 import { createQueryClient } from "../lib/queries";
 import type { CveItem, LanesOut, Me } from "../lib/types";
 
 export const server = setupServer();
 
-/** Wires MSW + a relative-URL fetch into the calling test file. */
-export function setupMsw() {
+/**
+ * Wires MSW + a relative-URL fetch into the calling test file. `ready: true` marks the auth
+ * bootstrap settled (as a guest) before each test, since data reads wait for it.
+ */
+export function setupMsw(opts: { ready?: boolean } = {}) {
+  if (opts.ready) beforeEach(() => authStore.setReady(true));
   beforeAll(() => {
     server.listen({ onUnhandledRequest: "error" });
     const mswFetch = globalThis.fetch;

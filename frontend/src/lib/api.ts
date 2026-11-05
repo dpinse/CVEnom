@@ -68,8 +68,12 @@ export interface ApiClient {
   api<T = unknown>(path: string, init?: ApiInit): Promise<T>;
   /** Hold a token in memory and schedule its proactive refresh. */
   adopt(token: string, expiresIn: number): void;
-  /** Single-flight refresh (within and across tabs). Throws AuthError if the session is gone. */
-  refresh(): Promise<string>;
+  /**
+   * Single-flight refresh (within and across tabs). Throws AuthError if the session is gone.
+   * `stale` names the token the caller saw rejected (default: the current one); if a different
+   * token is already stored it is returned without rotating the refresh cookie again.
+   */
+  refresh(stale?: string | null): Promise<string>;
   /** Tell other tabs about a login/logout (events only). */
   announce(message: Record<string, unknown>): void;
   clear(): void;
@@ -349,7 +353,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   return {
     api,
     adopt,
-    refresh: () => refreshShared(store.getToken()),
+    refresh: (stale) => refreshShared(stale === undefined ? store.getToken() : stale),
     announce: (message) => channel?.postMessage(message),
     clear,
     dispose() {

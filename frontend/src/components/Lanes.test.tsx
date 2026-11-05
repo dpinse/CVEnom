@@ -256,6 +256,36 @@ describe("LanesView", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Rate limited — retrying in 30s");
   });
 
+  test("I3: the banner counts down to the real next refetch, then says it is retrying now", () => {
+    const t0 = NOW.getTime();
+    const { rerender } = render(
+      <LanesView error={new Error("x")} retryAt={t0 + 30_000} now={NOW} onSelect={noop} />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load the lanes — retrying in 30s");
+    rerender(<LanesView error={new Error("x")} retryAt={t0 + 30_000} now={new Date(t0 + 17_500)} onSelect={noop} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("retrying in 13s");
+    rerender(<LanesView error={new Error("x")} retryAt={t0 + 30_000} now={new Date(t0 + 31_000)} onSelect={noop} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load the lanes — retrying now");
+    rerender(<LanesView error={new RateLimited(90)} retryAt={t0 + 90_000} now={new Date(t0 + 30_000)} onSelect={noop} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Rate limited — retrying in 60s");
+  });
+
+  test("M7: duplicate story URLs render without React key warnings", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    render(
+      <LanesView
+        lanes={{ LOUD: [] }}
+        stories={[story({ title: "one" }), story({ title: "two" })]}
+        onSelect={noop}
+        now={NOW}
+      />,
+    );
+    expect(screen.getByText("one")).toBeInTheDocument();
+    expect(screen.getByText("two")).toBeInTheDocument();
+    expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key/);
+    errors.mockRestore();
+  });
+
   test("lane sections are labelled by their headings", () => {
     render(<LanesView lanes={{}} onSelect={noop} />);
     expect(screen.getAllByRole("region")).toHaveLength(4);

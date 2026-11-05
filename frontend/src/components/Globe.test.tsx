@@ -180,7 +180,7 @@ function runFrames(n: number, stepMs = 16) {
   }
 }
 
-setupMsw();
+setupMsw({ ready: true });
 
 beforeEach(() => {
   h.maps.length = 0;

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { handlers, item, lanes, renderAt, setupMsw } from "../test/shell";
 import { AlertBar } from "./AlertBar";
 
-setupMsw();
+setupMsw({ ready: true });
 afterEach(cleanup);
 
 const today = () => new Date().toISOString().slice(0, 10);

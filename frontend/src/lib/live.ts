@@ -26,8 +26,11 @@ export interface LiveDeps {
   wsFactory?: (url: string) => SocketLike;
   /** Auth store seam: token for the first message, subscribe for login/logout events. */
   auth?: { getToken(): string | null; subscribe(fn: () => void): () => void };
-  /** Single-flight token refresh (rejects if the session is gone). */
-  refresh?: () => Promise<unknown>;
+  /**
+   * Single-flight token refresh (rejects if the session is gone). `stale` is the token the
+   * socket authenticated with, so a newer stored token is reused instead of rotating again.
+   */
+  refresh?: (stale: string | null) => Promise<unknown>;
   /** `fresh` forces a network fetch instead of the cached value. */
   getHealth?: (qc: QueryClient, fresh?: boolean) => Promise<Health>;
   random?: () => number;
@@ -65,7 +68,7 @@ export interface LiveController {
 export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): LiveController {
   const wsFactory = deps.wsFactory ?? ((u: string) => new WebSocket(u) as unknown as SocketLike);
   const auth = deps.auth ?? getAuth();
-  const refresh = deps.refresh ?? (() => getApiClient().refresh());
+  const refresh = deps.refresh ?? ((stale: string | null) => getApiClient().refresh(stale));
   const getHealth =
     deps.getHealth ??
     ((c: QueryClient, fresh?: boolean) =>
@@ -94,6 +97,8 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
   let freshHealth = false;
   let publicRead = false;
   let wasAuthed = false;
+  /** The token the current/last socket authenticated with (null: anonymous). */
+  let socketToken: string | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let stableTimer: ReturnType<typeof setTimeout> | undefined;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -201,6 +206,7 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
     ws.onopen = () => {
       if (ws !== socket) return;
       const token = auth.getToken();
+      socketToken = token;
       if (token) ws.send(JSON.stringify({ type: "auth", token }));
       else if (!publicRead) {
         // The token vanished between connect and open: stand down directly (no backoff).
@@ -210,7 +216,9 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
       }
       openedAt = now();
       setState({ status: "live" });
-      // Anything pushed while we were away was missed: refresh everything once.
+      // Anything pushed while we were away was missed: refresh everything once. Kept on the
+      // routine 4401 reconnect too (token expiry): that gap can drop an `updated` push like any
+      // other, and the cost is one debounced refetch of the observed, non-cooling queries.
       if (hasOpened) queueInvalidation([...INVALIDATES.keys()]);
       hasOpened = true;
       clearTimeout(stableTimer);
@@ -270,7 +278,9 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
     const myGen = gen;
     setState({ status: "reconnecting" });
     try {
-      await refresh(); // exactly one attempt per 4401
+      // Exactly one attempt per 4401. Usually the socket's token simply expired after a proactive
+      // refresh already stored a newer one: naming it as stale reuses that token, no rotation.
+      await refresh(socketToken);
     } catch (e) {
       if (stopped || myGen !== gen || socket || connecting || reconnectTimer !== undefined) return;
       if (!(e instanceof AuthError)) {
@@ -298,7 +308,10 @@ export function createLiveController(qc: QueryClient, deps: LiveDeps = {}): Live
       if (socket && state.status === "live") {
         // anonymous socket on a public server: identify (harmless, keeps behaviour uniform)
         const token = auth.getToken();
-        if (token) socket.send(JSON.stringify({ type: "auth", token }));
+        if (token) {
+          socketToken = token;
+          socket.send(JSON.stringify({ type: "auth", token }));
+        }
       } else {
         attempt = 0;
         void connect();

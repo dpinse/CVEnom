@@ -2,7 +2,8 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import { createQueryClient } from "./lib/queries";
+import { authStore } from "./lib/api";
+import { bindQueryCacheToAuth, createQueryClient } from "./lib/queries";
 import "./fonts.css";
 import "./styles/tokens.css";
 import "./styles/base.css";
@@ -19,6 +20,8 @@ import { initTheme } from "./lib/theme";
 
 initTheme();
 const queryClient = createQueryClient();
+// Login, logout, a peer tab's logout or user switch, or a failed refresh: drop the old identity's data.
+bindQueryCacheToAuth(queryClient, authStore);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

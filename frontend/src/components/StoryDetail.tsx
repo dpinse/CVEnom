@@ -22,14 +22,11 @@ export function StoryDetail({ url }: { url: string }) {
     );
   }
   if (!story) {
+    // The URL came from the address bar, not from our data: never echo it, and never as a link
+    // (a crafted `?story=` would otherwise show an attacker's link inside CVEnom's chrome).
     return (
       <div className="dnote">
-        <p className="sum">This story is no longer in the live feed.</p>
-        <p className="sum">
-          <ExternalLink href={url} className="dlink">
-            <Text value={url} />
-          </ExternalLink>
-        </p>
+        <p className="sum">Story not found (it may have aged out of the feed).</p>
       </div>
     );
   }
@@ -62,13 +59,13 @@ export function StoryDetail({ url }: { url: string }) {
           {ids.length === 0 ? (
             <span className="chip quiet">no CVE attributed</span>
           ) : (
-            ids.map((id) =>
+            ids.map((id, i) =>
               typeof id === "string" && CVE_ID_RE.test(id) ? (
-                <button key={id} type="button" className="chip linked" onClick={() => select({ kind: "cve", id })}>
+                <button key={`${id}#${i}`} type="button" className="chip linked" onClick={() => select({ kind: "cve", id })}>
                   {id}
                 </button>
               ) : (
-                <span key={String(id)} className="chip quiet">
+                <span key={`${String(id)}#${i}`} className="chip quiet">
                   <Text value={String(id)} />
                 </span>
               ),

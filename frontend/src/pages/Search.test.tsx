@@ -7,7 +7,7 @@ import { item, renderAt, server, setupMsw } from "../test/shell";
 import type { CveListOut } from "../lib/types";
 import Search, { DEBOUNCE_MS, parseFilters } from "./Search";
 
-setupMsw();
+setupMsw({ ready: true });
 afterEach(cleanup);
 
 let lastUrl = "";
