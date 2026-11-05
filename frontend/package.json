@@ -15,7 +15,7 @@
     "test": "vitest run",
     "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",
-    "e2e": "echo \"added in Task 11\" && exit 0"
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "5.3.0",
@@ -30,7 +30,9 @@
     "world-atlas": "2.0.2"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
     "@eslint/js": "9.39.5",
+    "@playwright/test": "1.64.1",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",

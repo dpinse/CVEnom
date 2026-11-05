@@ -13,6 +13,13 @@ export function StoryDetail({ url }: { url: string }) {
     return <div className="dskeleton" role="status" aria-busy="true" aria-label="Loading story" />;
   }
   const story = stories.data?.find((s) => s.url === url || safeHref(s.url) === url);
+  if (!story && stories.isError) {
+    return (
+      <div className="dnote" role="alert">
+        <p className="sum">{"Couldn't load stories — try again"}</p>
+      </div>
+    );
+  }
   if (!story) {
     return (
       <div className="dnote">

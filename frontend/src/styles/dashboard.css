@@ -1,0 +1,11 @@
+/* Dashboard composition: globe, velocity, lanes stacked full width. Tokens only. */
+.dash {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-block: 14px 28px;
+  min-width: 0;
+}
+.dash > * {
+  min-width: 0;
+}

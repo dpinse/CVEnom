@@ -1,0 +1,114 @@
+{
+  "EXPLOITED": [
+    {
+      "cve_id": "CVE-2026-1001",
+      "cvss": 9.8,
+      "epss_percentile": 0.99,
+      "kev": true,
+      "kev_added": "2026-11-04",
+      "kev_source": "cisa",
+      "poc_badge": true,
+      "patch_available": false,
+      "published": "2026-11-03T10:00:00Z",
+      "summary": "Acme Gateway auth bypass exploited in the wild",
+      "recent_story_count": 2
+    },
+    {
+      "cve_id": "CVE-2026-1002",
+      "cvss": 8.1,
+      "epss_percentile": 0.95,
+      "kev": true,
+      "kev_added": "2026-11-04",
+      "kev_source": "cisa",
+      "poc_badge": true,
+      "patch_available": false,
+      "published": "2026-11-03T10:00:00Z",
+      "summary": "Widget Server RCE under active exploitation",
+      "recent_story_count": 1
+    }
+  ],
+  "LIKELY": [
+    {
+      "cve_id": "CVE-2026-2001",
+      "cvss": 8.8,
+      "epss_percentile": 0.91,
+      "kev": false,
+      "kev_added": null,
+      "kev_source": null,
+      "poc_badge": false,
+      "patch_available": true,
+      "published": "2026-11-03T10:00:00Z",
+      "summary": "Contoso VPN heap overflow",
+      "recent_story_count": 0
+    },
+    {
+      "cve_id": "CVE-2026-2002",
+      "cvss": 7.5,
+      "epss_percentile": 0.88,
+      "kev": false,
+      "kev_added": null,
+      "kev_source": null,
+      "poc_badge": false,
+      "patch_available": true,
+      "published": "2026-11-03T10:00:00Z",
+      "summary": "Fabrikam CMS SQL injection",
+      "recent_story_count": 0
+    }
+  ],
+  "LOUD": [
+    {
+      "cve_id": "CVE-2026-3001",
+      "cvss": 7.2,
+      "epss_percentile": 0.5,
+      "kev": false,
+      "kev_added": null,
+      "kev_source": null,
+      "poc_badge": false,
+      "patch_available": true,
+      "published": "2026-11-03T10:00:00Z",
+      "summary": "Globex router flaw drawing press attention",
+      "recent_story_count": 3
+    },
+    {
+      "cve_id": "CVE-2026-3002",
+      "cvss": 6.1,
+      "epss_percentile": 0.4,
+      "kev": false,
+      "kev_added": null,
+      "kev_source": null,
+      "poc_badge": false,
+      "patch_available": true,
+      "published": "2026-11-03T10:00:00Z",
+      "summary": "Initech mail relay leak",
+      "recent_story_count": 2
+    }
+  ],
+  "FRESH": [
+    {
+      "cve_id": "CVE-2026-4001",
+      "cvss": 9.1,
+      "epss_percentile": 0.3,
+      "kev": false,
+      "kev_added": null,
+      "kev_source": null,
+      "poc_badge": false,
+      "patch_available": true,
+      "published": "2026-11-03T10:00:00Z",
+      "summary": "Umbrella controller critical RCE",
+      "recent_story_count": 0
+    },
+    {
+      "cve_id": "CVE-2026-4002",
+      "cvss": 9.0,
+      "epss_percentile": 0.2,
+      "kev": false,
+      "kev_added": null,
+      "kev_source": null,
+      "poc_badge": false,
+      "patch_available": true,
+      "published": "2026-11-03T10:00:00Z",
+      "summary": "Hooli SDK deserialization",
+      "recent_story_count": 0
+    }
+  ]
+}

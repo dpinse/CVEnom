@@ -80,11 +80,21 @@ function Probe() {
 function renderHost(entries: string[], index = entries.length - 1) {
   const qc = createQueryClient();
   qc.setDefaultOptions({ queries: { ...qc.getDefaultOptions().queries, retry: false } });
-  return render(
+  const utils = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={entries} initialIndex={index}>
-        <header>
+        <span className="skip">skip</span>
+        <header className="command">
           <button type="button">header-btn</button>
+        </header>
+        <aside className="alertbar">
+          <button type="button">alert-btn</button>
+        </aside>
+        <div className="notice" role="status">
+          notice
+        </div>
+        <header className="inner-card-header">
+          <button type="button">other-header-btn</button>
         </header>
         <main id="main" tabIndex={-1}>
           <button type="button">the-row</button>
@@ -94,6 +104,7 @@ function renderHost(entries: string[], index = entries.length - 1) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...utils, queryClient: qc };
 }
 
 const dialog = () => screen.findByRole("dialog");
@@ -185,12 +196,19 @@ describe("DrawerHost", () => {
     renderHost(["/?cve=" + CVE]);
     await dialog();
     expect(document.getElementById("main")).toHaveAttribute("inert");
-    expect(document.querySelector("header")).toHaveAttribute("inert");
+    expect(document.querySelector("header.command")).toHaveAttribute("inert");
+    expect(document.querySelector(".skip")).toHaveAttribute("inert");
+    expect(document.querySelector(".alertbar")).toHaveAttribute("inert");
+    expect(document.querySelector(".notice")).toHaveAttribute("inert");
+    expect(document.querySelector("header.inner-card-header")).not.toHaveAttribute("inert");
     expect(document.body.style.overflow).toBe("hidden");
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.getElementById("main")).not.toHaveAttribute("inert");
-    expect(document.querySelector("header")).not.toHaveAttribute("inert");
+    expect(document.querySelector("header.command")).not.toHaveAttribute("inert");
+    expect(document.querySelector(".skip")).not.toHaveAttribute("inert");
+    expect(document.querySelector(".alertbar")).not.toHaveAttribute("inert");
+    expect(document.querySelector(".notice")).not.toHaveAttribute("inert");
     expect(document.body.style.overflow).toBe("");
   });
 
@@ -353,6 +371,17 @@ describe("CveDetail", () => {
     expect(flyTo).toHaveBeenCalledWith("FR");
   });
 
+  test("a refetch with a fresh d for the same CVE does not fly again", async () => {
+    serveCve(detail({ geo_events: [ev({ country_code: "FR", magnitude: 9 })] }));
+    const r = renderHost(["/?cve=" + CVE]);
+    await waitFor(() => expect(flyTo).toHaveBeenCalledTimes(1));
+    serveCve(detail({ summary: "A fresher summary", geo_events: [ev({ country_code: "FR", magnitude: 9 })] }));
+    const qc = r.queryClient;
+    await qc.invalidateQueries({ queryKey: ["cve", CVE] });
+    expect(await screen.findByText("A fresher summary")).toBeInTheDocument();
+    expect(flyTo).toHaveBeenCalledTimes(1);
+  });
+
   test("an invalid country_code is skipped and does not call flyTo", async () => {
     serveCve(detail({ geo_events: [ev({ country_code: "deu" }), ev({ country_code: null })] }));
     renderHost(["/?cve=" + CVE]);
@@ -388,6 +417,13 @@ describe("StoryDetail", () => {
     const a = screen.getByRole("link", { name: url });
     expect(a).toHaveAttribute("href", url);
     expect(a).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  test("a failed loud-stories query says it could not load, not that the story is gone", async () => {
+    server.use(http.get("http://localhost/api/stories/loud", () => new HttpResponse(null, { status: 500 })));
+    open();
+    expect(await screen.findByText("Couldn't load stories — try again")).toBeInTheDocument();
+    expect(screen.queryByText("This story is no longer in the live feed.")).toBeNull();
   });
 
   test("an unsafe story param never opens a drawer", async () => {

@@ -71,7 +71,7 @@ function ThemeToggle() {
 export function CommandBar() {
   return (
     <header className="command gutter">
-      <Link className="brand" to="/" aria-label="CVEnom home">
+      <Link className="brand" to="/">
         <Radar />
         <span>
           <span className="name">CVEnom</span>

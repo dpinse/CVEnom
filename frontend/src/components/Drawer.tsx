@@ -2,7 +2,8 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-const BACKGROUND = "#main, header";
+/** Everything behind the drawer: the page, the app header (not any card <header>), the skip link, the alert bar and the notice. */
+const BACKGROUND = "#main, header.command, .skip, .alertbar, .notice";
 
 interface DrawerProps {
   /** Heading text; the dialog is labelled by it. */

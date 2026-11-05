@@ -24,8 +24,9 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* At least 16px each side; notched devices add their safe-area inset (index.html sets viewport-fit=cover). */
 .gutter {
-  padding-inline: var(--gutter);
+  padding-inline: max(var(--gutter), env(safe-area-inset-left, 0px)) max(var(--gutter), env(safe-area-inset-right, 0px));
 }
 
 :focus-visible {

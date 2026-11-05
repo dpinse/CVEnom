@@ -22,7 +22,8 @@ describe("guards", () => {
     handlers();
     signIn(member);
     at("/admin/alerts");
-    expect(await screen.findByRole("status")).toHaveTextContent("Admins only");
+    // the real dashboard has its own role=status loading regions, so find the notice by its text
+    expect(await screen.findByText(/Admins only/)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Alert rules" })).toBeNull();
     expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
   });

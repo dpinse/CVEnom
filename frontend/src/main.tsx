@@ -10,6 +10,7 @@ import "./styles/shell.css";
 import "./styles/globe.css";
 import "./styles/velocity.css";
 import "./styles/lanes.css";
+import "./styles/dashboard.css";
 import "./styles/drawer.css";
 import "./styles/search.css";
 import "./styles/auth.css";
