@@ -13,6 +13,8 @@ import { isRansomwareSource, RansomwareCredit } from "./RansomwareCredit";
 
 export const AFFECTED_CAP = 50;
 export const DETAILS_CAP = 12;
+/** The backend returns at most this many linked stories per CVE (`.limit(50)` in backend api/routes_read.py). */
+export const BACKEND_STORIES_CAP = 50;
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const isNum = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
@@ -121,7 +123,7 @@ function topCountry(events: GeoEventOut[]): string | null {
 export function CveDetailBody({ d }: { d: CveDetail }) {
   const now = useNow();
   const globe = useGlobe();
-  const { user } = useAuth();
+  const { user, ready } = useAuth();
   const flown = useRef<string | null>(null);
 
   useEffect(() => {
@@ -144,7 +146,13 @@ export function CveDetailBody({ d }: { d: CveDetail }) {
   );
   const geo = d.geo_events ?? [];
   // Anonymous callers get aggregate story counts that include sources only signed-in users can read.
-  const hiddenStories = user === null && isNum(d.recent_story_count) && d.recent_story_count > stories.length;
+  // Only once auth has settled (not a guest-looking flash), and not when the list is merely capped.
+  const hiddenStories =
+    ready &&
+    user === null &&
+    isNum(d.recent_story_count) &&
+    d.recent_story_count > stories.length &&
+    stories.length < BACKEND_STORIES_CAP;
   return (
     <>
       <div className="dmeta">

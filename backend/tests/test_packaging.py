@@ -254,6 +254,15 @@ def test_nginx_conf_csp_and_headers():
     assert "proxy_set_header X-Forwarded-For $xff_to_api;" in text
     assert "client_max_body_size 64k" in text
     assert "proxy_read_timeout 75s" in text
+    # /api/ must outwait the slowest endpoint (alert test-send)
+    from cvenom.api.routes_alerts import TEST_SEND_TIMEOUT_S
+
+    api_loc = text[text.index("location /api/ {"):]
+    api_loc = api_loc[: api_loc.index("\n  }")]
+    read_s = int(re.search(r"proxy_read_timeout (\d+)s;", api_loc).group(1))
+    assert read_s > TEST_SEND_TIMEOUT_S
+    assert "interest-cohort" not in text
+    assert "limit_req zone=" not in text[: text.index("\n  location ")]
 
 
 def test_postgres_healthcheck_uses_tcp(compose):

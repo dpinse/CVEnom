@@ -59,7 +59,6 @@ describe("nginx.conf", () => {
     expect(conf).toContain("proxy_set_header X-Forwarded-For $xff_to_api;");
     expect(conf).toContain("$realip_remote_addr");
     expect(conf).toContain("proxy_set_header Host $host;");
-    expect(conf).toContain("proxy_set_header X-Forwarded-Proto $scheme;");
     expect(conf).toContain('proxy_set_header CF-Connecting-IP "";');
     expect(conf).toContain("proxy_set_header Upgrade $http_upgrade;");
     expect(conf).toContain("proxy_read_timeout 75s;");
@@ -68,6 +67,21 @@ describe("nginx.conf", () => {
     expect(conf).toContain("set_real_ip_from 172.28.0.1;");
     expect(conf).toContain("real_ip_recursive on;");
     expect(conf).toMatch(/limit_req zone=\w+ burst=40/);
+    // limit_req covers /api/ and the websocket only, never static files
+    const serverLevel = conf.slice(0, conf.indexOf("\n  location "));
+    expect(serverLevel).not.toContain("limit_req zone=");
+    expect(conf.match(/limit_req zone=/g)).toHaveLength(2);
+    // the api's own copies of these five headers are hidden in both proxied locations
+    for (const h of ["Content-Security-Policy", "Strict-Transport-Security", "X-Content-Type-Options", "Referrer-Policy", "X-Frame-Options"]) {
+      expect(conf.match(new RegExp(`proxy_hide_header ${h};`, "g")), h).toHaveLength(2);
+    }
+    expect(conf).not.toMatch(/proxy_hide_header (Permissions-Policy|Cache-Control|Cross-Origin)/);
+    // X-Forwarded-Proto passes through only from the trusted gateway and only as exactly http/https
+    expect(conf).toContain('"172.28.0.1:http"');
+    expect(conf).toContain('"172.28.0.1:https"');
+    expect(conf).toMatch(/default\s+\$scheme;/);
+    expect(conf.match(/proxy_set_header X-Forwarded-Proto \$xfp_to_api;/g)).toHaveLength(2);
+    expect(conf).not.toContain("interest-cohort");
   });
   it("add_header appears only at server level (nginx does not inherit it into a location that has its own)", () => {
     const afterFirstLocation = conf.slice(conf.indexOf("\n  location "));

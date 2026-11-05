@@ -5,7 +5,9 @@ import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createQueryClient } from "../lib/queries";
 import type { CveDetail, GeoEventOut, LoudStory } from "../lib/types";
-import { member, server, setupMsw, signIn } from "../test/shell";
+import { guest, member, server, setupMsw, signIn } from "../test/shell";
+import { authStore } from "../lib/api";
+import { BACKEND_STORIES_CAP } from "./CveDetail";
 import { DrawerHost } from "./DrawerHost";
 
 const flyTo = vi.fn();
@@ -394,14 +396,36 @@ describe("CveDetail", () => {
 describe("anonymous story-count note and ransomware credit (CveDetail)", () => {
   const NOTE = "Some sources are visible to signed-in users only.";
   test("anonymous with recent_story_count above the stories shown: muted note", async () => {
+    guest();
     serveCve(detail({ recent_story_count: 3, stories: [{ title: "T", url: "https://news.example/a", source: "Example", published: "2026-11-05T11:00:00Z" }] }));
     renderHost(["/?cve=" + CVE]);
     expect(await screen.findByText(NOTE)).toBeInTheDocument();
   });
   test("note shows even when no stories are visible at all", async () => {
+    guest();
     serveCve(detail({ recent_story_count: 2, stories: [] }));
     renderHost(["/?cve=" + CVE]);
     expect(await screen.findByText(NOTE)).toBeInTheDocument();
+  });
+  test("no note while auth is not ready yet", async () => {
+    authStore.setReady(false);
+    serveCve(detail({ recent_story_count: 3, stories: [] }));
+    renderHost(["/?cve=" + CVE]);
+    await screen.findByText("A summary");
+    expect(screen.queryByText(NOTE)).toBeNull();
+  });
+  test("no note when the story list is just capped at the backend limit", async () => {
+    guest();
+    const many = Array.from({ length: BACKEND_STORIES_CAP }, (_, i) => ({
+      title: `S${i}`,
+      url: `https://news.example/${i}`,
+      source: "Example",
+      published: "2026-11-05T11:00:00Z",
+    }));
+    serveCve(detail({ recent_story_count: BACKEND_STORIES_CAP + 7, stories: many }));
+    renderHost(["/?cve=" + CVE]);
+    await screen.findByText("S0");
+    expect(screen.queryByText(NOTE)).toBeNull();
   });
   test("no note when the counts match, or when signed in", async () => {
     serveCve(detail({ recent_story_count: 0, stories: [] }));

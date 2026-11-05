@@ -90,7 +90,9 @@ from `nginx.conf` deliberately and set `TRUST_CF_CONNECTING_IP=true` only when e
 comes through Cloudflare.
 
 **(b) A different reverse proxy as a container on the `cvenom` network** (instead of cloudflared
-on the host): give it a fixed `ipv4_address`, and trust that `<ip>/32` plus nginx in both settings.
+on the host): give it a fixed `ipv4_address`, trust that `<ip>/32` plus nginx in both settings, and
+also add that IP to `set_real_ip_from` (and the `$xfp_to_api` map) in `frontend/nginx.conf`.
+Otherwise nginx's `limit_req` sees only the proxy and buckets every visitor together.
 
 **(c) `127.0.0.1` is wrong for the published-port topology.** The connection arrives from the
 bridge gateway, not loopback. If `FORWARDED_ALLOW_IPS` omitted the gateway or nginx, uvicorn
@@ -131,8 +133,8 @@ connect to the container, otherwise forwarded headers are ignored (the image def
 
 ## Content Security Policy and security headers
 
-nginx sends these on every response (`always`, including errors); proxied `/api` responses also
-keep the API's own headers and `Cache-Control`:
+nginx sends these on every response (`always`, including errors); proxied `/api` responses keep
+the API's other headers (such as `Cache-Control`):
 
 ```
 Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;
@@ -141,7 +143,7 @@ Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'
 Strict-Transport-Security: max-age=63072000; includeSubDomains
 X-Content-Type-Options: nosniff    Referrer-Policy: no-referrer    X-Frame-Options: DENY
 Cross-Origin-Opener-Policy: same-origin    Cross-Origin-Resource-Policy: same-origin
-Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
 ```
 
 There is no `unsafe-inline`, `unsafe-eval`, `blob:` or remote origin. `connect-src 'self'` covers
@@ -151,10 +153,21 @@ the same-origin `wss://` live socket in current Chromium and Firefox (checked by
 worker is a same-origin module worker; React and MapLibre set styles through the CSSOM, which
 `style-src 'self'` allows. `index.html` carries no inline script or style.
 
-- **API docs vs CSP.** `/docs` and `/redoc` (`API_DOCS=true`) load Swagger UI / ReDoc from a CDN
-  with inline scripts, which this policy blocks: they render blank. That is intentional; keep
-  `API_DOCS=false`. `/openapi.json` still works. To read the docs, hit the api directly from a
-  trusted host (publish a loopback port in a local override) rather than loosening the CSP.
+- **API docs.** FastAPI mounts `/docs`, `/redoc` and `/openapi.json` at the root, outside `/api/`,
+  so through nginx they fall into `location /` and return the SPA's `index.html`. With
+  `API_DOCS=true` they are reachable only by hitting the api container directly (for example
+  `docker compose --env-file ./.env -f deploy/docker-compose.prod.yml exec api ...` from inside, or a
+  temporary loopback port), and the api's own CSP would blank Swagger UI there anyway. There is
+  deliberately no nginx route for them; keep `API_DOCS=false`.
+- **Response headers.** The api sets CSP, HSTS, nosniff, Referrer-Policy and X-Frame-Options itself;
+  nginx hides those five from `/api/` responses (`proxy_hide_header`) and sends its own, so each
+  appears exactly once. nginx's values equal or exceed the api's for JSON. Any other api header
+  (`Cache-Control`, ...) passes through untouched.
+- **X-Forwarded-Proto.** nginx passes the gateway's `X-Forwarded-Proto` through only when the peer is
+  the trusted gateway and the value is exactly `http` or `https` (cloudflared connects over plain
+  http, so `$scheme` alone would always say `http`); otherwise it sends `$scheme`.
+- **Rate limit and timeouts.** `limit_req` (20 r/s, burst 40 per visitor) covers `/api/` and the
+  WebSocket only, never static files. `/api/` waits up to 60 s, above the 45 s alert test-send cap.
 - **Adding an origin.** Only when you truly need one (for example a tile server): add it to the
   one directive that needs it in `frontend/nginx.conf` (for tiles, `connect-src 'self'
   https://tiles.example.com`), never to `default-src`, then rebuild the frontend image. The
@@ -169,9 +182,8 @@ worker is a same-origin module worker; React and MapLibre set styles through the
   login for everything.
 - `CORS_ORIGINS`: JSON list of exact origins, e.g. `'["https://cvenom.example.com"]'`. No wildcards.
   Empty means same-origin only.
-- `API_DOCS` (default `false`): enables `/docs` and `/redoc`. Keep off in production. The strict
-  `Content-Security-Policy` blocks the Swagger UI / ReDoc assets, so those pages render blank;
-  `/openapi.json` itself works (see "Content Security Policy" above).
+- `API_DOCS` (default `false`): enables `/docs`, `/redoc` and `/openapi.json` on the api. Keep off in
+  production. They are not reachable through nginx (see "Content Security Policy" above).
 
 ## Alert rules
 
@@ -216,7 +228,11 @@ The Redis password is passed as the `--requirepass` argument, so it is visible i
 `docker inspect` and `ps`. That is acceptable when only the operator has Docker access; the upgrade
 path is a mounted `redis.conf` or a Docker secret.
 
-## Free API keys
+## API keys
+
+Blank = that source is skipped, or runs unauthenticated where it supports that. The ransomware.live,
+Cloudflare Radar and abuse.ch ThreatFox collectors are **off** while their key is blank; DShield and
+Feodo need no key.
 
 | Setting | Source |
 | --- | --- |
@@ -226,7 +242,7 @@ path is a mounted `redis.conf` or a Docker secret.
 | `MAXMIND_ACCOUNT_ID`, `MAXMIND_LICENSE_KEY` | https://www.maxmind.com/en/geolite2/signup |
 | `CF_RADAR_TOKEN` | Cloudflare dashboard, API Tokens (Radar read) |
 | `ABUSECH_AUTH_KEY` | https://auth.abuse.ch/ |
-| `RANSOMWARE_LIVE_API_KEY` | ransomware.live Pro API. This one is a paid Pro key; leave it blank to use the free public data. |
+| `RANSOMWARE_LIVE_API_KEY` | ransomware.live Pro key (paid). The collector is OFF while this is blank. Polls hourly per their fair-use policy. |
 
 ### ransomware.live fair use
 
@@ -242,7 +258,7 @@ path is a mounted `redis.conf` or a Docker secret.
 - Story and per-CVE counts (`recent_story_count`) and lane placement include ransomware.live
   stories for everyone: they are aggregate statistics, not records.
 
-All are optional; sources run unauthenticated or are skipped when a key is blank.
+All keys are optional; a source without its key is skipped (or runs unauthenticated where it supports that).
 
 ## Lock file
 
