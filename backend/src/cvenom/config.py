@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     fresh_cvss_floor: float = 9.0
     fresh_window_hours: int = 48
     loud_window_hours: int = 72
+    exploited_window_days: int = 30
+    likely_window_days: int = 30
     velocity_window_days: int = 30
     backfill_days: int = 90
     # KEV/VulnCheck: alert only for entries whose own add date is this recent.

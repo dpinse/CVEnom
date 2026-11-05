@@ -106,9 +106,9 @@ async def get(db, url, headers=None, **app_kw):
 
 
 async def test_lanes_shape_and_keys(db_session):
-    cve(db_session, "CVE-2024-0001", kev=True, kev_added=date(2024, 1, 2), kev_source="cisa",
+    cve(db_session, "CVE-2024-0001", kev=True, kev_added=NOW.date(), kev_source="cisa",
         cvss=9.8, summary="&lt;b&gt;")
-    cve(db_session, "CVE-2024-0002", epss_percentile=0.99)
+    cve(db_session, "CVE-2024-0002", epss_percentile=0.99, published=NOW - timedelta(days=5))
     cve(db_session, "CVE-2024-0003")
     story(db_session, 1, ["CVE-2024-0003"])
     cve(db_session, "CVE-2024-0004", cvss=9.5, published=NOW - timedelta(hours=2))
@@ -121,21 +121,21 @@ async def test_lanes_shape_and_keys(db_session):
         assert [i["cve_id"] for i in body[lane]] == [expect]
         assert set(body[lane][0]) == LANE_KEYS
     ex = body["EXPLOITED"][0]
-    assert ex["kev_added"] == "2024-01-02" and ex["kev_source"] == "cisa"
+    assert ex["kev_added"] == NOW.date().isoformat() and ex["kev_source"] == "cisa"
     assert ex["summary"] == "&lt;b&gt;"  # returned as stored, not unescaped
     assert body["LOUD"][0]["recent_story_count"] == 1
 
 
 async def test_lanes_cap_100(db_session):
     for i in range(105):
-        cve(db_session, f"CVE-2024-{1000 + i}", kev=True)
+        cve(db_session, f"CVE-2024-{1000 + i}", kev=True, kev_added=NOW.date())
     r = await get(db_session, "/api/lanes")
     assert len(r.json()["EXPLOITED"]) == 100
 
 
 async def test_lanes_no_n_plus_one(db_session):
     for i in range(6):
-        cve(db_session, f"CVE-2024-{2000 + i}", kev=True, epss_percentile=0.99, cvss=9.9,
+        cve(db_session, f"CVE-2024-{2000 + i}", kev=True, kev_added=NOW.date(), epss_percentile=0.99, cvss=9.9,
             published=NOW - timedelta(hours=1))
         story(db_session, 100 + i, [f"CVE-2024-{2000 + i}"])
     stmts = []
@@ -227,9 +227,9 @@ async def test_detail_not_found(db_session, path):
 
 
 async def test_search_basic_and_filters(db_session):
-    cve(db_session, "CVE-2024-0001", kev=True, kev_source="cisa", cvss=9.0,
+    cve(db_session, "CVE-2024-0001", kev=True, kev_added=NOW.date(), kev_source="cisa", cvss=9.0,
         published=NOW - timedelta(days=1), summary="Apache thing")
-    cve(db_session, "CVE-2024-0002", kev=True, kev_source="vulncheck", cvss=5.0,
+    cve(db_session, "CVE-2024-0002", kev=True, kev_added=NOW.date(), kev_source="vulncheck", cvss=5.0,
         published=NOW - timedelta(days=200), summary="nginx")
     cve(db_session, "CVE-2024-0003", cvss=7.0, published=None)
     story(db_session, 1, ["CVE-2024-0001"])
@@ -413,7 +413,7 @@ async def test_cves_trailing_slash_404(db_session):
 
 async def test_lane_filter_large_membership(db_session):
     for i in range(300):
-        cve(db_session, f"CVE-2024-{5000 + i}", kev=True)
+        cve(db_session, f"CVE-2024-{5000 + i}", kev=True, kev_added=NOW.date())
     r = await get(db_session, "/api/cves?lane=EXPLOITED&page_size=100")
     assert r.status_code == 200 and r.json()["total"] == 300
 
@@ -559,3 +559,12 @@ async def test_c5_anon_search_and_lanes_never_carry_ransomware_victims(db_sessio
         assert "CVE-2024-8888" in {i["cve_id"] for items in authed_lanes.values() for i in items}
         detail = await c.get("/api/cves/CVE-2024-8888", headers=h)
         assert _RL_MARK in detail.text
+
+
+async def test_lane_filter_follows_windows(db_session):
+    cve(db_session, "CVE-2024-7001", kev=True, kev_added=(NOW - timedelta(days=40)).date())
+    r = await get(db_session, "/api/cves?lane=EXPLOITED")
+    assert r.status_code == 200
+    assert [i["cve_id"] for i in r.json()["items"]] == []
+    r = await get(db_session, "/api/cves?kev=true")
+    assert [i["cve_id"] for i in r.json()["items"]] == ["CVE-2024-7001"]

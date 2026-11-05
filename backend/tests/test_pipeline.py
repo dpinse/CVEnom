@@ -37,7 +37,7 @@ def test_ingest_is_idempotent_and_links_stories(db_session):
 
 def test_lane_views_place_kev_in_exploited(db_session):
     now = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
-    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-109618", published=now, cvss=9.2, kev=True)]))
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-109618", published=now, cvss=9.2, kev=True, kev_added=now.date())]))
     views = lane_views(db_session, now)
     assert any(v.cve_id == "CVE-2026-109618" for v in views[Lane.EXPLOITED])
 
@@ -149,9 +149,10 @@ def test_loud_window_and_recent_story_count(db_session):
 
 def test_lane_ordering_by_heat_rank_and_multi_lane(db_session):
     ingest(db_session, CollectorResult(cves=[
-        NormalizedCve(cve_id="CVE-2026-9100", kev=True, cvss=5.0),
-        NormalizedCve(cve_id="CVE-2026-9101", kev=True, cvss=9.0, epss_percentile=0.99),
-        NormalizedCve(cve_id="CVE-2026-9102", kev=True, cvss=7.0),
+        NormalizedCve(cve_id="CVE-2026-9100", kev=True, kev_added=NOW.date(), cvss=5.0),
+        NormalizedCve(cve_id="CVE-2026-9101", kev=True, kev_added=NOW.date(), cvss=9.0, epss_percentile=0.99,
+                      published=NOW - timedelta(days=1)),
+        NormalizedCve(cve_id="CVE-2026-9102", kev=True, kev_added=NOW.date(), cvss=7.0),
     ]))
     views = lane_views(db_session, NOW)
     assert [v.cve_id for v in views[Lane.EXPLOITED]] == ["CVE-2026-9101", "CVE-2026-9102", "CVE-2026-9100"]
@@ -230,9 +231,9 @@ def test_affected_entries_sanitized(db_session):
 
 def test_lane_tie_order_is_by_cve_id_and_naive_now_is_utc(db_session):
     ingest(db_session, CollectorResult(cves=[
-        NormalizedCve(cve_id="CVE-2026-9202", kev=True),
-        NormalizedCve(cve_id="CVE-2026-9200", kev=True),
-        NormalizedCve(cve_id="CVE-2026-9201", kev=True),
+        NormalizedCve(cve_id="CVE-2026-9202", kev=True, kev_added=NOW.date()),
+        NormalizedCve(cve_id="CVE-2026-9200", kev=True, kev_added=NOW.date()),
+        NormalizedCve(cve_id="CVE-2026-9201", kev=True, kev_added=NOW.date()),
     ]))
     for now in (NOW, NOW.replace(tzinfo=None)):
         ids = [v.cve_id for v in lane_views(db_session, now)[Lane.EXPLOITED]]
@@ -247,7 +248,7 @@ def test_exact_boundaries_consistent_between_sql_and_scoring(db_session):
             NormalizedCve(cve_id="CVE-2026-9300", cvss=cfg.fresh_cvss_floor, published=NOW),
             NormalizedCve(cve_id="CVE-2026-9301", cvss=9.9,
                           published=NOW - timedelta(hours=cfg.fresh_window_hours)),
-            NormalizedCve(cve_id="CVE-2026-9302", epss_percentile=cfg.epss_percentile_threshold),
+            NormalizedCve(cve_id="CVE-2026-9302", epss_percentile=cfg.epss_percentile_threshold, published=NOW - timedelta(days=cfg.likely_window_days)),
             NormalizedCve(cve_id="CVE-2026-9303"),
         ],
         stories=[_story("https://x/b", "edge CVE-2026-9303",
@@ -466,3 +467,13 @@ def test_old_cisa_listing_still_gated_by_recency(db_session):
                     added=datetime.now(UTC).date() - timedelta(days=60))
     assert out == []
     assert _kev_events(db_session, cid) == []
+
+
+def test_lane_views_exploited_newest_listing_first(db_session):
+    from datetime import date
+    _insert_cve(db_session, "CVE-2026-9400", kev=True, kev_added=date(2026, 10, 1),
+                epss_percentile=0.99, cvss=9.9)
+    _insert_cve(db_session, "CVE-2026-9401", kev=True, kev_added=date(2026, 10, 20),
+                epss_percentile=0.10, cvss=5.0)
+    ids = [v.cve_id for v in lane_views(db_session, NOW)[Lane.EXPLOITED]]
+    assert ids == ["CVE-2026-9401", "CVE-2026-9400"]

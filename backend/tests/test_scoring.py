@@ -12,7 +12,7 @@ NOW = datetime(2026, 10, 26, 12, tzinfo=timezone.utc)
 def test_kev_item_is_exploited_and_outranks_quiet_foil():
     from cvenom.scoring import CveView, Lane, lanes_for_cve, heat_rank
     cfg = _cfg()
-    php = CveView("CVE-2026-109618", NOW - timedelta(hours=5), 9.2, 0.99, True)
+    php = CveView("CVE-2026-109618", NOW - timedelta(hours=5), 9.2, 0.99, True, kev_added=NOW.date())
     foil = CveView("CVE-2026-115560", NOW - timedelta(hours=5), 9.0, 0.30, False)
     assert Lane.EXPLOITED in lanes_for_cve(php, NOW, cfg)
     assert Lane.EXPLOITED not in lanes_for_cve(foil, NOW, cfg)
@@ -84,3 +84,32 @@ def test_utc_normalization_tz_aware_and_naive():
     assert Lane.FRESH not in lanes_for_cve(CveView("b", stale, 9.5, 0.1, False), NOW, cfg)
     naive = (NOW - timedelta(hours=47)).replace(tzinfo=None)
     assert Lane.FRESH in lanes_for_cve(CveView("c", naive, 9.5, 0.1, False), NOW, cfg)
+
+
+def test_exploited_window_boundary():
+    from cvenom.scoring import CveView, Lane, lanes_for_cve
+    from datetime import date
+    cfg = _cfg()
+    now = datetime(2026, 11, 5, 23, 30, tzinfo=timezone.utc)
+    edge = CveView("a", None, None, None, True, kev_added=date(2026, 10, 6))
+    past = CveView("b", None, None, None, True, kev_added=date(2026, 10, 5))
+    assert Lane.EXPLOITED in lanes_for_cve(edge, now, cfg)
+    assert Lane.EXPLOITED not in lanes_for_cve(past, now, cfg)
+
+
+def test_kev_without_date_not_exploited():
+    from cvenom.scoring import CveView, Lane, lanes_for_cve
+    cfg = _cfg()
+    v = CveView("a", NOW, None, None, True, kev_added=None)
+    assert Lane.EXPLOITED not in lanes_for_cve(v, NOW, cfg)
+
+
+def test_likely_requires_publish_within_window():
+    from cvenom.scoring import CveView, Lane, lanes_for_cve
+    cfg = _cfg()
+    new = CveView("a", NOW - timedelta(days=29), 5.0, 0.99, False)
+    old = CveView("b", NOW - timedelta(days=31), 5.0, 0.99, False)
+    none = CveView("c", None, 5.0, 0.99, False)
+    assert Lane.LIKELY in lanes_for_cve(new, NOW, cfg)
+    assert Lane.LIKELY not in lanes_for_cve(old, NOW, cfg)
+    assert Lane.LIKELY not in lanes_for_cve(none, NOW, cfg)

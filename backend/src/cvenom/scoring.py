@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 
 from cvenom.config import Settings
@@ -25,6 +25,7 @@ class CveView:
     recent_story_count: int = 0
     patch_available: bool | None = None
     poc_badge: bool = False
+    kev_added: date | None = None
 
 
 def _utc(dt: datetime) -> datetime:
@@ -35,9 +36,18 @@ def _utc(dt: datetime) -> datetime:
 
 def lanes_for_cve(v: CveView, now: datetime, cfg: Settings) -> set[Lane]:
     lanes: set[Lane] = set()
-    if v.kev:
+    if (
+        v.kev
+        and v.kev_added is not None
+        and v.kev_added >= _utc(now).date() - timedelta(days=cfg.exploited_window_days)
+    ):
         lanes.add(Lane.EXPLOITED)
-    if v.epss_percentile is not None and v.epss_percentile >= cfg.epss_percentile_threshold:
+    if (
+        v.epss_percentile is not None
+        and v.epss_percentile >= cfg.epss_percentile_threshold
+        and v.published is not None
+        and _utc(now) - _utc(v.published) <= timedelta(days=cfg.likely_window_days)
+    ):
         lanes.add(Lane.LIKELY)
     if (
         v.published is not None

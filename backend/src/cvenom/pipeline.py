@@ -293,6 +293,8 @@ def lane_views(session: Session, now: datetime) -> dict[Lane, list[CveView]]:
     now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
     loud_cutoff = now - timedelta(hours=cfg.loud_window_hours)
     fresh_cutoff = now - timedelta(hours=cfg.fresh_window_hours)
+    kev_cutoff_date = now.date() - timedelta(days=cfg.exploited_window_days)
+    likely_cutoff = now - timedelta(days=cfg.likely_window_days)
 
     recent_link = (
         select(StoryCveLink.cve_id)
@@ -301,8 +303,8 @@ def lane_views(session: Session, now: datetime) -> dict[Lane, list[CveView]]:
     )
     candidates = select(Cve).where(
         or_(
-            Cve.kev.is_(True),
-            Cve.epss_percentile >= cfg.epss_percentile_threshold,
+            and_(Cve.kev.is_(True), Cve.kev_added >= kev_cutoff_date),
+            and_(Cve.epss_percentile >= cfg.epss_percentile_threshold, Cve.published >= likely_cutoff),
             and_(Cve.cvss >= cfg.fresh_cvss_floor, Cve.published >= fresh_cutoff),
             exists(recent_link),
         )
@@ -334,9 +336,13 @@ def lane_views(session: Session, now: datetime) -> dict[Lane, list[CveView]]:
             recent_story_count=counts.get(r.cve_id, 0),
             patch_available=r.patch_available,
             poc_badge=r.poc_badge,
+            kev_added=r.kev_added,
         )
         for lane in lanes_for_cve(view, now, cfg):
             lanes[lane].append(view)
-    for views in lanes.values():
-        views.sort(key=lambda v: (-heat_rank(v, now, cfg), v.cve_id))
+    for lane, views in lanes.items():
+        if lane is Lane.EXPLOITED:
+            views.sort(key=lambda v: (-v.kev_added.toordinal(), -heat_rank(v, now, cfg), v.cve_id))
+        else:
+            views.sort(key=lambda v: (-heat_rank(v, now, cfg), v.cve_id))
     return lanes
