@@ -75,8 +75,10 @@ def test_parse_index_multi_slash_takes_last_segment():
 
 
 def test_parse_index_warns_with_malformed_count(caplog):
+    # Only the bad-timestamp line is malformed; it precedes the cutoff.
+    text = "nope,Go/X\n2026-11-04T10:00:00Z,Go/GO-1\n2026-10-01T00:00:00Z,Go/GO-OLD\n"
     with caplog.at_level(logging.WARNING, logger="cvenom.collectors.osv"):
-        osv.parse_index(INDEX + "nope,Go/X\n", SINCE)
+        osv.parse_index(text, SINCE)
     msgs = [r.getMessage() for r in caplog.records if "malformed" in r.getMessage()]
     assert msgs == ["osv: skipped 1 malformed index line(s)"]
 
