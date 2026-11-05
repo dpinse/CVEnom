@@ -84,6 +84,15 @@ def test_malformed_xml_with_no_entries_is_empty_with_warning(caplog):
     assert any(r.levelno == logging.WARNING for r in caplog.records)
 
 
+def test_body_that_is_a_local_path_is_never_opened(tmp_path):
+    # feedparser treats a bytes/str argument as a path/URL candidate and opens it if it exists.
+    # A feed body that is merely a filesystem path must be parsed as content, never opened.
+    local = tmp_path / "planted.xml"
+    local.write_bytes(_fx("rss_krebs.xml"))
+    res = _Feed().normalize(str(local).encode())
+    assert res.stories == []
+
+
 def test_missing_link_or_title_skipped():
     xml = (
         b'<rss version="2.0"><channel><title>t</title>'

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+import io
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -61,7 +62,9 @@ class NewsFeedCollector(Collector):
         if b"<!entity" in raw.replace(b"\x00", b"").lower():
             log.warning("%s: feed contains <!ENTITY declarations; refusing to parse", self.name)
             return CollectorResult()
-        parsed = feedparser.parse(raw)  # bytes only: never a URL
+        # Wrap in a file object: given bytes/str, feedparser first tries to open() it as a local
+        # path (and the entity guard above would have checked the path, not the file).
+        parsed = feedparser.parse(io.BytesIO(raw))
         if parsed.get("bozo") and not parsed.get("entries"):
             log.warning(
                 "%s: malformed feed with no entries: %s", self.name, parsed.get("bozo_exception")
