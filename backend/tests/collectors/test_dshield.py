@@ -150,3 +150,34 @@ def test_same_hour_ids_identical_and_ingest_updates(monkeypatch, db_session):
 def test_registration():
     assert REGISTRY["dshield"] is DShieldCollector
     assert DShieldCollector.cadence_seconds == 3600
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan"), True, -5])
+@pytest.mark.parametrize("field", ["count", "attacks"])
+def test_bad_numeric_skips_only_that_record(monkeypatch, bad, field):
+    payload = _fixture()
+    payload.append({**_rec("1.2.3.4", 1, 1), field: bad})
+    geo = StubGeo()
+    c, _ = _make(monkeypatch, geo, payload)
+    res = asyncio.run(c.run())
+    assert c.last_error is None
+    by = {e.country_code: e for e in res.geo_events}
+    assert by["CN"].magnitude == 350
+    assert by["CN"].details == {"sources": 2, "targets": 30}
+    assert by["BG"].magnitude == 411604
+    assert geo.closed == 1
+
+
+def test_factory_exception_treated_as_no_db(monkeypatch, caplog):
+    c, calls = _make(monkeypatch, None, _fixture())
+
+    def boom():
+        raise OSError("db exploded")
+
+    monkeypatch.setattr(DShieldCollector, "geoip_factory", staticmethod(boom))
+    with caplog.at_level(logging.WARNING):
+        res = asyncio.run(c.run())
+    assert res.geo_events == []
+    assert c.last_error is None
+    assert calls == []
+    assert any(r.levelno == logging.WARNING for r in caplog.records)

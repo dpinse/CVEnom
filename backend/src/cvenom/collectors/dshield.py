@@ -8,6 +8,7 @@ each IP with the local GeoIP database.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import UTC, datetime
 
 from pydantic import ValidationError
@@ -20,7 +21,7 @@ from cvenom.schemas import NormalizedGeoEvent
 log = logging.getLogger(__name__)
 
 URL = "https://isc.sans.edu/api/sources/attacks/100/?json"
-_SKIP = (ValidationError, ValueError, TypeError, AttributeError, KeyError)
+_SKIP = (ValidationError, ValueError, TypeError, AttributeError, KeyError, OverflowError)
 
 
 def _now() -> datetime:
@@ -40,6 +41,8 @@ def _clean_ip(ip: object) -> str:
 def _num(value: object) -> int:
     if isinstance(value, bool):
         raise TypeError("bool is not a count")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("non-finite count")
     n = int(value)  # type: ignore[arg-type]
     if n < 0:
         raise ValueError("negative count")
@@ -58,7 +61,11 @@ class DShieldCollector(Collector):
         self._geo = None
 
     async def run(self) -> CollectorResult:
-        geo = self.geoip_factory()
+        try:
+            geo = self.geoip_factory()
+        except Exception:
+            log.warning("%s: GeoIP factory failed", self.name, exc_info=True)
+            geo = None
         if geo is None:
             self.last_error = None
             log.warning("%s: no GeoIP database available; skipping", self.name)
