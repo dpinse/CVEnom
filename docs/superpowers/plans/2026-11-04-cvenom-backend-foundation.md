@@ -12,6 +12,7 @@
 
 ## Global Constraints
 
+- **Monorepo layout:** all backend code lives under `backend/` (run pytest, alembic, and pip from `backend/`); the repo root holds `docker-compose.yml` and `docker/`. The React frontend will live under `frontend/` (Plan 4). All backend paths below are relative to `backend/`.
 - Python 3.12+; Python backend only (this plan).
 - PostgreSQL with **BRIN indexes** on time-ordered columns; SQLAlchemy 2.x; Alembic migrations.
 - Redis as Celery broker; Celery beat for scheduling.
@@ -34,8 +35,8 @@
 ### Task 1: Project scaffold & configuration
 
 **Files:**
-- Create: `pyproject.toml`, `docker-compose.yml`, `src/cvenom/__init__.py`, `src/cvenom/config.py`
-- Test: `tests/test_config.py`
+- Create: `backend/pyproject.toml`, `docker-compose.yml`, `backend/src/cvenom/__init__.py`, `backend/src/cvenom/config.py`
+- Test: `backend/tests/test_config.py`
 
 **Interfaces:**
 - Produces: `Settings` (pydantic-settings) with fields `database_url: str`, `redis_url: str`, `nvd_api_key: str | None`, `vulncheck_api_token: str | None`, `github_token: str | None`, `epss_percentile_threshold: float = 0.95`, `fresh_cvss_floor: float = 9.0`, `fresh_window_hours: int = 48`, `loud_window_hours: int = 72`, `velocity_window_days: int = 30`, `backfill_days: int = 90`; and `get_settings() -> Settings` (cached).
@@ -52,9 +53,9 @@ def test_settings_defaults_and_env_override(monkeypatch):
     monkeypatch.setenv("FRESH_WINDOW_HOURS", "24")
     assert Settings(database_url="postgresql://x", redis_url="redis://y").fresh_window_hours == 24
 ```
-- [ ] **Step 2: Run test to verify it fails** — `pytest tests/test_config.py -v` → FAIL (import error).
-- [ ] **Step 3: Implement `Settings` and `get_settings()` in `src/cvenom/config.py`**; add deps to `pyproject.toml` (sqlalchemy, alembic, psycopg[binary], celery, redis, httpx, pydantic, pydantic-settings, bleach, fastapi, uvicorn; dev: pytest, pytest-asyncio, respx); write `docker-compose.yml` with `postgres:16` and `redis:7` services.
-- [ ] **Step 4: Run test to verify it passes** — `pytest tests/test_config.py -v` → PASS.
+- [ ] **Step 2: Run test to verify it fails** — `pytest backend/tests/test_config.py -v` → FAIL (import error).
+- [ ] **Step 3: Implement `Settings` and `get_settings()` in `backend/src/cvenom/config.py`**; add deps to `pyproject.toml` (sqlalchemy, alembic, psycopg[binary], celery, redis, httpx, pydantic, pydantic-settings, bleach, fastapi, uvicorn; dev: pytest, pytest-asyncio, respx); write `docker-compose.yml` with `postgres:16` and `redis:7` services.
+- [ ] **Step 4: Run test to verify it passes** — `pytest backend/tests/test_config.py -v` → PASS.
 - [ ] **Step 5: Commit** — `git add -A && git commit -m "feat: project scaffold and configuration"`
 
 ---
@@ -62,8 +63,8 @@ def test_settings_defaults_and_env_override(monkeypatch):
 ### Task 2: Database models, session, and migrations
 
 **Files:**
-- Create: `src/cvenom/db.py`, `src/cvenom/models.py`, `src/cvenom/schemas.py`, `alembic.ini`, `migrations/env.py`, `migrations/versions/0001_initial.py`, `tests/conftest.py`
-- Test: `tests/test_models.py`
+- Create: `backend/src/cvenom/db.py`, `backend/src/cvenom/models.py`, `backend/src/cvenom/schemas.py`, `backend/alembic.ini`, `backend/migrations/env.py`, `backend/migrations/versions/0001_initial.py`, `backend/tests/conftest.py`
+- Test: `backend/tests/test_models.py`
 
 **Interfaces:**
 - Consumes: `Settings` (Task 1).
@@ -97,9 +98,9 @@ def test_kev_flag_is_not_cleared_by_later_feed(db_session):
     upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-1", kev=False))
     assert db_session.get(Cve, "CVE-2026-1").kev is True
 ```
-- [ ] **Step 2: Run to verify it fails** — `pytest tests/test_models.py -v` → FAIL.
+- [ ] **Step 2: Run to verify it fails** — `pytest backend/tests/test_models.py -v` → FAIL.
 - [ ] **Step 3: Implement** models, `db.py`, `upsert_cve` (merge rule above), the Alembic initial migration (with BRIN indexes), and the `db_session` fixture (`conftest.py` creates schema against the compose Postgres, wraps each test in a rolled-back transaction).
-- [ ] **Step 4: Run to verify it passes** — `pytest tests/test_models.py -v` → PASS.
+- [ ] **Step 4: Run to verify it passes** — `pytest backend/tests/test_models.py -v` → PASS.
 - [ ] **Step 5: Commit** — `git commit -am "feat: data models, session, initial migration"`
 
 ---
@@ -107,8 +108,8 @@ def test_kev_flag_is_not_cleared_by_later_feed(db_session):
 ### Task 3: CVE extraction & story linking
 
 **Files:**
-- Create: `src/cvenom/extract.py`
-- Test: `tests/test_extract.py`
+- Create: `backend/src/cvenom/extract.py`
+- Test: `backend/tests/test_extract.py`
 
 **Interfaces:**
 - Consumes: `Story`, `StoryCveLink` (Task 2).
@@ -127,7 +128,7 @@ def test_extract_handles_empty_and_none():
     assert extract_cve_ids(None) == set()
 ```
 - [ ] **Step 2: Run to verify it fails** → FAIL.
-- [ ] **Step 3: Implement `extract_cve_ids` and `link_story`** in `src/cvenom/extract.py`.
+- [ ] **Step 3: Implement `extract_cve_ids` and `link_story`** in `backend/src/cvenom/extract.py`.
 - [ ] **Step 4: Run to verify it passes** → PASS.
 - [ ] **Step 5: Commit** — `git commit -am "feat: CVE extraction and story linking"`
 
@@ -136,8 +137,8 @@ def test_extract_handles_empty_and_none():
 ### Task 4: Dedup & text-sanitization utilities
 
 **Files:**
-- Create: `src/cvenom/textutil.py`
-- Test: `tests/test_textutil.py`
+- Create: `backend/src/cvenom/textutil.py`
+- Test: `backend/tests/test_textutil.py`
 
 **Interfaces:**
 - Produces: `content_hash(title: str, summary: str) -> str` (stable sha256 hex of normalized text); `sanitize_text(raw: str | None) -> str` (strip all HTML/scripts to plain text via bleach, collapse whitespace); `find_existing_story(session, url: str, content_hash: str) -> Story | None`.
@@ -164,8 +165,8 @@ def test_content_hash_is_stable_and_order_sensitive():
 ### Task 5: Lane-scoring engine
 
 **Files:**
-- Create: `src/cvenom/scoring.py`
-- Test: `tests/test_scoring.py`
+- Create: `backend/src/cvenom/scoring.py`
+- Test: `backend/tests/test_scoring.py`
 
 **Interfaces:**
 - Consumes: `Settings` (Task 1).
@@ -220,8 +221,8 @@ def test_likely_uses_percentile_threshold():
 ### Task 6: Collector framework & resilient HTTP
 
 **Files:**
-- Create: `src/cvenom/collectors/__init__.py`, `src/cvenom/collectors/base.py`
-- Test: `tests/collectors/test_base.py`
+- Create: `backend/src/cvenom/collectors/__init__.py`, `backend/src/cvenom/collectors/base.py`
+- Test: `backend/tests/collectors/test_base.py`
 
 **Interfaces:**
 - Consumes: `NormalizedCve`, `NormalizedStory` (schemas from Task 2/1).
@@ -262,8 +263,8 @@ async def test_http_get_json_retries_then_succeeds(respx_mock):
 ### Task 7: NVD collector (with backfill window)
 
 **Files:**
-- Create: `src/cvenom/collectors/nvd.py`
-- Test: `tests/collectors/test_nvd.py`
+- Create: `backend/src/cvenom/collectors/nvd.py`
+- Test: `backend/tests/collectors/test_nvd.py`
 
 **Interfaces:**
 - Consumes: `Collector`, `http_get_json` (Task 6); `Settings` (Task 1).
@@ -280,8 +281,8 @@ async def test_http_get_json_retries_then_succeeds(respx_mock):
 ### Task 8: EPSS collector
 
 **Files:**
-- Create: `src/cvenom/collectors/epss.py`
-- Test: `tests/collectors/test_epss.py`
+- Create: `backend/src/cvenom/collectors/epss.py`
+- Test: `backend/tests/collectors/test_epss.py`
 
 **Interfaces:**
 - Produces: `class EpssCollector(Collector)` (`name="epss"`, `cadence_seconds=7200`); `normalize` → `CollectorResult(cves=[NormalizedCve(cve_id, epss, epss_percentile)...])` from the FIRST EPSS API JSON.
@@ -297,8 +298,8 @@ async def test_http_get_json_retries_then_succeeds(respx_mock):
 ### Task 9: CISA KEV collector with diff detection
 
 **Files:**
-- Create: `src/cvenom/collectors/kev.py`
-- Test: `tests/collectors/test_kev.py`
+- Create: `backend/src/cvenom/collectors/kev.py`
+- Test: `backend/tests/collectors/test_kev.py`
 
 **Interfaces:**
 - Consumes: `Collector` (Task 6); `CollectorRun` (Task 2).
@@ -324,8 +325,8 @@ def test_diff_emits_only_new_entries():
 ### Task 10: VulnCheck Community KEV collector
 
 **Files:**
-- Create: `src/cvenom/collectors/vulncheck.py`
-- Test: `tests/collectors/test_vulncheck.py`
+- Create: `backend/src/cvenom/collectors/vulncheck.py`
+- Test: `backend/tests/collectors/test_vulncheck.py`
 
 **Interfaces:**
 - Produces: `class VulnCheckCollector(Collector)` (`name="vulncheck_kev"`, `cadence_seconds=3600`); sends token when `settings.vulncheck_api_token` set, and **returns an empty result (no error) when the token is absent**; `normalize` → `CollectorResult` with `cves=[NormalizedCve(cve_id, kev=True, kev_source="vulncheck")...]`.
@@ -341,8 +342,8 @@ def test_diff_emits_only_new_entries():
 ### Task 11: OSV + GHSA collector (patch-availability)
 
 **Files:**
-- Create: `src/cvenom/collectors/osv.py`
-- Test: `tests/collectors/test_osv.py`
+- Create: `backend/src/cvenom/collectors/osv.py`
+- Test: `backend/tests/collectors/test_osv.py`
 
 **Interfaces:**
 - Produces: `class OsvCollector(Collector)` (`name="osv"`, `cadence_seconds=7200`); `normalize` → `CollectorResult` with `cves=[NormalizedCve(cve_id, patch_available, affected)...]`, where `patch_available` is `True` when the OSV/GHSA record carries a `ranges[].events[].fixed` version, else `False`; `affected` captures package names.
@@ -358,8 +359,8 @@ def test_diff_emits_only_new_entries():
 ### Task 12: Ingestion pipeline
 
 **Files:**
-- Create: `src/cvenom/pipeline.py`
-- Test: `tests/test_pipeline.py`
+- Create: `backend/src/cvenom/pipeline.py`
+- Test: `backend/tests/test_pipeline.py`
 
 **Interfaces:**
 - Consumes: `upsert_cve` (Task 2), `extract_cve_ids`/`link_story` (Task 3), `content_hash`/`sanitize_text`/`find_existing_story` (Task 4), `CollectorResult` (Task 6).
@@ -402,8 +403,8 @@ def test_lane_views_place_kev_in_exploited(db_session):
 ### Task 13: Celery app, tasks, and beat schedule
 
 **Files:**
-- Create: `src/cvenom/tasks.py`
-- Test: `tests/test_tasks.py`
+- Create: `backend/src/cvenom/tasks.py`
+- Test: `backend/tests/test_tasks.py`
 
 **Interfaces:**
 - Consumes: `REGISTRY` (Task 6), all collectors (Tasks 7–11), `ingest` (Task 12), `Settings` (Task 1).
