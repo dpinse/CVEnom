@@ -145,3 +145,21 @@ describe("user menu", () => {
     await waitFor(() => expect(screen.getByRole("link", { name: "Sign in" })).toBeInTheDocument());
   });
 });
+
+describe("user area before bootstrap", () => {
+  test("renders no Sign in link until ready, then shows it for a guest", () => {
+    handlers();
+    bar();
+    expect(screen.queryByRole("link", { name: "Sign in" })).not.toBeInTheDocument();
+    cleanup();
+    guest();
+    bar();
+    expect(screen.getByRole("link", { name: "Sign in" })).toBeInTheDocument();
+  });
+  test("on /login the Sign in link does not nest next", () => {
+    handlers();
+    guest();
+    bar("/login?next=%2Fsearch");
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
+  });
+});

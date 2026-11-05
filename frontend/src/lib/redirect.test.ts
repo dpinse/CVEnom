@@ -14,14 +14,23 @@ describe("safeNext (open-redirect guard)", () => {
     "/\t/evil.com",
     "/\n/evil.com",
     "/a\\b",
+    "/%2F%2Fevil.com",
+    "/%5Cevil.com",
+    "/..//evil",
+    "/ /evil",
+    "/" + "a".repeat(5000),
   ])("rejects %j", (raw) => {
     expect(safeNext(raw)).toBe("/");
+  });
+  test("caps input at 2048 chars", () => {
+    expect(safeNext("/" + "a".repeat(2047))).toHaveLength(2048);
+    expect(safeNext("/" + "a".repeat(2048))).toBe("/");
   });
   test("rejects null and undefined", () => {
     expect(safeNext(null)).toBe("/");
     expect(safeNext(undefined)).toBe("/");
   });
-  test.each(["/", "/search?q=a", "/admin/users", "/account/password#x"])("keeps %s", (p) => {
+  test.each(["/", "/search?q=a", "/admin/users", "/account/password#x", "/search?q=a%2Fb&x=//y"])("keeps %s", (p) => {
     expect(safeNext(p)).toBe(p);
   });
   test("loginPath encodes next", () => {

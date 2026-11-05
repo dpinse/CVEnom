@@ -12,6 +12,7 @@ import "./styles/velocity.css";
 import "./styles/lanes.css";
 import "./styles/drawer.css";
 import "./styles/search.css";
+import "./styles/auth.css";
 import { initTheme } from "./lib/theme";
 
 initTheme();

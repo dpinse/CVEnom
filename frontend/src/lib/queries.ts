@@ -18,6 +18,7 @@ export const qk = {
   cve: (id: string) => ["cve", id] as const,
   cves: (params: CveQuery) => ["cves", params] as const,
   health: () => ["health"] as const,
+  sessions: () => ["sessions"] as const,
 };
 
 export const STALE_TIME_MS = 30_000;

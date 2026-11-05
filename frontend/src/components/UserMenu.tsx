@@ -7,7 +7,7 @@ import { useAuth } from "../lib/useAuth";
 
 /** Disclosure menu (not an ARIA menu widget): a button toggles a list of links. */
 export function UserMenu() {
-  const { user } = useAuth();
+  const { user, ready } = useAuth();
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -38,9 +38,13 @@ export function UserMenu() {
     };
   }, [open]);
 
+  // Render nothing until bootstrap settles: no "Sign in" flash for a returning user.
+  if (!ready) return null;
   if (!user) {
+    // Already on the sign-in page: do not nest `next` inside itself.
+    const to = loc.pathname === "/login" ? "/login" : loginPath(loc.pathname + loc.search);
     return (
-      <Link className="btn signin" to={loginPath(loc.pathname + loc.search)}>
+      <Link className="btn signin" to={to}>
         Sign in
       </Link>
     );
