@@ -304,3 +304,55 @@ async def test_http_get_json_too_large_not_retried(respx_mock):
     with pytest.raises(ResponseTooLarge):
         await http_get_json("https://big.test/j", max_bytes=100)
     assert route.call_count == 1
+
+
+def _gz(data: bytes) -> httpx.Response:
+    import gzip
+
+    return httpx.Response(
+        200,
+        content=gzip.compress(data),
+        headers={"Content-Encoding": "gzip", "Content-Type": "text/plain; charset=utf-8"},
+    )
+
+
+async def test_gzip_http_get_json(respx_mock):
+    respx_mock.get("https://z.test/j").mock(return_value=_gz(b'{"a": [1, 2]}'))
+    assert await http_get_json("https://z.test/j") == {"a": [1, 2]}
+
+
+async def test_gzip_http_get_text_respects_charset(respx_mock):
+    from cvenom.collectors.base import http_get_text
+
+    respx_mock.get("https://z.test/t").mock(return_value=_gz("café".encode()))
+    assert await http_get_text("https://z.test/t") == "café"
+
+
+async def test_gzip_http_get_bytes(respx_mock):
+    from cvenom.collectors.base import http_get_bytes
+
+    respx_mock.get("https://z.test/b").mock(return_value=_gz(b"\x00raw\xff"))
+    assert await http_get_bytes("https://z.test/b") == b"\x00raw\xff"
+
+
+async def test_gzip_http_get_conditional_200(respx_mock):
+    from cvenom.collectors.base import http_get_conditional
+
+    respx_mock.get("https://z.test/c").mock(return_value=_gz(b"<rss/>"))
+    status, body, hdrs = await http_get_conditional("https://z.test/c")
+    assert (status, body) == (200, b"<rss/>")
+    assert "content-encoding" not in hdrs
+
+
+async def test_gzip_bomb_is_capped_on_decoded_size(respx_mock):
+    import gzip
+
+    from cvenom.collectors.base import ResponseTooLarge, http_get_bytes
+
+    bomb = gzip.compress(b"\x00" * 1_000_000)
+    assert len(bomb) < 10_000
+    respx_mock.get("https://z.test/bomb").mock(
+        return_value=httpx.Response(200, content=bomb, headers={"Content-Encoding": "gzip"})
+    )
+    with pytest.raises(ResponseTooLarge):
+        await http_get_bytes("https://z.test/bomb", max_bytes=10_000)

@@ -121,8 +121,18 @@ async def _request(
                     else:
                         resp.raise_for_status()
                         body = await _read_capped(resp, max_bytes)
+                        # body is already decoded: drop encoding/length headers so httpx
+                        # treats it as identity content (Content-Type charset is kept).
+                        clean = httpx.Headers(
+                            [
+                                (k, v)
+                                for k, v in resp.headers.multi_items()
+                                if k.lower()
+                                not in ("content-encoding", "content-length", "transfer-encoding")
+                            ]
+                        )
                         return httpx.Response(
-                            status, headers=resp.headers, content=body, request=resp.request
+                            status, headers=clean, content=body, request=resp.request
                         )
             except (httpx.TimeoutException, httpx.TransportError):
                 if last:
