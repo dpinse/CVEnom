@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -62,9 +63,12 @@ def _retry_after(resp: httpx.Response) -> float | None:
     if value is None:
         return None
     try:
-        return min(max(float(value), 0.0), MAX_RETRY_AFTER)
+        seconds = float(value)
     except ValueError:
         return None
+    if not math.isfinite(seconds):  # "nan"/"inf" parse as floats: use normal backoff
+        return None
+    return min(max(seconds, 0.0), MAX_RETRY_AFTER)
 
 
 async def _request(

@@ -224,3 +224,16 @@ async def test_run_records_last_error_and_clears_on_success():
     c.fail = False
     await c.run()
     assert c.last_error is None
+
+
+
+@pytest.mark.parametrize("value", ["nan", "NaN", "inf", "-inf", "Infinity"])
+@pytest.mark.asyncio
+async def test_non_finite_retry_after_falls_back_to_backoff(respx_mock, fast_sleep, value):
+    route = respx_mock.get("https://api.test/x")
+    route.side_effect = [
+        httpx.Response(429, headers={"Retry-After": value}),
+        httpx.Response(200, json={}),
+    ]
+    await http_get_json("https://api.test/x")
+    assert fast_sleep == [base.BACKOFF_BASE]
