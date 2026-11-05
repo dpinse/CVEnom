@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
 from celery import Celery
+from celery.schedules import crontab
+from celery.signals import worker_ready
 from sqlalchemy import func, select
 
 from cvenom.collectors import abusech, cfradar, dshield, epss, kev, news, nvd, osv, ransomware, vulncheck  # noqa: F401  (register)
@@ -17,7 +22,7 @@ from cvenom.collectors.base import REGISTRY
 from cvenom.config import get_settings
 from cvenom.db import session_scope
 from cvenom.models import CollectorRun, Cve
-from cvenom.geoip import refresh_geoip
+from cvenom.geoip import ASN_FILE, COUNTRY_FILE, refresh_geoip
 from cvenom.pipeline import ingest, purge_old_geo_events
 
 log = logging.getLogger(__name__)
@@ -137,17 +142,39 @@ PURGE_GEO_LOCK = "maintenance-purge-geo"
 MAINTENANCE_LOCK_TTL = 3600
 
 
-def refresh_geoip_job(*, lock: CollectorLock | None = None) -> dict:
+GEOIP_MAX_AGE = timedelta(days=7)
+
+
+def _geoip_fresh(directory) -> bool:
+    """True when every expected GeoIP DB file exists and is younger than GEOIP_MAX_AGE."""
+    cutoff = time.time() - GEOIP_MAX_AGE.total_seconds()
+    for name in (COUNTRY_FILE, ASN_FILE):
+        try:
+            if (Path(directory) / name).stat().st_mtime < cutoff:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def refresh_geoip_job(*, lock: CollectorLock | None = None, force: bool = False) -> dict:
     lock = lock if lock is not None else RedisLock()
     if not lock.acquire(GEOIP_LOCK, MAINTENANCE_LOCK_TTL):
         log.info("geoip refresh already running; skipping")
         return {"skipped": True}
     try:
         settings = get_settings()
+        if not force and _geoip_fresh(settings.geoip_dir):
+            return {"ok": True, "skipped": "fresh"}
         provider = asyncio.run(refresh_geoip(settings.geoip_dir, settings))
         return {"ok": True, "provider": provider}
-    except Exception:
-        log.exception("geoip refresh failed")
+    except Exception as exc:
+        # No message/traceback: httpx errors embed the (presigned) download URL.
+        if isinstance(exc, httpx.HTTPStatusError):
+            log.warning("geoip refresh failed: %s (HTTP %s)", type(exc).__name__,
+                        exc.response.status_code)
+        else:
+            log.warning("geoip refresh failed: %s", type(exc).__name__)
         return {"ok": False}
     finally:
         lock.release(GEOIP_LOCK)
@@ -173,6 +200,15 @@ def refresh_geoip_task() -> dict:
     return refresh_geoip_job()
 
 
+@worker_ready.connect
+def bootstrap_geoip(*args: Any, **kwargs: Any) -> None:
+    """Fetch GeoIP databases at worker start; the freshness check keeps repeats cheap."""
+    try:
+        refresh_geoip_task.delay()
+    except Exception as exc:
+        log.warning("geoip bootstrap enqueue failed: %s", type(exc).__name__)
+
+
 @celery_app.task(name="cvenom.tasks.purge_geo_task")
 def purge_geo_task() -> dict:
     return purge_geo_job()
@@ -186,6 +222,6 @@ beat_schedule = {
     }
     for n, cls in REGISTRY.items()
 }
-beat_schedule["maintenance-geoip"] = {"task": refresh_geoip_task.name, "schedule": 7 * 24 * 3600}
-beat_schedule["maintenance-purge-geo"] = {"task": purge_geo_task.name, "schedule": 24 * 3600}
+beat_schedule["maintenance-geoip"] = {"task": refresh_geoip_task.name, "schedule": crontab(minute=17, hour="*/6")}
+beat_schedule["maintenance-purge-geo"] = {"task": purge_geo_task.name, "schedule": crontab(minute=23)}
 celery_app.conf.beat_schedule = beat_schedule
