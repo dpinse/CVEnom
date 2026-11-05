@@ -18,24 +18,34 @@ export function createAuth({ client, store }: AuthDeps) {
     async login(email: string, password: string): Promise<Me> {
       const t = await client.api<TokenResponse>("/auth/login", { method: "POST", body: { email, password } });
       client.adopt(t.access_token, t.expires_in);
+      let me: Me;
       try {
-        const me = await client.api<Me>("/auth/me");
-        store.setUser(me);
-        return me;
+        me = await client.api<Me>("/auth/me");
       } catch (e) {
+        // A session exists server-side: end it (best effort) before dropping local state.
+        try {
+          await client.api("/auth/logout", { method: "POST" });
+        } catch {
+          // ignore
+        }
         client.clear();
         throw e;
       }
+      store.setUser(me);
+      client.announce({ type: "login", sub: String(me.id), access_token: t.access_token, expires_in: t.expires_in });
+      return me;
     },
 
-    /** Best-effort server logout; local state is always cleared. */
+    /** Best-effort server logout; local state is always cleared and other tabs are told. */
     async logout(): Promise<void> {
+      const id = store.getUser()?.id;
       try {
         await client.api("/auth/logout", { method: "POST" });
       } catch {
         // the session may already be gone, or the network down: still log out locally
       }
       client.clear();
+      client.announce({ type: "logout", sub: id === undefined ? null : String(id) });
     },
 
     /** App start: one silent refresh. Any failure leaves the user a guest; never throws. */

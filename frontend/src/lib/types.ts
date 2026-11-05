@@ -49,8 +49,8 @@ export interface AcceptInviteBody {
 /** GET /auth/sessions */
 export interface SessionInfo {
   id: string;
-  user_agent: string;
-  ip: string;
+  user_agent: string | null;
+  ip: string | null;
   created_at: string;
   last_used_at: string;
   current: boolean;
@@ -147,12 +147,12 @@ export interface UserPatch {
   role?: Role;
   is_active?: boolean;
 }
-/** GET /auth/invites (pending only). `purpose` is the backend's invite/reset discriminator. */
+/** GET /auth/invites (pending only). `purpose`: invite creates an account, reset sets a password. */
 export interface InviteOut {
   id: number;
   email: string;
   role: Role;
-  purpose: string;
+  purpose: "invite" | "reset";
   expires_at: string;
   created_at: string;
   created_by: number | null;

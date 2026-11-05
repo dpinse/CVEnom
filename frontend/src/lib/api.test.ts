@@ -269,7 +269,7 @@ describe("token is memory only", () => {
 });
 
 describe("proactive refresh", () => {
-  test("fires about 60s before expiry using the single-flight refresh", async () => {
+  async function timerRun(opts: { locks: boolean; random?: () => number }, ...advances: number[]) {
     vi.useFakeTimers();
     try {
       const calls: string[] = [];
@@ -281,27 +281,118 @@ describe("proactive refresh", () => {
         });
       };
       const store = createTokenStore();
-      const client = createApiClient({ store, fetchFn: fn, locks: null, channel: null });
+      const client = createApiClient({
+        store,
+        fetchFn: fn,
+        locks: opts.locks ? makeLocks() : null,
+        channel: null,
+        random: opts.random,
+      });
       made.push(client);
       client.adopt("t1", 900);
-      await vi.advanceTimersByTimeAsync(838_000);
+      const counts: number[] = [];
+      for (const ms of advances) {
+        await vi.advanceTimersByTimeAsync(ms);
+        counts.push(calls.length);
+      }
+      return counts;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  test("with Web Locks the timer fires within [expires-80s, expires-60s] (jitter 0 = earliest)", async () => {
+    // jitter 1 -> 820 s; jitter 0 -> 840 s
+    expect(await timerRun({ locks: true, random: () => 1 }, 819_000, 2_000)).toEqual([0, 1]);
+    expect(await timerRun({ locks: true, random: () => 0 }, 839_000, 2_000)).toEqual([0, 1]);
+  });
+
+  test("never fires before 820 s, whatever the jitter", async () => {
+    expect(await timerRun({ locks: true }, 819_000)).toEqual([0]);
+  });
+
+  test("without navigator.locks there is no proactive timer", async () => {
+    expect(await timerRun({ locks: false }, 1_000_000)).toEqual([0]);
+  });
+
+  test("without navigator.locks a reactive refresh on 401 still works", async () => {
+    const s = useServer(["new"]);
+    const { client, store } = mk({ locks: null });
+    client.adopt("old", 900);
+    await expect(client.api("/cves")).resolves.toEqual({ ok: true });
+    expect(s.refreshCalls).toBe(1);
+    expect(store.getToken()).toBe("new");
+  });
+
+  test("delay is clamped to at least 1 s and at most 2^31-1 ms", async () => {
+    expect(await timerRun({ locks: true }, 0)).toEqual([0]); // sanity
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const fn: typeof fetch = async (u) => {
+        calls.push(String(u));
+        return new Response(JSON.stringify(tokenBody("t2")), { status: 200 });
+      };
+      const store = createTokenStore();
+      const client = createApiClient({ store, fetchFn: fn, locks: makeLocks(), channel: null });
+      made.push(client);
+      client.adopt("t1", 1e12); // would overflow setTimeout (fires immediately) if unclamped
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(calls).toHaveLength(0);
-      await vi.advanceTimersByTimeAsync(3_000);
-      expect(calls).toEqual(["/api/auth/refresh"]);
-      expect(store.getToken()).toBe("t2");
+      client.adopt("t1", 0.001); // tiny: at least 1 s
+      await vi.advanceTimersByTimeAsync(10);
+      expect(calls).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
   });
 });
 
-describe("cross-tab single flight", () => {
-  function tabs(kind: "locks" | "channel", peerWaitMs?: number) {
+describe("cross-tab (Web Locks + broadcast events)", () => {
+  function tabs() {
     const hub = makeHub();
-    const locks = kind === "locks" ? makeLocks() : null;
-    const mkTab = () => mk({ locks, channel: hub.channel(), peerWaitMs });
+    const locks = makeLocks();
+    const mkTab = () => mk({ locks, channel: hub.channel() });
     return { a: mkTab(), b: mkTab(), locks, hub };
   }
+
+  test("a guest tab ignores a peer's refreshed broadcast", async () => {
+    const { b, hub } = tabs();
+    hub.channel().postMessage({ type: "refreshed", access_token: "peer", expires_in: 900, sub: "1" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(b.store.getToken()).toBeNull();
+  });
+
+  test("401 on refresh right after a peer's broadcast adopts that token instead of logging out", async () => {
+    const s = useServer(["peer"], async () => {
+      await delay(80);
+      return HttpResponse.json({ error: "invalid_token" }, { status: 401 }); // grace-window loser
+    });
+    const hub = makeHub();
+    const b = mk({ locks: null, channel: hub.channel() });
+    b.client.adopt("old", 900);
+    const p = b.client.api("/cves");
+    await vi.waitFor(() => expect(s.refreshCalls).toBe(1));
+    hub.channel().postMessage({ type: "refreshed", access_token: "peer", expires_in: 900, sub: null });
+    await expect(p).resolves.toEqual({ ok: true });
+    expect(b.store.getToken()).toBe("peer");
+  });
+
+  test("401 on refresh with no recent peer broadcast still logs out", async () => {
+    useServer([], () => HttpResponse.json({ error: "invalid_token" }, { status: 401 }));
+    const { client, store } = mk({ locks: null });
+    client.adopt("old", 900);
+    await expect(client.api("/cves")).rejects.toBeInstanceOf(AuthError);
+    expect(store.getToken()).toBeNull();
+  });
+
+  test("a guest request (no token sent) never calls /refresh", async () => {
+    const s = useServer([]);
+    const { client } = mk();
+    const err = await caught(client.api("/cves"));
+    expect([err.status, err.code]).toEqual([401, "invalid_token"]);
+    expect(s.refreshCalls).toBe(0);
+  });
 
   test("Web Locks: second tab adopts the broadcast token and does not call /refresh", async () => {
     const s = useServer(["new"], async () => {
@@ -311,7 +402,7 @@ describe("cross-tab single flight", () => {
         ? HttpResponse.json(tokenBody("new"))
         : HttpResponse.json({ error: "invalid_token" }, { status: 401 });
     });
-    const { a, b, locks } = tabs("locks");
+    const { a, b, locks } = tabs();
     a.client.adopt("old", 900);
     b.client.adopt("old", 900);
     const [ra, rb] = await Promise.all([a.client.api("/cves"), b.client.api("/cves")]);
@@ -324,60 +415,13 @@ describe("cross-tab single flight", () => {
 
   test("a tab that never hit a 401 still adopts the broadcast token", async () => {
     const s = useServer(["new"]);
-    const { a, b } = tabs("locks");
+    const { a, b } = tabs();
     a.client.adopt("old", 900);
     b.client.adopt("old", 900);
     await a.client.api("/cves");
     await new Promise((r) => setTimeout(r, 5));
     expect(b.store.getToken()).toBe("new");
     expect(s.refreshCalls).toBe(1);
-  });
-
-  test("BroadcastChannel fallback: waiting tab adopts the 'refreshed' broadcast, no second /refresh", async () => {
-    const s = useServer(["new"], async () => {
-      await delay(60);
-      return HttpResponse.json(tokenBody("new"));
-    });
-    const { a, b } = tabs("channel");
-    a.client.adopt("old", 900);
-    b.client.adopt("old", 900);
-    const pa = a.client.api("/cves");
-    await vi.waitFor(() => expect(s.refreshCalls).toBe(1));
-    const pb = b.client.api("/cves");
-    await expect(Promise.all([pa, pb])).resolves.toEqual([{ ok: true }, { ok: true }]);
-    expect(s.refreshCalls).toBe(1);
-    expect(b.store.getToken()).toBe("new");
-  });
-
-  test("BroadcastChannel fallback: refreshes itself after the wait window if the peer never finishes", async () => {
-    const s = useServer(["mine"], () => HttpResponse.json(tokenBody("mine")));
-    const hub = makeHub();
-    const b = mk({ channel: hub.channel(), peerWaitMs: 40 });
-    b.client.adopt("old", 900);
-    hub.channel().postMessage({ type: "refreshing" }); // a peer announces, then goes silent
-    await new Promise((r) => setTimeout(r, 5));
-    const t0 = Date.now();
-    await expect(b.client.api("/cves")).resolves.toEqual({ ok: true });
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(35);
-    expect(s.refreshCalls).toBe(1);
-  });
-
-  test("BroadcastChannel fallback: a failed peer refresh releases waiters immediately", async () => {
-    const s = useServer([], async () => {
-      await delay(200);
-      return HttpResponse.json({ error: "invalid_token" }, { status: 401 });
-    });
-    const { a, b } = tabs("channel", 5000);
-    a.client.adopt("old", 900);
-    b.client.adopt("old", 900);
-    const pa = caught(a.client.api("/cves"));
-    await vi.waitFor(() => expect(s.refreshCalls).toBe(1));
-    const t0 = Date.now();
-    const rb = await caught(b.client.api("/cves"));
-    expect(rb).toBeInstanceOf(AuthError);
-    expect(s.refreshCalls).toBe(1);
-    expect(Date.now() - t0).toBeLessThan(2000);
-    expect(await pa).toBeInstanceOf(AuthError);
   });
 
   test("ignores malformed broadcast messages", async () => {

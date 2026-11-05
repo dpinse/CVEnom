@@ -1,5 +1,5 @@
 import { createTokenStore, type TokenStore } from "./tokenStore";
-import type { TokenResponse } from "./types";
+import type { Me, TokenResponse } from "./types";
 
 // ---- errors ---------------------------------------------------------------
 
@@ -55,12 +55,12 @@ export type ApiInit = Omit<RequestInit, "body" | "credentials"> & { body?: unkno
 export interface ApiClientOptions {
   store: TokenStore;
   fetchFn?: typeof fetch;
-  /** undefined: use navigator.locks when present; null: none */
+  /** undefined: use navigator.locks when present; null: none (no proactive refresh then) */
   locks?: LocksLike | null;
-  /** undefined: a BroadcastChannel("cvenom-auth") when available; null: none */
+  /** undefined: a BroadcastChannel("cvenom-auth") when available; null: none. Events only, never locking. */
   channel?: ChannelLike | null;
-  /** how long to wait for a peer tab's refresh (fallback mode only) */
-  peerWaitMs?: number;
+  /** random source for the proactive-refresh jitter (tests) */
+  random?: () => number;
   base?: string;
 }
 
@@ -70,25 +70,47 @@ export interface ApiClient {
   adopt(token: string, expiresIn: number): void;
   /** Single-flight refresh (within and across tabs). Throws AuthError if the session is gone. */
   refresh(): Promise<string>;
+  /** Tell other tabs about a login/logout (events only). */
+  announce(message: Record<string, unknown>): void;
   clear(): void;
   dispose(): void;
 }
 
 const LOCK_NAME = "cvenom-refresh";
 const CHANNEL_NAME = "cvenom-auth";
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+const PEER_TOKEN_WINDOW_MS = 15_000;
 /** 401 on these never triggers refresh or logout: the error belongs to the form. */
 const REFRESH_EXEMPT = new Set(["/auth/login", "/auth/password", "/auth/refresh", "/auth/invites/accept"]);
-
-type PeerResult = { token: string } | { authFailed: true } | null;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
+/** Unverified read of the access token's `sub` claim, for UI identity only. */
+export function subOf(token: string): string | null {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const json: unknown = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
+    return isRecord(json) && json.sub !== undefined ? String(json.sub) : null;
+  } catch {
+    return null;
+  }
+}
+
+interface PeerToken {
+  token: string;
+  expiresIn: number;
+  sub: string | null;
+  at: number;
+}
+
 export function createApiClient(opts: ApiClientOptions): ApiClient {
   const { store } = opts;
   const base = opts.base ?? "/api";
-  const peerWaitMs = opts.peerWaitMs ?? 5000;
+  const random = opts.random ?? Math.random;
   const doFetch: typeof fetch = opts.fetchFn ?? ((u, i) => globalThis.fetch(u, i));
 
   const locks: LocksLike | null =
@@ -106,19 +128,26 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inflight: Promise<string> | null = null;
-  let peerSince = 0; // when a peer last announced "refreshing" (0: none)
-  const waiters = new Set<(r: PeerResult) => void>();
+  let lastPeer: PeerToken | null = null;
 
   // ---- token + proactive refresh ------------------------------------------
 
+  /**
+   * Proactive refresh only exists with Web Locks (cross-tab mutual exclusion). Without it
+   * every tab's timer would fire together and two tabs would present the same refresh
+   * cookie, so refreshes are reactive (on 401) and naturally staggered. Jitter spreads
+   * tabs further: the timer fires 60 to 80 s before expiry.
+   */
   function schedule(expiresIn: number) {
     clearTimeout(timer);
-    if (!Number.isFinite(expiresIn) || expiresIn <= 0) return;
-    const sec = expiresIn > 120 ? expiresIn - 60 : expiresIn / 2;
+    timer = undefined;
+    if (!locks || !Number.isFinite(expiresIn) || expiresIn <= 0) return;
+    const sec = expiresIn > 120 ? expiresIn - 60 - random() * 20 : expiresIn / 2;
+    const ms = Math.min(MAX_TIMEOUT_MS, Math.max(1000, sec * 1000));
     timer = setTimeout(() => {
       const t = store.getToken();
       if (t) refreshShared(t).catch(() => undefined);
-    }, sec * 1000);
+    }, ms);
   }
 
   function adopt(token: string, expiresIn: number) {
@@ -128,43 +157,55 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
 
   function clear() {
     clearTimeout(timer);
+    timer = undefined;
     store.clear();
   }
 
-  // ---- channel -------------------------------------------------------------
+  /** Reload the signed-in identity from the server (fire and forget). */
+  function loadMe() {
+    api<Me>("/auth/me").then(
+      (me) => {
+        if (store.getToken()) store.setUser(me);
+      },
+      () => undefined,
+    );
+  }
+
+  /** After adopting a token for user `sub`: reload /me if it is not the user we show. */
+  function syncIdentity(sub: string | null) {
+    const u = store.getUser();
+    if (!u || (sub !== null && String(u.id) !== sub)) loadMe();
+  }
+
+  // ---- channel events ------------------------------------------------------
 
   if (channel) {
     channel.onmessage = (e) => {
       const m = e.data;
       if (!isRecord(m)) return;
-      if (m.type === "refreshed") {
+      const sub = typeof m.sub === "string" ? m.sub : null;
+      if (m.type === "refreshed" || m.type === "login") {
         const { access_token, expires_in } = m;
         if (typeof access_token !== "string" || access_token === "") return;
         if (typeof expires_in !== "number" || !Number.isFinite(expires_in)) return;
-        adopt(access_token, expires_in);
-        peerSince = 0;
-        for (const w of [...waiters]) w({ token: access_token });
-      } else if (m.type === "refreshing") {
-        peerSince = Date.now();
-      } else if (m.type === "refresh_failed") {
-        peerSince = 0;
-        for (const w of [...waiters]) w(m.reason === "auth" ? { authFailed: true } : null);
+        if (m.type === "refreshed") {
+          // A guest tab must not be signed in by a peer's refresh (nor undo a logout).
+          if (!store.getToken() && !inflight) return;
+          lastPeer = { token: access_token, expiresIn: expires_in, sub, at: Date.now() };
+          adopt(access_token, expires_in);
+          syncIdentity(sub);
+        } else {
+          const u = store.getUser();
+          if (sub === null || (u && String(u.id) === sub)) return;
+          adopt(access_token, expires_in);
+          loadMe();
+        }
+      } else if (m.type === "logout") {
+        const u = store.getUser();
+        if (u && sub !== null && String(u.id) !== sub) return; // a different user's logout
+        clear();
       }
     };
-  }
-
-  const peerActive = () => peerSince !== 0 && Date.now() - peerSince < peerWaitMs;
-
-  function waitForPeer(): Promise<PeerResult> {
-    return new Promise((resolve) => {
-      const done = (r: PeerResult) => {
-        clearTimeout(t);
-        waiters.delete(done);
-        resolve(r);
-      };
-      const t = setTimeout(() => done(null), peerWaitMs);
-      waiters.add(done);
-    });
   }
 
   // ---- low-level request ---------------------------------------------------
@@ -214,7 +255,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     return (await readBody(res)) as T;
   }
 
-  // ---- refresh (single flight: in tab, across tabs) ---------------------------
+  // ---- refresh (single flight in tab; Web Locks across tabs) ------------------
 
   async function doRefresh(): Promise<string> {
     let res: Response;
@@ -234,11 +275,23 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
         throw new ApiError(res.status, "bad_refresh_response");
       }
       adopt(b.access_token, b.expires_in);
+      const sub = subOf(b.access_token);
       // Tell every other tab so none of them presents the same refresh cookie again.
-      channel?.postMessage({ type: "refreshed", access_token: b.access_token, expires_in: b.expires_in });
+      channel?.postMessage({ type: "refreshed", access_token: b.access_token, expires_in: b.expires_in, sub });
+      // The shared cookie may now belong to another user than the one this tab shows.
+      const u = store.getUser();
+      if (u && sub !== null && String(u.id) !== sub) loadMe();
       return b.access_token;
     }
     if (res.status === 401 || res.status === 403) {
+      // A peer tab may have rotated the cookie a moment ago (the backend's grace window
+      // rejects us): use the token it broadcast rather than logging everyone out.
+      const p = lastPeer;
+      const u = store.getUser();
+      if (p && Date.now() - p.at < PEER_TOKEN_WINDOW_MS && (!u || p.sub === null || String(u.id) === p.sub)) {
+        adopt(p.token, p.expiresIn);
+        return p.token;
+      }
       clear();
       throw new AuthError();
     }
@@ -252,35 +305,13 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     return doRefresh();
   }
 
-  async function refreshViaChannel(stale: string | null): Promise<string> {
-    if (channel && peerActive()) {
-      const r = await waitForPeer();
-      if (r && "token" in r) return r.token;
-      if (r && "authFailed" in r) {
-        clear();
-        throw new AuthError();
-      }
-    }
-    const cur = store.getToken();
-    if (cur && cur !== stale) return cur;
-    channel?.postMessage({ type: "refreshing" });
-    try {
-      return await doRefresh();
-    } catch (e) {
-      channel?.postMessage({ type: "refresh_failed", reason: e instanceof AuthError ? "auth" : "other" });
-      throw e;
-    }
-  }
-
   function refreshShared(stale: string | null): Promise<string> {
     const cur = store.getToken();
     if (cur && cur !== stale) return Promise.resolve(cur); // already replaced
     if (inflight) return inflight;
     const p = (async () => {
       try {
-        return locks
-          ? await locks.request(LOCK_NAME, () => refreshGuarded(stale))
-          : await refreshViaChannel(stale);
+        return locks ? await locks.request(LOCK_NAME, () => refreshGuarded(stale)) : await refreshGuarded(stale);
       } finally {
         inflight = null;
       }
@@ -291,7 +322,10 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
 
   async function api<T = unknown>(path: string, init: ApiInit = {}): Promise<T> {
     const first = await send(path, init);
-    if (first.res.status !== 401 || REFRESH_EXEMPT.has(path.split("?")[0])) return finish<T>(first.res);
+    // Guests (no token sent) never burn /refresh; bootstrap() handles the cookie-only case.
+    if (first.res.status !== 401 || first.sentToken === null || REFRESH_EXEMPT.has(path.split("?")[0])) {
+      return finish<T>(first.res);
+    }
     await refreshShared(first.sentToken); // AuthError propagates (store already cleared)
     const second = await send(path, init);
     return finish<T>(second.res);
@@ -301,6 +335,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     api,
     adopt,
     refresh: () => refreshShared(store.getToken()),
+    announce: (message) => channel?.postMessage(message),
     clear,
     dispose() {
       clearTimeout(timer);
