@@ -74,6 +74,9 @@ class StoryCveLink(Base):
     )
 
 
+Index("ix_story_cve_link_cve_id", StoryCveLink.cve_id)
+
+
 class CollectorRun(Base):
     __tablename__ = "collector_run"
 

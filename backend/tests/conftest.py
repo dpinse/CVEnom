@@ -1,8 +1,8 @@
 import os
 
-os.environ.setdefault(
-    "DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/cvenom_test"
-)
+# Force the test DB: never defer to an exported DATABASE_URL (drop_all below).
+TEST_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/cvenom_test"
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import pytest
@@ -14,7 +14,10 @@ from cvenom.models import Base
 
 @pytest.fixture(scope="session")
 def test_engine():
-    engine = create_engine(os.environ["DATABASE_URL"])
+    engine = create_engine(TEST_DATABASE_URL)
+    dbname = engine.url.database or ""
+    if not dbname.endswith("_test"):
+        raise RuntimeError(f"refusing to drop_all on non-test database {dbname!r}")
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     yield engine

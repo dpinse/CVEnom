@@ -44,7 +44,7 @@ def upsert_cve(session: Session, data: NormalizedCve) -> Cve:
         session.add(row)
     for field in _MERGE_FIELDS:
         value = getattr(data, field)
-        if value is not None:
+        if value is not None and value != "":
             setattr(row, field, value)
     row.kev = bool(row.kev) or data.kev
     row.poc_badge = bool(row.poc_badge) or data.poc_badge

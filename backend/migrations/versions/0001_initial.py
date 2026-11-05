@@ -48,6 +48,7 @@ def upgrade() -> None:
         sa.Column("story_id", sa.Integer(), sa.ForeignKey("story.id", ondelete="CASCADE"), primary_key=True),
         sa.Column("cve_id", sa.String(), sa.ForeignKey("cve.cve_id", ondelete="CASCADE"), primary_key=True),
     )
+    op.create_index("ix_story_cve_link_cve_id", "story_cve_link", ["cve_id"])
     op.create_table(
         "collector_run",
         sa.Column("collector", sa.String(), primary_key=True),
@@ -58,6 +59,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("collector_run")
+    op.drop_index("ix_story_cve_link_cve_id", table_name="story_cve_link")
     op.drop_table("story_cve_link")
     op.drop_index("ix_story_published_brin", table_name="story")
     op.drop_table("story")
