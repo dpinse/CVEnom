@@ -36,9 +36,12 @@ Reset the database: `docker compose -f docker-compose.dev.yml down -v`.
 
 ### Instant first scrape
 
-Whenever a worker starts it queues one run of every registered collector, so a fresh stack fills in
-immediately instead of waiting for each cron slot. The per-collector Redis lock prevents double runs
-and collectors without a key skip. To trigger the same thing by hand:
+When a worker starts it queues a run of every *stale* collector: one that has never run (no
+`collector_run` row, or NULL `last_run`) or whose last run is older than its cadence. A fresh stack
+fills in immediately, while a restart or hot-reload loop only re-runs what is due, so reloads do not
+hammer the external feeds. If the database is unreachable at that moment nothing is queued (beat's
+schedule still covers it). The per-collector Redis lock prevents double runs and collectors without
+a key skip. To force every collector regardless of staleness:
 
 ```bash
 docker compose -f docker-compose.dev.yml exec worker python -c "from cvenom.tasks import REGISTRY, run_collector_task as t; [t.delay(n) for n in REGISTRY]"
