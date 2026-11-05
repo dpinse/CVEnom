@@ -16,7 +16,7 @@ import httpx
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_process_init, worker_ready
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, exists, func, or_, select
 
 from cvenom.collectors import abusech, cfradar, dshield, epss, kev, news, nvd, osv, ransomware, vulncheck  # noqa: F401  (register)
 from cvenom.collectors.base import REGISTRY
@@ -25,7 +25,9 @@ from cvenom.db import get_engine, session_scope
 from cvenom import live, secretbox
 from cvenom.alerts.dispatch import dispatch_once
 from cvenom.alerts.sinks import build_sinks
-from cvenom.models import CollectorRun, Cve, UserSession
+from cvenom.models import (
+    AlertDelivery, AlertEvent, CollectorRun, Cve, Invite, SigningKey, UserSession,
+)
 from cvenom.geoip import ASN_FILE, COUNTRY_FILE, refresh_geoip
 from cvenom.pipeline import ingest, persist_events, purge_old_geo_events
 
@@ -258,6 +260,11 @@ ALERTS_DISPATCH_LOCK = "alerts-dispatch"
 ALERTS_DISPATCH_TTL = 120
 PURGE_SESSIONS_LOCK = "maintenance-purge-sessions"
 SESSION_RETENTION = timedelta(days=7)
+INVITE_EXPIRED_RETENTION = timedelta(days=7)
+INVITE_USED_RETENTION = timedelta(days=30)
+SIGNING_KEY_EXTRA_RETENTION = timedelta(days=1)  # beyond the verification grace window
+ALERT_EVENT_RETENTION = timedelta(days=30)
+ALERT_DELIVERY_RETENTION = timedelta(days=90)
 
 
 def alerts_dispatch_job(*, lock: CollectorLock | None = None, session_factory=session_scope,
@@ -281,20 +288,46 @@ def alerts_dispatch_job(*, lock: CollectorLock | None = None, session_factory=se
             log.warning("alerts dispatch lock release failed: %s", type(exc).__name__)
 
 
+def _purge_rows(session, now: datetime) -> dict:
+    counts: dict[str, int] = {}
+    cutoff = now - SESSION_RETENTION
+    counts["sessions"] = session.execute(delete(UserSession).where(
+        or_(UserSession.expires_at < cutoff, UserSession.revoked_at < cutoff))).rowcount
+    counts["invites"] = session.execute(delete(Invite).where(or_(
+        Invite.expires_at < now - INVITE_EXPIRED_RETENTION,
+        Invite.used_at < now - INVITE_USED_RETENTION))).rowcount
+    # Past the verification grace window (access TTL + 1 h) plus a day: no token
+    # signed by these keys can verify any more. Active keys are never touched.
+    grace = timedelta(minutes=get_settings().access_ttl_minutes) + timedelta(hours=1)
+    counts["signing_keys"] = session.execute(delete(SigningKey).where(
+        SigningKey.retired_at < now - grace - SIGNING_KEY_EXTRA_RETENTION)).rowcount
+    # Deliveries first: a sent/failed delivery older than 90 d. Pending ones are
+    # never purged (the dispatcher expires them after 7 d).
+    counts["alert_deliveries"] = session.execute(delete(AlertDelivery).where(
+        AlertDelivery.status.in_(("sent", "failed")),
+        AlertDelivery.created_at < now - ALERT_DELIVERY_RETENTION)).rowcount
+    # alert_delivery.event_id cascades on delete, so an event is purged only once
+    # NO delivery references it (stricter than "no pending delivery"): deleting it
+    # earlier would also drop sent/failed history still inside its 90 d window.
+    counts["alert_events"] = session.execute(delete(AlertEvent).where(
+        AlertEvent.processed_at < now - ALERT_EVENT_RETENTION,
+        ~exists().where(AlertDelivery.event_id == AlertEvent.id))).rowcount
+    return counts
+
+
 def purge_sessions_job(*, lock: CollectorLock | None = None, session_factory=session_scope,
                        now: datetime | None = None) -> dict:
+    """Daily retention: sessions, invites, retired signing keys, alert outbox
+    events and delivery history (name kept for beat/lock continuity)."""
     lock = lock if lock is not None else RedisLock()
     if not lock.acquire(PURGE_SESSIONS_LOCK, MAINTENANCE_LOCK_TTL):
         log.info("session purge already running; skipping")
         return {"skipped": True}
     try:
         now = now if now is not None else datetime.now(timezone.utc)
-        cutoff = now - SESSION_RETENTION
         with session_factory() as session:
-            res = session.execute(delete(UserSession).where(
-                or_(UserSession.expires_at < cutoff, UserSession.revoked_at < cutoff)))
-            deleted = res.rowcount
-        return {"ok": True, "deleted": deleted}
+            counts = _purge_rows(session, now)
+        return {"ok": True, **counts}
     finally:
         try:
             lock.release(PURGE_SESSIONS_LOCK)
@@ -322,6 +355,8 @@ beat_schedule = {
 }
 beat_schedule["maintenance-geoip"] = {"task": refresh_geoip_task.name, "schedule": crontab(minute=17, hour="*/6")}
 beat_schedule["maintenance-purge-geo"] = {"task": purge_geo_task.name, "schedule": crontab(minute=23)}
-beat_schedule["alerts-dispatch"] = {"task": alerts_dispatch_task.name, "schedule": 60.0}
+# expires: if workers are down, stale 60 s ticks are discarded instead of piling up.
+beat_schedule["alerts-dispatch"] = {"task": alerts_dispatch_task.name, "schedule": 60.0,
+                                    "options": {"expires": 55}}
 beat_schedule["maintenance-purge-sessions"] = {"task": purge_sessions_task.name, "schedule": crontab(minute=41, hour=3)}
 celery_app.conf.beat_schedule = beat_schedule

@@ -1,4 +1,5 @@
 import secrets
+import threading
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
@@ -7,6 +8,11 @@ MIN_LENGTH = 12
 MAX_LENGTH = 256
 
 _hasher = PasswordHasher()  # argon2id defaults
+
+# argon2id defaults use 64 MiB per verify: cap concurrent verifies per process
+# (~256 MiB) so a multi-IP login flood cannot exhaust memory. Excess callers wait.
+VERIFY_CONCURRENCY = 4
+_VERIFY_SLOTS = threading.BoundedSemaphore(VERIFY_CONCURRENCY)
 
 
 class WeakPassword(ValueError):
@@ -29,10 +35,11 @@ def hash_password(pw: str) -> str:
 
 
 def verify_password(hashed: str, pw: str) -> bool:
-    try:
-        return _hasher.verify(hashed, pw)
-    except (VerifyMismatchError, VerificationError, InvalidHashError):
-        return False
+    with _VERIFY_SLOTS:
+        try:
+            return _hasher.verify(hashed, pw)
+        except (VerifyMismatchError, VerificationError, InvalidHashError):
+            return False
 
 
 def needs_rehash(hashed: str) -> bool:

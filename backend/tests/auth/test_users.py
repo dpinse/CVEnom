@@ -292,3 +292,40 @@ def test_cli_email_exists_as_non_admin_clean_exit(db_session, monkeypatch, capsy
     cap = capsys.readouterr()
     assert rc == 1 and cap.out == ""
     assert "SECRETHASH" not in cap.err and "INSERT" not in cap.err and "argon2" not in cap.err
+
+
+# ------------------------------------- M-k: bounded concurrent argon2 verifies
+
+
+@pytest.mark.parametrize("call", ["verify", "dummy"])
+def test_fifth_concurrent_verify_waits_for_a_permit(call):
+    import threading
+
+    from cvenom.auth import passwords
+
+    assert passwords.VERIFY_CONCURRENCY == 4
+    slots = passwords._VERIFY_SLOTS
+    held = 0
+    for _ in range(4):
+        assert slots.acquire(timeout=1)
+        held += 1
+    done = threading.Event()
+
+    def worker():
+        if call == "verify":
+            passwords.verify_password(passwords.DUMMY_HASH, "x")
+        else:
+            passwords.dummy_verify("x")
+        done.set()
+
+    t = threading.Thread(target=worker, daemon=True)
+    try:
+        t.start()
+        assert not done.wait(0.3)  # all permits held: the fifth verify blocks
+        slots.release()
+        held -= 1
+        assert done.wait(5)
+    finally:
+        for _ in range(held):
+            slots.release()
+        t.join(5)

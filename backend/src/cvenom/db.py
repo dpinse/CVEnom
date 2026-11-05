@@ -12,7 +12,8 @@ from cvenom.schemas import NormalizedCve
 
 @lru_cache
 def get_engine() -> Engine:
-    return create_engine(get_settings().database_url, pool_pre_ping=True)
+    # hide_parameters: DB errors (logged) never echo bound values such as emails/hashes.
+    return create_engine(get_settings().database_url, pool_pre_ping=True, hide_parameters=True)
 
 
 @lru_cache

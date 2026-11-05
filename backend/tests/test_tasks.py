@@ -606,7 +606,8 @@ def test_worker_process_init_handler_never_raises(monkeypatch):
 def test_alerts_dispatch_and_purge_sessions_scheduled():
     from celery.schedules import crontab
     from cvenom.tasks import alerts_dispatch_task, beat_schedule, celery_app, purge_sessions_task
-    assert beat_schedule["alerts-dispatch"] == {"task": alerts_dispatch_task.name, "schedule": 60.0}
+    assert beat_schedule["alerts-dispatch"] == {"task": alerts_dispatch_task.name, "schedule": 60.0,
+                                                "options": {"expires": 55}}
     assert beat_schedule["maintenance-purge-sessions"]["schedule"] == crontab(minute=41, hour=3)
     assert beat_schedule["maintenance-purge-sessions"]["task"] == purge_sessions_task.name
     assert alerts_dispatch_task.name in celery_app.tasks and purge_sessions_task.name in celery_app.tasks
@@ -679,7 +680,8 @@ def test_purge_sessions_job_deletes_old_expired_and_revoked(db_session, factory)
     db_session.flush()
     lock = FakeLock()
     out = tasks.purge_sessions_job(lock=lock, session_factory=factory, now=now)
-    assert out == {"ok": True, "deleted": 2}
+    assert out == {"ok": True, "sessions": 2, "invites": 0, "signing_keys": 0,
+                   "alert_deliveries": 0, "alert_events": 0}
     db_session.expire_all()
     assert {s.refresh_hash[0] for s in db_session.scalars(select(UserSession))} == {"c", "d", "e"}
     assert db_session.scalars(select(UserSessionUsedRefresh)).all() == []
@@ -790,3 +792,136 @@ def test_worker_ready_checks_secrets_key_and_only_logs(monkeypatch, caplog):
         get_settings.cache_clear()
     errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
     assert any("SECRETS_KEY" in m and "SecretsKeyMissing" in m for m in errors)
+
+
+# ------------------------------------------------------- M-j: retention
+
+
+PURGE_NOW = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+
+def _purge(factory):
+    import cvenom.tasks as tasks
+
+    return tasks.purge_sessions_job(lock=FakeLock(), session_factory=factory, now=PURGE_NOW)
+
+
+def test_purge_invites(db_session, factory):
+    from sqlalchemy import select
+    from cvenom.models import Invite
+
+    def mk(tag, expires, used=None):
+        db_session.add(Invite(email=f"{tag}@x.io", role="member", token_hash=tag * 64,
+                              expires_at=expires, used_at=used))
+
+    d = lambda n: PURGE_NOW - timedelta(days=n)  # noqa: E731
+    mk("a", d(8))                                  # expired > 7d: deleted
+    mk("b", d(6))                                  # expired < 7d: kept
+    mk("c", PURGE_NOW + timedelta(days=1))         # live: kept
+    mk("d", PURGE_NOW + timedelta(days=1), d(31))  # used > 30d: deleted
+    mk("e", PURGE_NOW + timedelta(days=1), d(29))  # used < 30d: kept
+    db_session.flush()
+    out = _purge(factory)
+    assert out["invites"] == 2
+    db_session.expire_all()
+    assert {i.email[0] for i in db_session.scalars(select(Invite))} == {"b", "c", "e"}
+
+
+def test_purge_signing_keys_past_grace(db_session, factory):
+    from sqlalchemy import select
+    from cvenom.config import get_settings
+    from cvenom.models import SigningKey
+
+    grace = timedelta(minutes=get_settings().access_ttl_minutes) + timedelta(hours=1)
+    cutoff = PURGE_NOW - grace - timedelta(days=1)
+
+    def mk(kid, retired):
+        db_session.add(SigningKey(kid=kid, private_enc="v1:x", public_pem="p",
+                                  created_at=PURGE_NOW - timedelta(days=30), retired_at=retired))
+
+    mk("old", cutoff - timedelta(minutes=1))     # deleted
+    mk("recent", cutoff + timedelta(minutes=1))  # kept (still near its grace window)
+    mk("active", None)                           # never deleted
+    db_session.flush()
+    out = _purge(factory)
+    assert out["signing_keys"] == 1
+    db_session.expire_all()
+    assert {k.kid for k in db_session.scalars(select(SigningKey))} == {"recent", "active"}
+
+
+def _alert_fixture(db_session):
+    from cvenom.models import AlertRecipient, AlertRule
+
+    rule = AlertRule(name="r", kind="kev_added")
+    db_session.add(rule)
+    db_session.flush()
+    rec = AlertRecipient(rule_id=rule.id, channel="email", email="a@x.io")
+    db_session.add(rec)
+    db_session.flush()
+    return rule, rec
+
+
+def test_purge_alert_events(db_session, factory):
+    from sqlalchemy import select
+    from cvenom.models import AlertDelivery, AlertEvent
+
+    rule, rec = _alert_fixture(db_session)
+    d = lambda n: PURGE_NOW - timedelta(days=n)  # noqa: E731
+
+    def ev(tag, processed):
+        e = AlertEvent(type="kev_added", cve_id=f"CVE-2099-{tag}", source=tag, processed_at=processed)
+        db_session.add(e)
+        db_session.flush()
+        return e
+
+    ev("0001", d(31))                       # old, no deliveries: deleted
+    ev("0002", d(29))                       # recent: kept
+    ev("0003", None)                        # unprocessed: kept
+    pend = ev("0004", d(31))                # old but a pending delivery: kept
+    sent = ev("0005", d(31))                # old, a recent sent delivery: kept (FK cascades)
+    db_session.add_all([
+        AlertDelivery(event_id=pend.id, rule_id=rule.id, recipient_id=rec.id, cve_id="CVE-2099-0004",
+                      status="pending", created_at=d(31)),
+        AlertDelivery(event_id=sent.id, rule_id=rule.id, recipient_id=rec.id, cve_id="CVE-2099-0005",
+                      status="sent", created_at=d(31)),
+    ])
+    db_session.flush()
+    out = _purge(factory)
+    assert out["alert_events"] == 1
+    db_session.expire_all()
+    assert {e.source for e in db_session.scalars(select(AlertEvent))} == {"0002", "0003", "0004", "0005"}
+    assert len(db_session.scalars(select(AlertDelivery)).all()) == 2
+
+
+def test_purge_alert_deliveries(db_session, factory):
+    from sqlalchemy import select
+    from cvenom.models import AlertDelivery, AlertEvent
+
+    rule, rec = _alert_fixture(db_session)
+    d = lambda n: PURGE_NOW - timedelta(days=n)  # noqa: E731
+    e = AlertEvent(type="kev_added", cve_id="CVE-2099-0001", source="s", processed_at=d(1))
+    db_session.add(e)
+    db_session.flush()
+    rows = {
+        "sent-old": ("sent", d(91)),        # deleted
+        "failed-old": ("failed", d(91)),    # deleted
+        "pending-old": ("pending", d(91)),  # kept: never purge pending
+        "sent-new": ("sent", d(89)),        # kept
+    }
+    for i, (tag, (status, created)) in enumerate(rows.items()):
+        db_session.add(AlertDelivery(event_id=e.id, rule_id=rule.id, recipient_id=rec.id,
+                                     cve_id=f"CVE-2099-{i:04d}", status=status, created_at=created,
+                                     last_error=tag))
+    db_session.flush()
+    out = _purge(factory)
+    assert out["alert_deliveries"] == 2
+    db_session.expire_all()
+    assert {x.last_error for x in db_session.scalars(select(AlertDelivery))} == {"pending-old", "sent-new"}
+    assert db_session.get(AlertEvent, e.id) is not None
+
+
+def test_alerts_dispatch_messages_expire():
+    # M-f: a backlog of 60 s dispatch messages (worker down) must not pile up.
+    from cvenom.tasks import beat_schedule
+
+    assert beat_schedule["alerts-dispatch"]["options"] == {"expires": 55}

@@ -123,3 +123,15 @@ def test_dev_compose_ports_are_loopback_only():
     for name in ("postgres", "redis"):
         ports = compose["services"][name]["ports"]
         assert ports and all(str(p).startswith("127.0.0.1:") for p in ports), (name, ports)
+
+
+def test_engine_hides_bound_parameters(monkeypatch):
+    # M-g: SQLAlchemy error messages must not echo bound values (emails, hashes).
+    from cvenom import db
+
+    db.get_engine.cache_clear()
+    try:
+        engine = db.get_engine()
+        assert engine.hide_parameters is True
+    finally:
+        db.get_engine.cache_clear()
