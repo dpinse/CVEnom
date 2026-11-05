@@ -7,7 +7,7 @@ const css = readFileSync(resolve(__dirname, "../styles/tokens.css"), "utf8");
 const REQUIRED = [
   "--bg", "--panel", "--panel-2", "--line", "--text", "--muted", "--faint",
   "--sev-crit", "--sev-high", "--sev-med", "--sev-low", "--live", "--scope",
-  "--ocean", "--land", "--border-geo",
+  "--ocean", "--land", "--border-geo", "--well",
   "--font-display", "--font-body", "--font-mono",
   "--radius", "--gutter",
 ];
