@@ -178,3 +178,100 @@ def test_story_url_rejects_userinfo(bad):
 def test_story_url_normal_urls_still_pass():
     for ok in ("https://www.bleepingcomputer.com/news/x?a=b@c", "http://host:8080/p"):
         assert _story(url=ok).url == ok
+
+
+# --- .onion rejection (spec E) ---
+
+@pytest.mark.parametrize("url", [
+    "http://abcdef.onion/", "https://ABC.ONION/x", "http://abc.onion.:80/p", "http://sub.abc.onion",
+])
+def test_validate_http_url_rejects_onion(url):
+    from cvenom.schemas import validate_http_url
+
+    with pytest.raises(ValueError):
+        validate_http_url(url)
+
+
+@pytest.mark.parametrize("url", ["https://onion.example.com/", "https://example.com/x.onion"])
+def test_validate_http_url_allows_onion_lookalikes(url):
+    from cvenom.schemas import validate_http_url
+
+    assert validate_http_url(url) == url
+
+
+def test_story_and_geo_reject_onion_urls():
+    with pytest.raises(ValidationError):
+        _story(url="http://abcdef.onion/leak")
+    with pytest.raises(ValidationError):
+        _geo(story_url="http://abcdef.onion/leak")
+
+
+# --- KEV/NVD detail fields (spec D) ---
+
+def test_normalized_cve_drops_bad_references_and_caps_20():
+    refs = [{"url": f"https://ref{i}.example/a", "tags": ["Patch"]} for i in range(23)]
+    refs.insert(3, {"url": "javascript:alert(1)", "tags": []})
+    refs.insert(7, {"url": "http://leak.onion/x", "tags": []})
+    assert len(refs) == 25
+    c = NormalizedCve(cve_id="CVE-2026-1001", references=refs)
+    assert len(c.references) == 20
+    urls = [r.url for r in c.references]
+    assert urls == [f"https://ref{i}.example/a" for i in range(20)]
+    assert all(r.tags == ["Patch"] for r in c.references)
+
+
+def test_references_bad_shapes_dropped_and_tags_bounded():
+    c = NormalizedCve(cve_id="CVE-2026-1001", references=[
+        "https://not-a-dict.example/", {"tags": ["x"]}, {"url": 5}, None,
+        {"url": "https://ok.example/", "tags": ["a" * 64, "b" * 65, 7, *[f"t{i}" for i in range(12)]]},
+    ])
+    assert [r.url for r in c.references] == ["https://ok.example/"]
+    tags = c.references[0].tags
+    assert len(tags) == 10 and tags[0] == "a" * 64 and all(isinstance(t, str) and len(t) <= 64 for t in tags)
+    assert NormalizedCve(cve_id="CVE-2026-1001", references="nope").references is None  # not provided
+    assert NormalizedCve(cve_id="CVE-2026-1001", cwes="CWE-79").cwes is None
+
+
+def test_cwes_filtered_and_capped():
+    raw = ["CWE-79", "NVD-CWE-Other", "NVD-CWE-noinfo", "CWE-79", "cwe-20", "CWE-1234567", 89, "CWE-89"]
+    raw += [f"CWE-{i}" for i in range(1000, 1030)]
+    c = NormalizedCve(cve_id="CVE-2026-1001", cwes=raw)
+    assert c.cwes[:2] == ["CWE-79", "CWE-89"]
+    assert "NVD-CWE-Other" not in c.cwes
+    assert len(c.cwes) == 20 and len(set(c.cwes)) == 20
+
+
+def test_new_fields_default_to_none():
+    c = NormalizedCve(cve_id="CVE-2026-1001")
+    for f in ("kev_name", "kev_action", "kev_due", "kev_ransomware", "kev_notes", "cvss_vector",
+              "cvss_severity", "cwes", "references", "last_modified"):
+        assert getattr(c, f) is None, f
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("CRITICAL", "CRITICAL"), ("high", "HIGH"), ("NONE", "NONE"),
+    ("SEVERE", None), ("", None), (5, None), (None, None),
+])
+def test_unknown_severity_is_none(raw, expected):
+    assert NormalizedCve(cve_id="CVE-2026-1001", cvss_severity=raw).cvss_severity == expected
+
+
+def test_cvss_vector_bounded_to_255():
+    vec = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    assert NormalizedCve(cve_id="CVE-2026-1001", cvss_vector=vec).cvss_vector == vec
+    assert NormalizedCve(cve_id="CVE-2026-1001", cvss_vector="x" * 256).cvss_vector is None
+
+
+def test_last_modified_bounded():
+    from datetime import datetime, timezone
+
+    naive = datetime(2026, 10, 1, 12)
+    c = NormalizedCve(cve_id="CVE-2026-1001", last_modified=naive)
+    assert c.last_modified == naive.replace(tzinfo=timezone.utc)
+    with pytest.raises(ValidationError):
+        NormalizedCve(cve_id="CVE-2026-1001", last_modified=datetime(1900, 1, 1, tzinfo=timezone.utc))
+
+
+def test_story_details_defaults_to_empty_dict():
+    assert _story().details == {}
+    assert _story(details={"victim": "Acme"}).details == {"victim": "Acme"}

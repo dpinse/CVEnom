@@ -469,6 +469,38 @@ def test_old_cisa_listing_still_gated_by_recency(db_session):
     assert _kev_events(db_session, cid) == []
 
 
+def test_ingest_sanitizes_new_text_and_story_details(db_session):
+    payload = "x < y <script>alert(1)</script>"
+    cve = NormalizedCve(
+        cve_id="CVE-2026-9500", kev_name=payload, kev_action=payload, kev_notes=payload,
+        cvss_vector="CVSS:3.1/<b>AV:N</b>", cwes=["CWE-79"],
+        references=[{"url": "https://a.example/x?a=1&b=2", "tags": ["<i>Patch</i>", "<script>x</script>"]}],
+    )
+    story = NormalizedStory(url="https://www.ransomware.live/id/abc", source="ransomware.live",
+                            title="Acme hit", summary="s", published=NOW,
+                            details={"victim": payload, "nested": {"k": ["<b>v</b>"]}})
+    ingest(db_session, CollectorResult(cves=[cve], stories=[story]))
+    db_session.expire_all()
+    row = db_session.get(Cve, "CVE-2026-9500")
+    for value in (row.kev_name, row.kev_action, row.kev_notes):
+        assert value == "x &lt; y"
+    assert row.cvss_vector == "CVSS:3.1/AV:N"
+    assert row.cwes == ["CWE-79"]
+    assert row.references == [{"url": "https://a.example/x?a=1&amp;b=2", "tags": ["Patch"]}]
+    s = db_session.query(Story).one()
+    assert s.details == {"victim": "x &lt; y", "nested": {"k": ["v"]}}
+    assert s.url == "https://www.ransomware.live/id/abc"  # raw URL column is stored as validated
+
+
+def test_ingest_drops_vector_that_grows_past_255_when_escaped(db_session):
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id="CVE-2026-9501", cvss_vector="&" * 200),
+        NormalizedCve(cve_id="CVE-2026-9502", cvss_vector="CVSS:3.1/AV:N"),
+    ]))
+    assert db_session.get(Cve, "CVE-2026-9501").cvss_vector is None
+    assert db_session.get(Cve, "CVE-2026-9502").cvss_vector == "CVSS:3.1/AV:N"
+
+
 def test_lane_views_exploited_newest_listing_first(db_session):
     from datetime import date
     _insert_cve(db_session, "CVE-2026-9400", kev=True, kev_added=date(2026, 10, 1),

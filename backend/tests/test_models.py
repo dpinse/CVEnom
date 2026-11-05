@@ -89,6 +89,98 @@ def test_patch_available_is_sticky_true(db_session):
     assert row.patch_available is True
 
 
+def _kev_detail(cid, source, tag, **kw):
+    from datetime import date
+
+    from cvenom.schemas import NormalizedCve
+
+    return NormalizedCve(cve_id=cid, kev=True, kev_source=source, kev_name=f"{tag} name",
+                         kev_action=f"{tag} action", kev_due=date(2026, 11, 20 if tag == "cisa" else 25),
+                         kev_notes=f"{tag} notes", **kw)
+
+
+def test_upsert_kev_details_cisa_wins_over_vulncheck(db_session):
+    from datetime import date
+
+    from cvenom.db import upsert_cve
+    from cvenom.schemas import NormalizedCve
+
+    fields = ("kev_name", "kev_action", "kev_due", "kev_notes")
+    cisa = ("cisa name", "cisa action", date(2026, 11, 20), "cisa notes")
+    # VulnCheck first, then CISA: CISA overwrites.
+    upsert_cve(db_session, _kev_detail("CVE-2026-0010", "vulncheck", "vc"))
+    row = upsert_cve(db_session, _kev_detail("CVE-2026-0010", "cisa", "cisa"))
+    assert tuple(getattr(row, f) for f in fields) == cisa
+    # CISA first, then VulnCheck: the CISA values stay.
+    upsert_cve(db_session, _kev_detail("CVE-2026-0011", "cisa", "cisa"))
+    row = upsert_cve(db_session, _kev_detail("CVE-2026-0011", "vulncheck", "vc"))
+    assert tuple(getattr(row, f) for f in fields) == cisa
+    # A later CISA record with no details (None) does not wipe them.
+    row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0011", kev=True, kev_source="cisa"))
+    assert tuple(getattr(row, f) for f in fields) == cisa
+
+
+def test_upsert_kev_details_fill_nulls_from_vulncheck(db_session):
+    from cvenom.db import upsert_cve
+    from cvenom.schemas import NormalizedCve
+
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0012", kev=True, kev_source="cisa",
+                                         kev_name="cisa name"))
+    row = upsert_cve(db_session, _kev_detail("CVE-2026-0012", "vulncheck", "vc"))
+    assert row.kev_name == "cisa name"  # CISA value kept
+    assert row.kev_action == "vc action" and row.kev_notes == "vc notes"  # NULLs filled
+
+
+def test_upsert_kev_ransomware_sticky_true(db_session):
+    from cvenom.db import upsert_cve
+    from cvenom.schemas import NormalizedCve
+
+    cid = "CVE-2026-0013"
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid))
+    assert row.kev_ransomware is None
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, kev_ransomware=False))
+    assert row.kev_ransomware is False
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, kev_ransomware=True))
+    assert row.kev_ransomware is True
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, kev_ransomware=False))
+    assert row.kev_ransomware is True
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, kev_ransomware=None))
+    assert row.kev_ransomware is True
+
+
+def test_upsert_kev_record_does_not_wipe_nvd_lists(db_session):
+    from datetime import datetime, timezone
+
+    from cvenom.db import upsert_cve
+    from cvenom.schemas import NormalizedCve
+
+    cid = "CVE-2026-0014"
+    lm = datetime(2026, 10, 30, tzinfo=timezone.utc)
+    refs = [{"url": "https://vendor.example/advisory", "tags": ["Vendor Advisory"]}]
+    upsert_cve(db_session, NormalizedCve(
+        cve_id=cid, cwes=["CWE-79"], references=refs, cvss_vector="CVSS:3.1/AV:N",
+        cvss_severity="HIGH", last_modified=lm))
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, kev=True, kev_source="cisa", kev_name="n"))
+    assert row.cwes == ["CWE-79"]
+    assert row.references == refs
+    assert (row.cvss_vector, row.cvss_severity, row.last_modified) == ("CVSS:3.1/AV:N", "HIGH", lm)
+    # A new NVD record replaces the lists (including with an explicit empty list).
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, cwes=[], references=[
+        {"url": "https://other.example/", "tags": []}]))
+    assert row.cwes == [] and row.references == [{"url": "https://other.example/", "tags": []}]
+
+
+def test_new_cve_row_has_empty_list_defaults(db_session):
+    from cvenom.db import upsert_cve
+    from cvenom.models import Cve
+    from cvenom.schemas import NormalizedCve
+
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0015"))
+    db_session.expire_all()
+    row = db_session.get(Cve, "CVE-2026-0015")
+    assert row.cwes == [] and row.references == []
+
+
 def _run_import(env_overrides, drop, tmp_path):
     import os
     import subprocess

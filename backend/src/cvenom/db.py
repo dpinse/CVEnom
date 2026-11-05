@@ -35,7 +35,17 @@ def session_scope() -> Iterator[Session]:
 
 
 # Fields overwritten only when the incoming value is not None.
-_MERGE_FIELDS = ("published", "cvss", "epss", "epss_percentile", "summary")
+_MERGE_FIELDS = (
+    "published", "cvss", "epss", "epss_percentile", "summary",
+    "cvss_vector", "cvss_severity", "last_modified",
+)
+
+# KEV catalog detail: a non-null incoming value overwrites only when it comes from
+# CISA or the stored value is NULL (CISA beats VulnCheck, as with kev_source).
+_KEV_DETAIL_FIELDS = ("kev_name", "kev_action", "kev_due", "kev_notes")
+
+# Lists replaced wholesale whenever the incoming value is not None (None = not provided).
+_LIST_FIELDS = ("cwes", "references")
 
 # kev_source with precedence: an incoming non-CISA source never replaces CISA.
 _KEV_SOURCE_CISA = "cisa"
@@ -47,11 +57,14 @@ def upsert_cve(session: Session, data: NormalizedCve) -> Cve:
     Only non-null incoming fields overwrite; kev, poc_badge and patch_available
     are sticky (never True to False); kev_added keeps the EARLIEST date seen;
     kev_source "cisa" is never replaced by another source; affected is
-    unioned, preserving order.
+    unioned, preserving order. KEV details (name/action/due/notes) prefer CISA
+    and otherwise only fill NULLs; kev_ransomware is sticky True; cwes and
+    references are replaced when provided (not None).
     """
     row = session.get(Cve, data.cve_id)
     if row is None:
-        row = Cve(cve_id=data.cve_id, kev=False, poc_badge=False, affected=[], summary="")
+        row = Cve(cve_id=data.cve_id, kev=False, poc_badge=False, affected=[], summary="",
+                  cwes=[], references=[])
         session.add(row)
     for field in _MERGE_FIELDS:
         value = getattr(data, field)
@@ -63,6 +76,16 @@ def upsert_cve(session: Session, data: NormalizedCve) -> Cve:
         row.kev_source == _KEV_SOURCE_CISA and data.kev_source != _KEV_SOURCE_CISA
     ):
         row.kev_source = data.kev_source
+    for field in _KEV_DETAIL_FIELDS:
+        value = getattr(data, field)
+        if value is not None and (data.kev_source == _KEV_SOURCE_CISA or getattr(row, field) is None):
+            setattr(row, field, value)
+    if data.kev_ransomware is not None:
+        row.kev_ransomware = row.kev_ransomware is True or data.kev_ransomware
+    for field in _LIST_FIELDS:
+        value = getattr(data, field)
+        if value is not None:
+            setattr(row, field, [v.model_dump() if hasattr(v, "model_dump") else v for v in value])
     if data.patch_available is not None:
         # Sticky True: one source saying "fixed" is not undone by a later "no fix".
         row.patch_available = row.patch_available is True or data.patch_available

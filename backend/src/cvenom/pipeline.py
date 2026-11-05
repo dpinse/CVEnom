@@ -18,7 +18,14 @@ from cvenom.config import get_settings
 from cvenom.db import upsert_cve
 from cvenom.extract import extract_cve_ids, link_story
 from cvenom.models import AlertEvent, Cve, GeoEvent, Story, StoryCveLink
-from cvenom.schemas import CVE_ID_RE, NormalizedCve, NormalizedGeoEvent, NormalizedStory
+from cvenom.schemas import (
+    CVE_ID_RE,
+    MAX_CVSS_VECTOR_LEN,
+    CveReference,
+    NormalizedCve,
+    NormalizedGeoEvent,
+    NormalizedStory,
+)
 from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve
 from cvenom.textutil import content_hash, find_existing_story, sanitize_text
 
@@ -60,6 +67,7 @@ def _ingest_story(session: Session, story: NormalizedStory) -> None:
         title=title,
         summary=summary,
         published=story.published,
+        details=_sanitize_details(story.details),
     )
     session.add(row)
     session.flush()
@@ -117,10 +125,40 @@ def _drop_known_kev_events(session: Session, events: list[dict]) -> list[dict]:
     return [e for e in events if not dropped(e)]
 
 
+def _sanitize_opt(value: str | None) -> str | None:
+    return None if value is None else sanitize_text(value)
+
+
+def _sanitized_references(refs: list[CveReference] | None) -> list[CveReference] | None:
+    if refs is None:
+        return None
+    out = []
+    for ref in refs:
+        url = sanitize_text(ref.url)
+        if url:
+            tags = [clean for t in ref.tags if (clean := sanitize_text(t))]
+            # model_construct: the url was validated at the boundary; it is now entity-escaped
+            # text for a JSON column (links decode it once on render).
+            out.append(CveReference.model_construct(url=url, tags=tags))
+    return out
+
+
+def _sanitized_vector(value: str | None) -> str | None:
+    # Entity-escaping can grow the text past the String(255) column: drop it instead.
+    clean = _sanitize_opt(value)
+    return None if clean is None or len(clean) > MAX_CVSS_VECTOR_LEN else clean
+
+
 def _sanitized(cve: NormalizedCve) -> NormalizedCve:
     return cve.model_copy(update={
         "summary": sanitize_text(cve.summary),
         "affected": [clean for a in cve.affected if (clean := sanitize_text(a))],
+        "kev_name": _sanitize_opt(cve.kev_name),
+        "kev_action": _sanitize_opt(cve.kev_action),
+        "kev_notes": _sanitize_opt(cve.kev_notes),
+        "cvss_vector": _sanitized_vector(cve.cvss_vector),
+        "cwes": None if cve.cwes is None else [clean for c in cve.cwes if (clean := sanitize_text(c))],
+        "references": _sanitized_references(cve.references),
     })
 
 

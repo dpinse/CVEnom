@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 # ASCII digits only (no Unicode digits), anchored on the whole string via fullmatch.
 CVE_ID_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.ASCII)
@@ -51,7 +51,38 @@ def validate_http_url(value: object) -> str:
         raise ValueError("url must be http(s) with a host")
     if parts.username or parts.password:
         raise ValueError("url must not contain userinfo")
+    host = (parts.hostname or "").rstrip(".").lower()
+    if host == "onion" or host.endswith(".onion"):
+        raise ValueError("onion urls are not allowed")
     return url
+
+
+CWE_RE = re.compile(r"CWE-\d{1,6}", re.ASCII)
+CvssSeverity = Literal["NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+_SEVERITIES = frozenset(("NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"))
+MAX_REFERENCES = 20
+MAX_CWES = 20
+MAX_REF_TAGS = 10
+MAX_REF_TAG_LEN = 64
+MAX_CVSS_VECTOR_LEN = 255
+
+
+class CveReference(BaseModel):
+    url: str
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def _validate_url(cls, value: object) -> str:
+        return validate_http_url(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _bound_tags(cls, value: object) -> list[str]:
+        """Keep only str tags of <= 64 chars, at most 10; never fails the reference."""
+        if not isinstance(value, (list, tuple)):
+            return []
+        return [t for t in value if isinstance(t, str) and len(t) <= MAX_REF_TAG_LEN][:MAX_REF_TAGS]
 
 
 class NormalizedCve(BaseModel):
@@ -73,6 +104,63 @@ class NormalizedCve(BaseModel):
     patch_available: bool | None = None
     affected: list[str] = Field(default_factory=list)
     summary: str | None = None
+    # KEV catalog detail (CISA / VulnCheck) and NVD detail. None = "not provided":
+    # upsert_cve leaves the stored value alone, so a KEV record never wipes NVD lists.
+    kev_name: str | None = None
+    kev_action: str | None = None
+    kev_due: date | None = None
+    kev_ransomware: bool | None = None
+    kev_notes: str | None = None
+    cvss_vector: str | None = None
+    cvss_severity: CvssSeverity | None = None
+    cwes: list[str] | None = None
+    references: list[CveReference] | None = None
+    last_modified: datetime | None = None
+
+    @field_validator("cvss_vector", mode="before")
+    @classmethod
+    def _bound_vector(cls, value: object) -> object:
+        # An overlong vector (column is String(255)) is dropped, never fails the record.
+        if isinstance(value, str) and len(value) > MAX_CVSS_VECTOR_LEN:
+            return None
+        return value
+
+    @field_validator("cvss_severity", mode="before")
+    @classmethod
+    def _known_severity(cls, value: object) -> str | None:
+        if isinstance(value, str) and value.strip().upper() in _SEVERITIES:
+            return value.strip().upper()
+        return None  # unknown severity never fails the record
+
+    @field_validator("cwes", mode="before")
+    @classmethod
+    def _filter_cwes(cls, value: object) -> list[str] | None:
+        """Keep ``CWE-<1..6 digits>`` only (drops NVD-CWE-Other etc.), deduped in order, max 20."""
+        if not isinstance(value, (list, tuple)):
+            return None
+        kept = [c for c in value if isinstance(c, str) and CWE_RE.fullmatch(c)]
+        return list(dict.fromkeys(kept))[:MAX_CWES]
+
+    @field_validator("references", mode="before")
+    @classmethod
+    def _filter_references(cls, value: object) -> list[CveReference] | None:
+        """Drop invalid entries (bad/onion/non-http url, bad shape), cap at 20; never fails."""
+        if not isinstance(value, (list, tuple)):
+            return None
+        kept: list[CveReference] = []
+        for item in value:
+            if len(kept) >= MAX_REFERENCES:
+                break
+            try:
+                kept.append(CveReference.model_validate(item))
+            except ValidationError:
+                continue
+        return kept
+
+    @field_validator("last_modified")
+    @classmethod
+    def _bound_last_modified(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else bound_datetime(value)
 
 
 class NormalizedStory(BaseModel):
@@ -81,6 +169,7 @@ class NormalizedStory(BaseModel):
     title: str
     summary: str
     published: datetime
+    details: dict = Field(default_factory=dict)  # stored raw; the pipeline sanitizes
 
     @field_validator("url", mode="before")
     @classmethod

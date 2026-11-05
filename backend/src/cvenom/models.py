@@ -41,6 +41,18 @@ class Cve(Base):
     patch_available: Mapped[bool | None] = mapped_column(Boolean)
     affected: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
     summary: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # KEV catalog detail (CISA preferred over VulnCheck) and NVD detail (migration 0006).
+    kev_name: Mapped[str | None] = mapped_column(Text)
+    kev_action: Mapped[str | None] = mapped_column(Text)
+    kev_due: Mapped[date | None] = mapped_column(Date)
+    kev_ransomware: Mapped[bool | None] = mapped_column(Boolean)
+    kev_notes: Mapped[str | None] = mapped_column(Text)
+    cvss_vector: Mapped[str | None] = mapped_column(String(255))
+    cvss_severity: Mapped[str | None] = mapped_column(String(16))
+    cwes: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
+    # "references" is a reserved word: SQLAlchemy quotes it; raw SQL must write "references".
+    references: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
+    last_modified: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -60,6 +72,8 @@ class Story(Base):
     title: Mapped[str] = mapped_column(Text)
     summary: Mapped[str] = mapped_column(Text, default="", server_default="")
     published: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Source context (e.g. ransomware.live victim detail); outlives the geo_event retention.
+    details: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -229,10 +229,133 @@ def test_kev_alerted_at_migration_backfill_and_model(scratch_url):
             "select column_name from information_schema.columns where table_name='cve'"))}
     assert rows == {"CVE-2026-0001": True, "CVE-2026-0002": False}  # only kev_added backfills
     assert tuple(col) == ("timestamp with time zone", "YES", None)
-    assert cols == {c.name for c in Cve.__table__.columns}
+    # At 0005 the cve table is the head model minus the columns later revisions add.
+    assert cols == {c.name for c in Cve.__table__.columns} - CVE_0006_COLS
     command.downgrade(cfg, "0004")
     with eng.connect() as c:
         cols = {r[0] for r in c.execute(text(
             "select column_name from information_schema.columns where table_name='cve'"))}
     eng.dispose()
     assert "kev_alerted_at" not in cols
+
+
+CVE_0006_COLS = {
+    "kev_name", "kev_action", "kev_due", "kev_ransomware", "kev_notes",
+    "cvss_vector", "cvss_severity", "cwes", "references", "last_modified",
+}
+
+
+def _load_0006():
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "migrations" / "versions" / "0006_cve_details_onion_cleanup.py"
+    spec = importlib.util.spec_from_file_location("mig_0006", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _columns(conn, table):
+    return {
+        r[0]: (r[1], r[2], r[3], r[4])
+        for r in conn.execute(text(
+            "select column_name, data_type, is_nullable, column_default, character_maximum_length "
+            "from information_schema.columns where table_name=:t"), {"t": table})
+    }
+
+
+def test_migration_0006_cleanup(scratch_url):
+    from cvenom.models import Cve, Story
+
+    mig = _load_0006()
+    assert (mig.revision, mig.down_revision) == ("0006", "0005")
+    cfg = _cfg()
+    command.upgrade(cfg, "0005")
+    eng = create_engine(scratch_url)
+    stories = {
+        "rl_onion": ("ransomware.live", "http://lockbitxyz.onion/post/acme"),
+        "rl_site": ("ransomware.live", "https://www.acme-victim.example/"),
+        "rl_permalink": ("ransomware.live", "https://www.ransomware.live/id/YWNtZQ==@lockbit"),
+        "news_onion": ("THN", "http://newsabc.onion/article"),
+        "news_clear": ("THN", "https://thehackernews.com/2026/11/x.html"),
+    }
+    geo = {
+        "g_onion": ("ransomware_live", "http://lockbitxyz.onion/post/acme"),
+        "g_site": ("ransomware_live", "https://www.acme-victim.example/"),
+        "g_permalink": ("ransomware_live", "https://www.ransomware.live/id/YWNtZQ==@lockbit"),
+        "g_other_clear": ("shodan", "https://example.com/scan"),  # not ransomware_live: untouched
+        "g_null": ("ransomware_live", None),
+    }
+    with eng.begin() as c:
+        c.execute(text("insert into cve (cve_id) values ('CVE-2026-0001')"))
+        for key, (source, url) in stories.items():
+            sid = c.execute(text(
+                "insert into story (url, content_hash, source, title, summary, published) "
+                "values (:u, :h, :s, :t, '', now()) returning id"),
+                {"u": url, "h": key, "s": source, "t": key}).scalar()
+            c.execute(text("insert into story_cve_link (story_id, cve_id) values (:i, 'CVE-2026-0001')"),
+                      {"i": sid})
+        for key, (source, url) in geo.items():
+            c.execute(text(
+                "insert into geo_event (source, external_id, kind, observed_at, story_url) "
+                "values (:s, :e, 'victim', now(), :u)"), {"s": source, "e": key, "u": url})
+
+    command.upgrade(cfg, "0006")
+    with eng.connect() as c:
+        left = {r[0] for r in c.execute(text("select title from story"))}
+        links = c.execute(text("select count(*) from story_cve_link")).scalar()
+        geo_rows = dict(c.execute(text("select external_id, story_url from geo_event")).all())
+        cve_cols = _columns(c, "cve")
+        story_cols = _columns(c, "story")
+        # The Postgres ONION regex agrees with validate_http_url on the brief's URL cases.
+        matches = {u: c.execute(text("select cast(:u as text) ~* :r"), {"u": u, "r": mig.ONION}).scalar()
+                   for u in ("http://abcdef.onion/", "https://ABC.ONION/x", "http://abc.onion.:80/p",
+                             "http://sub.abc.onion", "http://u@x.onion?q", "https://onion.example.com/",
+                             "https://example.com/x.onion", "https://x.onionz.example/")}
+    assert left == {"rl_permalink", "news_clear"}
+    assert links == 2  # links of deleted stories cascade away
+    assert geo_rows == {
+        "g_onion": None, "g_site": None,
+        "g_permalink": "https://www.ransomware.live/id/YWNtZQ==@lockbit",
+        "g_other_clear": "https://example.com/scan", "g_null": None,
+    }
+    assert matches == {
+        "http://abcdef.onion/": True, "https://ABC.ONION/x": True, "http://abc.onion.:80/p": True,
+        "http://sub.abc.onion": True, "http://u@x.onion?q": True, "https://onion.example.com/": False,
+        "https://example.com/x.onion": False, "https://x.onionz.example/": False,
+    }
+    # Schema matches the models (names, nullability, server defaults, types).
+    assert set(cve_cols) == {col.name for col in Cve.__table__.columns}
+    assert set(story_cols) == {col.name for col in Story.__table__.columns}
+    for table, cols in ((Cve.__table__, cve_cols), (Story.__table__, story_cols)):
+        for col in table.columns:
+            assert (cols[col.name][1] == "YES") == col.nullable, col.name
+    expect = {
+        "kev_name": ("text", "YES", None, None), "kev_action": ("text", "YES", None, None),
+        "kev_due": ("date", "YES", None, None), "kev_ransomware": ("boolean", "YES", None, None),
+        "kev_notes": ("text", "YES", None, None),
+        "cvss_vector": ("character varying", "YES", None, 255),
+        "cvss_severity": ("character varying", "YES", None, 16),
+        "last_modified": ("timestamp with time zone", "YES", None, None),
+    }
+    for name, want in expect.items():
+        assert cve_cols[name] == want, name
+    for name in ("cwes", "references"):
+        assert cve_cols[name][:2] == ("jsonb", "NO") and cve_cols[name][2].startswith("'[]'"), name
+    assert story_cols["details"][:2] == ("jsonb", "NO") and story_cols["details"][2].startswith("'{}'")
+
+    command.downgrade(cfg, "0005")
+    with eng.connect() as c:
+        cve_after = set(_columns(c, "cve"))
+        story_after = set(_columns(c, "story"))
+        left_after = {r[0] for r in c.execute(text("select title from story"))}
+    eng.dispose()
+    assert not (CVE_0006_COLS & cve_after) and "details" not in story_after
+    assert left_after == {"rl_permalink", "news_clear"}  # deleted rows are not restored
+
+
+def test_migration_0006_on_empty_db(scratch_url):
+    cfg = _cfg()
+    command.upgrade(cfg, "0006")
+    command.downgrade(cfg, "0005")
+    command.upgrade(cfg, "0006")
