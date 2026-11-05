@@ -1,4 +1,7 @@
+import { useLiveUpdates } from "./lib/live";
+
 export default function App() {
+  useLiveUpdates(); // the one live socket for the whole app
   return (
     <main className="gutter">
       <h1
