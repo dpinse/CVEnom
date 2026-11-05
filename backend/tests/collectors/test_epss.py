@@ -110,3 +110,54 @@ def test_normalize_skips_nan_inf_and_out_of_range():
     ]
     ids = [c.cve_id for c in EpssCollector().normalize(raw).cves]
     assert ids == ["CVE-2026-1001", "CVE-2026-1006"]
+
+
+# --- score-date short-circuit (#6) ---
+
+
+def _dated(cve, day):
+    return {"cve": cve, "epss": "0.5", "percentile": "0.6", "date": day}
+
+
+@respx.mock
+async def test_unchanged_score_date_short_circuits_after_first_page(monkeypatch):
+    monkeypatch.setattr(epss, "PAGE_SIZE", 2)
+    route = respx.get(EPSS_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_page([_dated("CVE-2026-0001", "2026-11-04"), _dated("CVE-2026-0002", "2026-11-04")], 5)),
+            httpx.Response(200, json=_page([_dated("CVE-2026-0003", "2026-11-04")], 5, 2)),
+        ]
+    )
+    c = EpssCollector(state={"score_date": "2026-11-04"})
+    res = await c.run()
+    assert route.call_count == 1
+    assert c.last_error is None  # successful, empty run
+    assert res.cves == []
+    assert c.state["score_date"] == "2026-11-04"
+
+
+@respx.mock
+async def test_changed_score_date_fetches_all_and_updates_state(monkeypatch):
+    monkeypatch.setattr(epss, "PAGE_SIZE", 2)
+    route = respx.get(EPSS_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_page([_dated("CVE-2026-0001", "2026-11-05"), _dated("CVE-2026-0002", "2026-11-05")], 3)),
+            httpx.Response(200, json=_page([_dated("CVE-2026-0003", "2026-11-05")], 3, 2)),
+        ]
+    )
+    c = EpssCollector(state={"score_date": "2026-11-04"})
+    res = await c.run()
+    assert route.call_count == 2
+    assert [x.cve_id for x in res.cves] == ["CVE-2026-0001", "CVE-2026-0002", "CVE-2026-0003"]
+    assert c.state["score_date"] == "2026-11-05"
+
+
+@respx.mock
+async def test_first_run_without_score_date_fetches_and_stores_it():
+    respx.get(EPSS_URL).mock(
+        return_value=httpx.Response(200, json=_page([_dated("CVE-2026-0001", "2026-11-05")], 1))
+    )
+    c = EpssCollector()
+    res = await c.run()
+    assert [x.cve_id for x in res.cves] == ["CVE-2026-0001"]
+    assert c.state["score_date"] == "2026-11-05"

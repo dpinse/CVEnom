@@ -21,6 +21,16 @@ async def _sleep(delay: float) -> None:
     await base._sleep(delay)
 
 
+def _score_date(pages: list) -> str | None:
+    """The EPSS score date (records' ``date`` field) of the first dated record."""
+    for page in pages:
+        data = page.get("data") if isinstance(page, dict) else None
+        for rec in data if isinstance(data, list) else []:
+            if isinstance(rec, dict) and isinstance(rec.get("date"), str) and rec["date"]:
+                return rec["date"]
+    return None
+
+
 @register
 class EpssCollector(Collector):
     name = "epss"
@@ -35,6 +45,12 @@ class EpssCollector(Collector):
             if pages:
                 await _sleep(PAGE_DELAY)
             page = await http_get_json(EPSS_URL, params={"limit": PAGE_SIZE, "offset": offset})
+            if not pages:
+                score_date = _score_date([page])
+                if score_date is not None and score_date == self.state.get("score_date"):
+                    # EPSS publishes once a day: same score date, nothing new.
+                    log.info("epss: score date %s unchanged; skipping download", score_date)
+                    return []
             pages.append(page)
             data = page.get("data") or []
             if not data:
@@ -62,4 +78,7 @@ class EpssCollector(Collector):
                     )
                 except (KeyError, TypeError, ValueError):  # incl. ValidationError
                     log.warning("epss: skipping malformed record %s", cve_id)
+        score_date = _score_date(raw)
+        if score_date is not None:
+            self.state["score_date"] = score_date
         return CollectorResult(cves=cves)

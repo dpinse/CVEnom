@@ -335,3 +335,36 @@ def test_osv_later_run_without_fix_does_not_downgrade_patch(db_session):
     row = db_session.get(Cve, "CVE-2026-8080")
     assert row.patch_available is True
     assert sorted(row.affected) == ["Go:q", "PyPI:p"]
+
+
+# --- enrich_only cost (#6) ---
+
+
+def test_enrich_path_issues_o_chunks_selects_and_no_savepoints(db_session):
+    from sqlalchemy import event
+
+    existing = [f"CVE-2026-{i:05d}" for i in range(0, 2500, 50)]  # 50 known
+    for cid in existing:
+        _insert_cve(db_session, cid)
+    db_session.flush()
+    res = CollectorResult(
+        cves=[NormalizedCve(cve_id=f"CVE-2026-{i:05d}", epss=0.5, epss_percentile=0.5) for i in range(2500)]
+    )
+    stmts: list[str] = []
+
+    def count(conn, cursor, statement, params, context, executemany):
+        stmts.append(statement.lstrip().split(None, 1)[0].upper())
+
+    bind = db_session.connection()
+    event.listen(bind, "before_cursor_execute", count)
+    try:
+        ingest(db_session, res, enrich_only=True)
+    finally:
+        event.remove(bind, "before_cursor_execute", count)
+
+    selects = stmts.count("SELECT")
+    assert selects <= 3, stmts[:20]  # ceil(2500 / 1000) chunked IN lookups
+    assert "SAVEPOINT" not in stmts
+    assert len(stmts) <= 3 + len(existing) + 5  # chunk SELECTs + one UPDATE per known row
+    assert db_session.query(Cve).count() == len(existing)  # nothing stub-created
+    assert db_session.get(Cve, existing[1]).epss == 0.5

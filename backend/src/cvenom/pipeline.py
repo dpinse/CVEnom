@@ -15,7 +15,7 @@ from cvenom.config import get_settings
 from cvenom.db import upsert_cve
 from cvenom.extract import extract_cve_ids, link_story
 from cvenom.models import Cve, Story, StoryCveLink
-from cvenom.schemas import NormalizedStory
+from cvenom.schemas import NormalizedCve, NormalizedStory
 from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve
 from cvenom.textutil import content_hash, find_existing_story, sanitize_text
 
@@ -65,16 +65,16 @@ def _ingest_story(session: Session, story: NormalizedStory) -> None:
 _ID_CHUNK = 1000
 
 
-def _select_ids(session: Session, ids: Iterable[str], *conditions) -> set[str]:
-    """Return the subset of ``ids`` present in ``cve`` (and matching ``conditions``).
+def _in_chunks(session: Session, entity, ids: Iterable[str], *conditions) -> list:
+    """SELECT ``entity`` for the ``cve`` rows whose id is in ``ids`` (and ``conditions``).
 
     Chunked ``IN`` lists keep the statement count O(len(ids) / _ID_CHUNK).
     """
     unique = list(dict.fromkeys(ids))
-    found: set[str] = set()
+    found: list = []
     for i in range(0, len(unique), _ID_CHUNK):
         chunk = unique[i : i + _ID_CHUNK]
-        found.update(session.scalars(select(Cve.cve_id).where(Cve.cve_id.in_(chunk), *conditions)))
+        found.extend(session.scalars(select(entity).where(Cve.cve_id.in_(chunk), *conditions)))
     return found
 
 
@@ -88,10 +88,17 @@ def _drop_known_kev_events(session: Session, events: list[dict]) -> list[dict]:
     kev_ids = [e.get("cve_id") for e in events if e.get("type") == "kev_added"]
     if not kev_ids:
         return events
-    already = _select_ids(session, kev_ids, Cve.kev.is_(True))
+    already = set(_in_chunks(session, Cve.cve_id, kev_ids, Cve.kev.is_(True)))
     return [
         e for e in events if not (e.get("type") == "kev_added" and e.get("cve_id") in already)
     ]
+
+
+def _sanitized(cve: NormalizedCve) -> NormalizedCve:
+    return cve.model_copy(update={
+        "summary": sanitize_text(cve.summary),
+        "affected": [sanitize_text(a) for a in cve.affected],
+    })
 
 
 def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = False) -> list[dict]:
@@ -102,16 +109,20 @@ def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = Fal
     stories (so nothing can stub-create CVEs).
     """
     events = _drop_known_kev_events(session, result.events)
-    for cve in result.cves:
-        if enrich_only and session.get(Cve, cve.cve_id) is None:
-            continue
-        data = cve.model_copy(update={
-            "summary": sanitize_text(cve.summary),
-            "affected": [sanitize_text(a) for a in cve.affected],
-        })
-        _retry_unique(session, lambda data=data: upsert_cve(session, data))
 
-    if not enrich_only:
+    if enrich_only:
+        # Prefetch the existing rows in chunks: unknown ids are skipped without a
+        # query, and upsert_cve's session.get hits the identity map (the dict keeps
+        # the rows strongly referenced). No insert can happen on this path, so no
+        # SAVEPOINT/retry is needed.
+        existing = {r.cve_id: r for r in _in_chunks(session, Cve, (c.cve_id for c in result.cves))}
+        for cve in result.cves:
+            if cve.cve_id in existing:
+                upsert_cve(session, _sanitized(cve))
+    else:
+        for cve in result.cves:
+            data = _sanitized(cve)
+            _retry_unique(session, lambda data=data: upsert_cve(session, data))
         for story in result.stories:
             _retry_unique(session, lambda story=story: _ingest_story(session, story))
 
