@@ -8,6 +8,9 @@ import type { GeoSummaryItem } from "../lib/types";
 import { server, setupMsw } from "../test/shell";
 import Globe from "./Globe";
 import { GlobeProvider, useGlobe } from "./GlobeContext";
+import { GlobeBoundary } from "./LazyGlobe";
+import { GEO_KINDS, KIND_TOKEN } from "./geoSummary";
+import { CANVAS_LABEL, DATA_DEADLINE_MS, ERROR_GRACE_MS, IDLE_RESUME_MS } from "./globeMap";
 
 type Handler = (e?: unknown) => void;
 
@@ -38,10 +41,20 @@ vi.mock("maplibre-gl", () => {
     });
     scrollZoom = { enable: vi.fn(), disable: vi.fn() };
     touchZoomRotate = { disableRotation: vi.fn() };
+    canvas: HTMLCanvasElement;
     constructor(options: Record<string, unknown>) {
       if (h.throwOnInit) throw new Error("WebGL2 is required to display this map.");
       this.options = options;
+      // Like MapLibre: a focusable canvas with role=region inside the container.
+      this.canvas = document.createElement("canvas");
+      this.canvas.setAttribute("tabindex", "0");
+      this.canvas.setAttribute("role", "region");
+      this.canvas.setAttribute("aria-label", "Map");
+      (options.container as HTMLElement).appendChild(this.canvas);
       h.maps.push(this);
+    }
+    isSourceLoaded() {
+      return false;
     }
     on(type: string, fn: Handler) {
       if (!this.handlers.has(type)) this.handlers.set(type, new Set());
@@ -89,7 +102,7 @@ vi.mock("maplibre-gl", () => {
       this.zoom = z;
     }
     getCanvas() {
-      return document.createElement("canvas");
+      return this.canvas;
     }
     remove() {
       this.removed = true;
@@ -152,6 +165,7 @@ const DARK = {
   "--border-geo": "#4d7093",
   "--sev-high": "#ff9a44",
   "--sev-crit": "#ff5663",
+  "--sev-low": "#3dd79a",
   "--sev-med": "#ecc14a",
   "--live": "#ff2f45",
   "--scope": "#6fb0d4",
@@ -209,6 +223,12 @@ afterEach(() => {
 });
 
 const loadMap = () => act(() => lastMap().fire("load"));
+/** Text of the element the canvas names in aria-describedby. */
+function summary(): string | null {
+  const id = document.querySelector("canvas")?.getAttribute("aria-describedby");
+  return id ? (document.getElementById(id)?.textContent ?? null) : null;
+}
+const mapContainer = () => document.querySelector(".globe-map") as HTMLElement;
 
 describe("<Globe> map wiring", () => {
   it("serves the worker from self via setWorkerUrl before creating the map", () => {
@@ -291,14 +311,9 @@ describe("<Globe> map wiring", () => {
     const m = lastMap();
     const hot = m.layers.find((l) => l.id === "hotspots")!;
     const color = JSON.stringify(hot.paint!["circle-color"]);
-    for (const [kind, token] of [
-      ["scan", "--live"],
-      ["outage", "--sev-high"],
-      ["victim", "--sev-crit"],
-      ["c2", "--sev-med"],
-      ["bgp", "--scope"],
-    ]) {
-      expect(color).toContain(`"${kind}","${DARK[token as keyof typeof DARK]}"`);
+    expect(KIND_TOKEN).toEqual({ scan: "--live", outage: "--sev-high", victim: "--scope", c2: "--sev-med", bgp: "--sev-low" });
+    for (const kind of GEO_KINDS) {
+      expect(color).toContain(`"${kind}","${DARK[KIND_TOKEN[kind] as keyof typeof DARK]}"`);
     }
     const fill = m.layers.find((l) => l.id === "countries")!.paint!["fill-color"] as unknown[];
     expect(fill[0]).toBe("match");
@@ -318,15 +333,27 @@ describe("<Globe> chrome and accessibility", () => {
     expect(link).toHaveAttribute("target", "_blank");
   });
 
-  it("labels the map as an image summarising the data, with a hidden hotspot list", () => {
+  it("labels the focusable canvas and links it to the data summary, with no role=img around it", () => {
     renderGlobe();
-    const img = screen.getByRole("img", { name: /^Global threat map:/ });
-    expect(img.getAttribute("aria-label")).toBe(
+    expect(screen.queryByRole("img")).toBeNull();
+    const region = screen.getByRole("region", { name: CANVAS_LABEL });
+    expect(region).toHaveAttribute("tabindex", "0");
+    expect(summary()).toBe(
       "Global threat map: 2 countries with outages, 1 country with exploit scanning, 1 country with C2 infrastructure",
     );
     const list = screen.getByRole("list", { name: /top threat hotspots/i });
     expect(list.querySelectorAll("li")).toHaveLength(4);
     expect(list.textContent).toContain("United States");
+  });
+
+  it("legend swatches use the same KIND_TOKEN mapping as the map paint, one distinct token per kind", () => {
+    renderGlobe();
+    expect(new Set(Object.values(KIND_TOKEN)).size).toBe(GEO_KINDS.length);
+    for (const kind of GEO_KINDS) {
+      const sw = document.querySelector(`.globe-legend .swatch[data-kind="${kind}"]`) as HTMLElement;
+      expect(sw, kind).not.toBeNull();
+      expect(sw.style.getPropertyValue("--swatch")).toBe(`var(${KIND_TOKEN[kind]})`);
+    }
   });
 
   it("shows the overlay title and legend", () => {
@@ -341,8 +368,8 @@ describe("<Globe> chrome and accessibility", () => {
     server.use(http.get("http://localhost/api/geo", () => HttpResponse.json({ detail: "boom" }, { status: 500 })));
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     renderGlobe(undefined, null, qc);
-    expect(screen.getByRole("img").getAttribute("aria-label")).toMatch(/loading/i);
-    await waitFor(() => expect(screen.getByRole("img").getAttribute("aria-label")).toMatch(/unavailable/i));
+    expect(summary()).toMatch(/loading/i);
+    await waitFor(() => expect(summary()).toMatch(/unavailable/i));
     loadMap();
     expect(lastMap().sources.countries.data.features).toHaveLength(177);
   });
@@ -352,7 +379,7 @@ describe("<Globe> resilience", () => {
   it("renders the static fallback (legend + ranked countries) when MapLibre init throws", () => {
     h.throwOnInit = true;
     renderGlobe();
-    expect(screen.getByText(/globe unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/couldn't start WebGL 2/i)).toBeInTheDocument();
     const ranked = screen.getByRole("list", { name: /most active countries/i });
     const rows = [...ranked.querySelectorAll("li")].map((li) => li.textContent);
     expect(rows[0]).toContain("United States");
@@ -413,6 +440,7 @@ describe("<Globe> motion", () => {
     loadMap();
     const m = lastMap();
     act(() => m.fire("mousedown", { originalEvent: new MouseEvent("mousedown") }));
+    expect(rafQueue).toEqual([]); // no idle RAF loop while held
     m.jumpTo.mockClear();
     runFrames(60);
     expect(m.jumpTo).not.toHaveBeenCalled();
@@ -474,17 +502,28 @@ describe("<Globe> interaction and flyTo", () => {
     expect(() => render(<Lone />)).not.toThrow();
   });
 
-  it("enables scroll zoom only for modifier-wheel or while focused", () => {
+  it("zooms only on Ctrl/Cmd+wheel; a plain wheel scrolls the page even after focus/drag", () => {
     renderGlobe();
     loadMap();
     const m = lastMap();
-    const img = screen.getByRole("img");
-    fireEvent.wheel(img, { deltaY: 10 });
+    const canvas = document.querySelector("canvas")!;
+    // a click or drag focuses MapLibre's canvas
+    act(() => {
+      m.fire("mousedown", { originalEvent: new MouseEvent("mousedown") });
+      canvas.focus();
+      m.fire("mouseup", { originalEvent: new MouseEvent("mouseup") });
+    });
+    expect(document.activeElement).toBe(canvas);
+    const notPrevented = fireEvent.wheel(canvas, { deltaY: 10 });
+    expect(notPrevented).toBe(true);
     expect(m.scrollZoom.enable).not.toHaveBeenCalled();
-    fireEvent.wheel(img, { deltaY: 10, ctrlKey: true });
+    fireEvent.wheel(canvas, { deltaY: 10, ctrlKey: true });
     expect(m.scrollZoom.enable).toHaveBeenCalledTimes(1);
-    fireEvent.wheel(img, { deltaY: 10 });
-    expect(m.scrollZoom.disable).toHaveBeenCalled();
+    fireEvent.wheel(mapContainer(), { deltaY: 10, metaKey: true });
+    expect(m.scrollZoom.enable).toHaveBeenCalledTimes(1); // still on
+    expect(fireEvent.wheel(canvas, { deltaY: 10 })).toBe(true);
+    expect(m.scrollZoom.disable).toHaveBeenCalledTimes(1);
+    expect(m.options.keyboard).not.toBe(false); // keyboard +/- zoom stays available when focused
   });
 
   it("resizes the map when its container resizes", () => {
@@ -504,5 +543,109 @@ describe("<Globe> interaction and flyTo", () => {
     loadMap();
     act(() => observed.forEach((cb) => cb([], {} as ResizeObserver)));
     expect(lastMap().resize).toHaveBeenCalled();
+  });
+});
+
+describe("<Globe> rotation scheduling", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("waits for resume with a timer, not a no-op RAF loop, then restarts RAF after 4 s idle", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    renderGlobe();
+    loadMap();
+    const m = lastMap();
+    expect(rafQueue.length).toBe(1);
+    act(() => m.fire("mousedown", { originalEvent: new MouseEvent("mousedown") }));
+    act(() => m.fire("mouseup", { originalEvent: new MouseEvent("mouseup") }));
+    expect(rafQueue).toEqual([]);
+    act(() => vi.advanceTimersByTime(IDLE_RESUME_MS - 100));
+    expect(rafQueue).toEqual([]);
+    act(() => vi.advanceTimersByTime(150));
+    expect(rafQueue.length).toBe(1);
+  });
+
+  it("caps active rotation at ~30 fps by skipping frames", () => {
+    renderGlobe();
+    loadMap();
+    const m = lastMap();
+    runFrames(61, 1000 / 60); // ~1 s of 60 Hz display frames
+    const calls = m.jumpTo.mock.calls.length;
+    expect(calls).toBeGreaterThanOrEqual(25);
+    expect(calls).toBeLessThanOrEqual(31);
+  });
+
+  it("flyTo holds rotation with nothing scheduled", () => {
+    function Fly() {
+      const g = useGlobe();
+      return (
+        <button type="button" onClick={() => g.flyTo("JP")}>
+          fly
+        </button>
+      );
+    }
+    renderGlobe(fixture, <Fly />);
+    loadMap();
+    expect(rafQueue.length).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "fly" }));
+    expect(rafQueue).toEqual([]);
+    expect(lastMap().easeTo).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("<Globe> render watchdog", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a map error with no countries data rendered switches to the fallback and removes the map", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    renderGlobe();
+    loadMap();
+    const m = lastMap();
+    act(() => m.fire("error", { error: new Error("worker failed") }));
+    act(() => vi.advanceTimersByTime(ERROR_GRACE_MS - 100));
+    expect(screen.queryByText(/couldn't render its data/i)).toBeNull();
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.getByText(/couldn't render its data/i)).toBeInTheDocument();
+    expect(m.removed).toBe(true);
+    expect(screen.getByRole("list", { name: /most active countries/i })).toBeInTheDocument();
+  });
+
+  it("no countries data within the deadline after load also falls back (silent worker failure)", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    renderGlobe();
+    loadMap();
+    act(() => vi.advanceTimersByTime(DATA_DEADLINE_MS + 10));
+    expect(screen.getByText(/couldn't render its data/i)).toBeInTheDocument();
+  });
+
+  it("once the countries source has loaded, later errors do not trigger the fallback", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    renderGlobe();
+    loadMap();
+    const m = lastMap();
+    act(() => m.fire("sourcedata", { sourceId: "countries", isSourceLoaded: true }));
+    act(() => m.fire("error", { error: new Error("transient") }));
+    act(() => vi.advanceTimersByTime(DATA_DEADLINE_MS * 3));
+    expect(screen.queryByText(/couldn't render its data/i)).toBeNull();
+    expect(m.removed).toBe(false);
+  });
+
+  it("the lazy-chunk error boundary shows the 'couldn't load the map module' note", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    function Boom(): never {
+      throw new Error("Failed to fetch dynamically imported module");
+    }
+    render(
+      <QueryClientProvider client={seeded(fixture)}>
+        <GlobeBoundary>
+          <Boom />
+        </GlobeBoundary>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText(/couldn't load the map module/i)).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: /most active countries/i })).toBeInTheDocument();
   });
 });

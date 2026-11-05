@@ -12,13 +12,18 @@ export function isGeoKind(k: unknown): k is GeoKind {
   return typeof k === "string" && (GEO_KINDS as readonly string[]).includes(k);
 }
 
-/** Colour token per hotspot kind. Hue is reserved for signal (plan: Global Constraints). */
-export const KIND_TOKEN: Record<GeoKind, string> = {
+/**
+ * THE colour mapping per hotspot kind, shared by the map paint (globeMap.ts), the legend and
+ * the fallback swatches (GlobeChrome.tsx). Every kind gets a distinct token: --sev-crit is not
+ * used because it is perceptually almost identical to --live (CIEDE2000 6.0 dark / 2.9 light).
+ * Closest remaining pair is outage vs c2 (18.7 dark / 16.3 light), clearly distinguishable.
+ */
+export const KIND_TOKEN: Readonly<Record<GeoKind, string>> = {
   scan: "--live",
   outage: "--sev-high",
-  victim: "--sev-crit",
+  victim: "--scope",
   c2: "--sev-med",
-  bgp: "--scope",
+  bgp: "--sev-low",
 };
 
 /** Legend wording (singular, as in the approved mockup). */

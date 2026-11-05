@@ -9,7 +9,7 @@ import type { GeoSummaryItem } from "../lib/types";
 import { GlobeFallback, GlobeLegend, GlobeTitle, HotspotList } from "./GlobeChrome";
 import { useGlobeRegistration } from "./GlobeContext";
 import { centroids, describeGeo, toCountryShading, toHotspots, withShading } from "./globeData";
-import { type GlobeController, mountGlobe } from "./globeMap";
+import { type GlobeController, type GlobeFailure, mountGlobe } from "./globeMap";
 
 const EMPTY: GeoSummaryItem[] = [];
 
@@ -19,9 +19,10 @@ export default function Globe() {
   const state: "loading" | "error" | "ready" = geo.isPending ? "loading" : geo.isError && !geo.data ? "error" : "ready";
   const register = useGlobeRegistration();
   const titleId = useId();
+  const summaryId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const ctlRef = useRef<GlobeController | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<GlobeFailure | null>(null);
 
   const data = useMemo(() => ({ countries: withShading(toCountryShading(items)), hotspots: toHotspots(items) }), [items]);
 
@@ -37,8 +38,10 @@ export default function Globe() {
           if (c) ctl?.flyTo(c);
         });
       },
-      // No WebGL 2 (or any other init failure): static fallback, never a crashed page.
-      onError: () => setFailed(true),
+      // No WebGL 2, or the data never rendered (worker/source failure): static fallback,
+      // never a crashed or blank page. The controller has already torn itself down.
+      onError: (_err, reason) => setFailed(reason),
+      describedBy: summaryId,
     });
     if (!ctl) return;
     ctlRef.current = ctl;
@@ -47,7 +50,7 @@ export default function Globe() {
       ctlRef.current = null;
       ctl.destroy();
     };
-  }, [register]);
+  }, [register, summaryId]);
 
   // Data changes update the GeoJSON sources in place (buffered until `load`).
   useEffect(() => {
@@ -57,7 +60,7 @@ export default function Globe() {
   if (failed) {
     return (
       <section className="globe-stage" aria-label="Threat geography">
-        <GlobeFallback items={items} state={state} />
+        <GlobeFallback items={items} state={state} reason={failed} />
       </section>
     );
   }
@@ -72,7 +75,12 @@ export default function Globe() {
   return (
     <section className="globe-stage" aria-labelledby={titleId}>
       <div className="globe-well">
-        <div ref={containerRef} className="globe-map" role="img" aria-label={label} />
+        {/* MapLibre's canvas (focusable, role=region) lives in here; it is labelled and points at
+            the summary below via aria-describedby, so no interactive element sits in a role=img. */}
+        <div ref={containerRef} className="globe-map" />
+        <p id={summaryId} className="sr-only">
+          {label}
+        </p>
         <GlobeTitle id={titleId} />
         <div className="globe-ov globe-ov-bottom">
           <GlobeLegend />

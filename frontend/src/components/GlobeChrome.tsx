@@ -4,9 +4,28 @@
  * fallback panel. Lives in the main bundle (no atlas, no MapLibre) so the fallback still works
  * if the lazy globe chunk itself fails to load.
  */
+import type { CSSProperties } from "react";
 import type { GeoSummaryItem } from "../lib/types";
 import { ExternalLink } from "../lib/text";
-import { GEO_KINDS, KIND_LABEL, countryName, rankCountries, topHotspots } from "./geoSummary";
+import { GEO_KINDS, type GeoKind, KIND_LABEL, KIND_TOKEN, countryName, rankCountries, topHotspots } from "./geoSummary";
+
+/**
+ * Colour swatch for a hotspot kind. The colour comes from KIND_TOKEN, the same mapping the map
+ * paint uses, set as a CSS custom property through the CSSOM (CSP-safe, no style attribute).
+ */
+export function KindSwatch({ kind, title }: { kind: GeoKind; title?: string }) {
+  const style = { "--swatch": `var(${KIND_TOKEN[kind]})` } as CSSProperties;
+  return <i className="swatch" data-kind={kind} style={style} title={title} aria-hidden="true" />;
+}
+
+/** Why the static panel is showing. */
+export type FallbackReason = "webgl" | "module" | "render";
+
+const FALLBACK_NOTE: Record<FallbackReason, string> = {
+  webgl: "Globe unavailable: couldn't start WebGL 2 in this browser, so the most active countries are listed instead.",
+  module: "Globe unavailable: couldn't load the map module, so the most active countries are listed instead.",
+  render: "Globe unavailable: the map couldn't render its data, so the most active countries are listed instead.",
+};
 
 const fmt = (n: number) => (Number.isFinite(n) ? String(Math.round(n * 10) / 10) : "0");
 
@@ -32,7 +51,7 @@ export function GlobeLegend({ hint = true }: { hint?: boolean }) {
     <div className="globe-legend">
       {GEO_KINDS.map((k) => (
         <span key={k} className="lg-item">
-          <i className={`swatch k-${k}`} aria-hidden="true" />
+          <KindSwatch kind={k} />
           {KIND_LABEL[k]}
         </span>
       ))}
@@ -62,14 +81,20 @@ export function HotspotList({ items }: { items: readonly GeoSummaryItem[] }) {
 }
 
 /** Static panel used when WebGL (or the globe chunk) is unavailable: legend + ranked countries. */
-export function GlobeFallback({ items, state }: { items: readonly GeoSummaryItem[]; state: "ready" | "loading" | "error" }) {
+export function GlobeFallback({
+  items,
+  state,
+  reason,
+}: {
+  items: readonly GeoSummaryItem[];
+  state: "ready" | "loading" | "error";
+  reason: FallbackReason;
+}) {
   const ranked = rankCountries(items, 12);
   return (
     <div className="globe-fallback">
       <GlobeTitle />
-      <p className="gf-note">
-        Globe unavailable: this browser could not start WebGL 2, so the most active countries are listed instead.
-      </p>
+      <p className="gf-note">{FALLBACK_NOTE[reason]}</p>
       {state === "loading" && <p className="gf-note">Loading geolocated activity…</p>}
       {state === "error" && <p className="gf-note">Geolocated activity is unavailable right now.</p>}
       {state === "ready" && ranked.length === 0 && (
@@ -82,7 +107,7 @@ export function GlobeFallback({ items, state }: { items: readonly GeoSummaryItem
               <span className="gf-name">{r.name}</span>
               <span className="gf-kinds">
                 {r.kinds.map((k) => (
-                  <i key={k} className={`swatch k-${k}`} title={KIND_LABEL[k]} aria-hidden="true" />
+                  <KindSwatch key={k} kind={k} title={KIND_LABEL[k]} />
                 ))}
                 <span className="sr-only">{r.kinds.map((k) => KIND_LABEL[k]).join(", ")}</span>
               </span>

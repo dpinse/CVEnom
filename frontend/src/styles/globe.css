@@ -80,7 +80,7 @@
 }
 .lg-hint {
   margin-left: auto;
-  color: var(--muted);
+  color: var(--faint);
   font-family: var(--font-mono);
   font-size: 10.5px;
 }
@@ -102,21 +102,8 @@
   height: 9px;
   border-radius: 2px;
   flex: none;
-}
-.k-scan {
-  background: var(--live);
-}
-.k-outage {
-  background: var(--sev-high);
-}
-.k-victim {
-  background: var(--sev-crit);
-}
-.k-c2 {
-  background: var(--sev-med);
-}
-.k-bgp {
-  background: var(--scope);
+  /* --swatch is set per kind from KIND_TOKEN (GlobeChrome.tsx), the same mapping as the map paint */
+  background: var(--swatch, var(--muted));
 }
 .shade-ramp {
   width: 27px;
@@ -134,7 +121,6 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-height: clamp(360px, 55vh, 640px);
   padding: 13px 15px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -146,7 +132,6 @@
   padding: 0;
 }
 .globe-fallback .globe-legend {
-  margin-top: auto;
   background: none;
   padding: 0;
 }
