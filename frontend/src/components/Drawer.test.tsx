@@ -5,7 +5,7 @@ import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createQueryClient } from "../lib/queries";
 import type { CveDetail, GeoEventOut, LoudStory } from "../lib/types";
-import { server, setupMsw } from "../test/shell";
+import { member, server, setupMsw, signIn } from "../test/shell";
 import { DrawerHost } from "./DrawerHost";
 
 const flyTo = vi.fn();
@@ -391,6 +391,51 @@ describe("CveDetail", () => {
   });
 });
 
+describe("anonymous story-count note and ransomware credit (CveDetail)", () => {
+  const NOTE = "Some sources are visible to signed-in users only.";
+  test("anonymous with recent_story_count above the stories shown: muted note", async () => {
+    serveCve(detail({ recent_story_count: 3, stories: [{ title: "T", url: "https://news.example/a", source: "Example", published: "2026-11-05T11:00:00Z" }] }));
+    renderHost(["/?cve=" + CVE]);
+    expect(await screen.findByText(NOTE)).toBeInTheDocument();
+  });
+  test("note shows even when no stories are visible at all", async () => {
+    serveCve(detail({ recent_story_count: 2, stories: [] }));
+    renderHost(["/?cve=" + CVE]);
+    expect(await screen.findByText(NOTE)).toBeInTheDocument();
+  });
+  test("no note when the counts match, or when signed in", async () => {
+    serveCve(detail({ recent_story_count: 0, stories: [] }));
+    const { unmount } = renderHost(["/?cve=" + CVE]);
+    await screen.findByText("A summary");
+    expect(screen.queryByText(NOTE)).toBeNull();
+    unmount();
+    signIn(member);
+    serveCve(detail({ recent_story_count: 4, stories: [] }));
+    renderHost(["/?cve=" + CVE]);
+    await screen.findByText("A summary");
+    expect(screen.queryByText(NOTE)).toBeNull();
+  });
+  test("a ransomware.live story carries the credit link; other sources do not", async () => {
+    signIn(member);
+    serveCve(
+      detail({
+        recent_story_count: 2,
+        stories: [
+          { title: "Victim", url: "https://www.ransomware.live/id/x", source: "ransomware.live", published: "2026-11-05T11:00:00Z" },
+          { title: "News", url: "https://news.example/a", source: "Example", published: "2026-11-05T10:00:00Z" },
+        ],
+      }),
+    );
+    renderHost(["/?cve=" + CVE]);
+    const credit = await screen.findByTestId("ransomware-credit");
+    expect(screen.getAllByTestId("ransomware-credit")).toHaveLength(1);
+    expect(credit).toHaveTextContent("Ransomware data: ransomware.live");
+    const a = within(credit).getByRole("link", { name: "ransomware.live" });
+    expect(a).toHaveAttribute("href", "https://www.ransomware.live/");
+    expect(a).toHaveAttribute("rel", "noopener noreferrer");
+  });
+});
+
 describe("StoryDetail", () => {
   const url = "https://news.example/a";
   const open = () => renderHost(["/?story=" + encodeURIComponent(url)]);
@@ -408,6 +453,21 @@ describe("StoryDetail", () => {
     fireEvent.click(screen.getByRole("button", { name: CVE }));
     await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent("cve=" + CVE));
     expect(await screen.findByText("A summary")).toBeInTheDocument();
+  });
+
+  test("a ransomware.live story shows the credit", async () => {
+    serveStories([story({ source: "ransomware.live" })]);
+    open();
+    await dialog();
+    expect(await screen.findByTestId("ransomware-credit")).toHaveTextContent("Ransomware data: ransomware.live");
+  });
+
+  test("other sources show no credit", async () => {
+    serveStories([story()]);
+    open();
+    await dialog();
+    await screen.findByText("Big news");
+    expect(screen.queryByTestId("ransomware-credit")).toBeNull();
   });
 
   test("not in the feed shows the fallback with a safe link built from the url", async () => {

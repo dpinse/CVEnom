@@ -1,45 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
-import type { Page } from "@playwright/test";
-import { CVE_ID, expect, test } from "./harness";
+import { canvasCentreStdDev, CVE_ID, expect, loaded, STDDEV_MIN, test } from "./harness";
 
 const LANES = ["Exploited now", "Likely next", "Loud now", "Fresh criticals"];
-
-async function loaded(page: Page) {
-  await page.goto("/");
-  await expect(page.getByRole("heading", { level: 2, name: "Exploited now" })).toBeVisible();
-  await expect(page.locator('.lane[data-k="exploited"] [data-testid="lane-row"]').first()).toBeVisible();
-}
-
-/** Standard deviation of luminance over a centre crop of the globe canvas, measured from a real screenshot. */
-async function canvasCentreStdDev(page: Page): Promise<number> {
-  const box = await page.locator(".globe-map canvas").first().boundingBox();
-  if (!box) return 0;
-  const size = 120;
-  const clip = {
-    x: box.x + box.width / 2 - size / 2,
-    y: box.y + box.height / 2 - size / 2,
-    width: size,
-    height: size,
-  };
-  const png = (await page.screenshot({ clip })).toString("base64");
-  return page.evaluate(async (b64) => {
-    const img = new Image();
-    img.src = `data:image/png;base64,${b64}`;
-    await img.decode();
-    const c = document.createElement("canvas");
-    c.width = img.width;
-    c.height = img.height;
-    const ctx = c.getContext("2d")!;
-    ctx.drawImage(img, 0, 0);
-    const { data } = ctx.getImageData(0, 0, c.width, c.height);
-    const lum: number[] = [];
-    for (let i = 0; i < data.length; i += 4) lum.push(0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]);
-    const mean = lum.reduce((a, b) => a + b, 0) / lum.length;
-    return Math.sqrt(lum.reduce((a, b) => a + (b - mean) ** 2, 0) / lum.length);
-  }, png);
-}
-
-const STDDEV_MIN = 4;
 
 test("dashboard renders the four lanes with fixture rows", async ({ page }) => {
   await loaded(page);
@@ -104,4 +66,73 @@ test("axe: no serious or critical violations on the dashboard", async ({ page })
     .analyze();
   const bad = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(bad.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.map((n) => n.target.join(" ")) }))).toEqual([]);
+});
+
+// Stored-XSS contract: summaries/titles arrive HTML-escaped from the API and may contain markup. They must render as
+// literal text; no element may be created from them, on the dashboard or in the drawer.
+const XSS_IMG = "<img src=x onerror=alert(1)>";
+const XSS_SCRIPT = "<script>alert(2)</script>"; // the fixture holds &lt;script&gt;alert(2)&lt;/script&gt;, decoded once
+
+test("XSS fixtures render as literal text on the dashboard and in the CVE and story drawers", async ({ page }) => {
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => {
+    dialogs.push(d.message());
+    void d.dismiss();
+  });
+  await loaded(page);
+  const lanes = page.locator(".lanes");
+  await expect(lanes).toContainText(XSS_IMG);
+  await expect(lanes).toContainText(XSS_SCRIPT);
+  await expect(lanes.locator("img, script, [onerror]")).toHaveCount(0);
+
+  // the story title in the Loud lane
+  const storyRow = page.getByTestId("story-row").filter({ hasText: XSS_IMG });
+  await expect(storyRow).toHaveCount(1);
+  await storyRow.getByRole("button").first().click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText(XSS_IMG);
+  await expect(dialog.locator("img, script, [onerror]")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+
+  // the CVE summary and a linked story title in the CVE drawer
+  await page.locator('.lane[data-k="exploited"] [data-testid="lane-row"]').first().click();
+  await expect(dialog).toContainText("Acme Gateway 4.2");
+  await expect(dialog).toContainText(XSS_IMG);
+  await expect(dialog).toContainText(XSS_SCRIPT);
+  await expect(dialog.locator("img, script, [onerror]")).toHaveCount(0);
+  expect(await page.locator("body script, #root img, #root [onerror]").count()).toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+test("the live socket is only ever same-origin /api/ws/live with no query string or token", async ({ page }) => {
+  await loaded(page);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __wsAttempts: string[] }).__wsAttempts.length)).toBeGreaterThan(0);
+  const attempts = await page.evaluate(() => (window as unknown as { __wsAttempts: string[] }).__wsAttempts);
+  const pageOrigin = new URL(page.url()).origin;
+  for (const raw of attempts) {
+    const u = new URL(raw);
+    expect(u.origin).toBe(pageOrigin.replace(/^http/, "ws"));
+    expect(u.pathname).toBe("/api/ws/live");
+    expect(u.search).toBe("");
+    expect(u.hash).toBe("");
+    expect(u.username + u.password).toBe("");
+  }
+});
+
+test("400px: the drawer fits the viewport (no horizontal scroll, dialog <= 400px wide)", async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 800 });
+  await loaded(page);
+  await page.locator('.lane[data-k="exploited"] [data-testid="lane-row"]').first().click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Acme Gateway 4.2")).toBeVisible();
+  const m = await page.evaluate(() => ({
+    doc: document.documentElement.scrollWidth,
+    body: document.body.scrollWidth,
+    dialog: document.querySelector('[role="dialog"]')!.getBoundingClientRect().width,
+  }));
+  expect(m.doc).toBeLessThanOrEqual(400);
+  expect(m.body).toBeLessThanOrEqual(400);
+  expect(m.dialog).toBeLessThanOrEqual(400);
 });

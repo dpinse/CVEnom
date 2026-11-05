@@ -190,8 +190,13 @@ export interface AlertRule {
   keyword: string | null;
   enabled: boolean;
   created_at: string;
+  /** every role gets the count */
+  recipient_count: number;
+  /** admin responses only: members get `recipient_count` and no list */
   recipients: Recipient[];
 }
+/** The member-role view of a rule: the recipient list is never sent. */
+export type MemberAlertRule = Omit<AlertRule, "recipients">;
 export type RecipientIn =
   | { channel: "email"; email: string }
   | { channel: "webhook"; url: string; secret?: string | null };

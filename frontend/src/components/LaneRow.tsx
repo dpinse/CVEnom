@@ -1,5 +1,6 @@
 import { relTime } from "../lib/relTime";
 import { Text } from "../lib/text";
+import { isRansomwareSource, RansomwareCredit } from "./RansomwareCredit";
 import type { CveItem, LoudStory } from "../lib/types";
 
 export type Sev = "crit" | "high" | "med" | "low";
@@ -87,6 +88,7 @@ export function StoryRow({
             ))
           )}
         </span>
+        {isRansomwareSource(story.source) && <RansomwareCredit className="row-src" />}
       </span>
     </div>
   );

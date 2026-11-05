@@ -47,6 +47,27 @@ describe("LanesView double-encoded text", () => {
   });
 });
 
+describe("LanesView ransomware credit", () => {
+  test("only a ransomware.live story row carries the credit link", () => {
+    render(
+      <LanesView
+        lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] }}
+        stories={[
+          story({ url: "https://news.example/r", source: "ransomware.live", title: "Victim" }),
+          story({ url: "https://news.example/n", source: "Example News", title: "News" }),
+        ]}
+        onSelect={noop}
+        now={NOW}
+      />,
+    );
+    const rows = screen.getAllByTestId("story-row");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).queryAllByTestId("ransomware-credit").length + within(rows[1]).queryAllByTestId("ransomware-credit").length).toBe(1);
+    const credit = screen.getByTestId("ransomware-credit");
+    expect(within(credit).getByRole("link", { name: "ransomware.live" })).toHaveAttribute("href", "https://www.ransomware.live/");
+  });
+});
+
 describe("LanesView", () => {
   test("quiet foil appears only in Fresh, with no in-the-wild marker", () => {
     render(<LanesView lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [foil] }} onSelect={noop} now={NOW} />);

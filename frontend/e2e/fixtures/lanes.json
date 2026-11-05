@@ -10,7 +10,7 @@
       "poc_badge": true,
       "patch_available": false,
       "published": "2026-11-03T10:00:00Z",
-      "summary": "Acme Gateway auth bypass exploited in the wild",
+      "summary": "Acme Gateway auth bypass <img src=x onerror=alert(1)> &lt;script&gt;alert(2)&lt;/script&gt;",
       "recent_story_count": 2
     },
     {

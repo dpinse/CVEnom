@@ -57,6 +57,10 @@
 .prods { display: flex; flex-wrap: wrap; gap: 6px; }
 .slink { display: grid; grid-template-columns: minmax(0, 96px) minmax(0, 1fr); gap: 10px; font-size: 12.5px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .slink:last-child { border-bottom: 0; }
+.dmuted { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.credit { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.credit.block { display: block; margin-top: 4px; }
+.credit a { color: inherit; text-decoration: underline; }
 .slink .s { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
 .dlink { color: var(--scope); text-decoration: underline; }
 .gev { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }

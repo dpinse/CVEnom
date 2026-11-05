@@ -4,10 +4,12 @@ import { useCve } from "../lib/queries";
 import { relTime } from "../lib/relTime";
 import { ExternalLink, Text } from "../lib/text";
 import type { CveDetail, GeoEventOut } from "../lib/types";
+import { useAuth } from "../lib/useAuth";
 import { useNow } from "../lib/useNow";
 import { countryName, isGeoKind, isIso2, KIND_LABEL } from "./geoSummary";
 import { useGlobe } from "./GlobeContext";
 import { severityOf } from "./LaneRow";
+import { isRansomwareSource, RansomwareCredit } from "./RansomwareCredit";
 
 export const AFFECTED_CAP = 50;
 export const DETAILS_CAP = 12;
@@ -119,6 +121,7 @@ function topCountry(events: GeoEventOut[]): string | null {
 export function CveDetailBody({ d }: { d: CveDetail }) {
   const now = useNow();
   const globe = useGlobe();
+  const { user } = useAuth();
   const flown = useRef<string | null>(null);
 
   useEffect(() => {
@@ -140,6 +143,8 @@ export function CveDetailBody({ d }: { d: CveDetail }) {
     (a, b) => (Date.parse(b.published) || 0) - (Date.parse(a.published) || 0),
   );
   const geo = d.geo_events ?? [];
+  // Anonymous callers get aggregate story counts that include sources only signed-in users can read.
+  const hiddenStories = user === null && isNum(d.recent_story_count) && d.recent_story_count > stories.length;
   return (
     <>
       <div className="dmeta">
@@ -210,7 +215,7 @@ export function CveDetailBody({ d }: { d: CveDetail }) {
           </ul>
         </div>
       )}
-      {stories.length > 0 && (
+      {(stories.length > 0 || hiddenStories) && (
         <div>
           <div className="seclabel">Linked stories</div>
           <ul className="slinks">
@@ -219,12 +224,20 @@ export function CveDetailBody({ d }: { d: CveDetail }) {
                 <span className="s">
                   <Text value={s.source} /> · {relTime(s.published, now)}
                 </span>
-                <ExternalLink href={s.url} className="dlink">
-                  <Text value={s.title} />
-                </ExternalLink>
+                <div>
+                  <ExternalLink href={s.url} className="dlink">
+                    <Text value={s.title} />
+                  </ExternalLink>
+                  {isRansomwareSource(s.source) && <RansomwareCredit className="block" />}
+                </div>
               </li>
             ))}
           </ul>
+          {hiddenStories && (
+            <p className="dmuted" data-testid="anon-story-note">
+              Some sources are visible to signed-in users only.
+            </p>
+          )}
         </div>
       )}
       {geo.length > 0 && (

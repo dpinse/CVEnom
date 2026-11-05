@@ -15,20 +15,24 @@ afterEach(cleanup);
 const SECRET = "WHSEC-0123456789abcdefXYZ";
 const U = "http://localhost/api/alerts";
 
-const mkRule = (o: Partial<AlertRule> = {}): AlertRule => ({
-  id: 1,
-  name: "Critical CVSS",
-  kind: "cvss_min",
-  threshold: 9,
-  keyword: null,
-  enabled: true,
-  created_at: "2026-11-01T00:00:00Z",
-  recipients: [
+const mkRule = (o: Partial<AlertRule> = {}): AlertRule => {
+  const recipients: AlertRule["recipients"] = o.recipients ?? [
     { id: 10, channel: "email", email: "ops@example.com" },
     { id: 11, channel: "webhook", url_masked: "https://hooks.example.com/…" },
-  ],
-  ...o,
-});
+  ];
+  return {
+    id: 1,
+    name: "Critical CVSS",
+    kind: "cvss_min",
+    threshold: 9,
+    keyword: null,
+    enabled: true,
+    created_at: "2026-11-01T00:00:00Z",
+    recipient_count: recipients.length,
+    ...o,
+    recipients,
+  };
+};
 const mkDelivery = (o: Partial<Delivery> = {}): Delivery => ({
   id: 1,
   rule_id: 1,

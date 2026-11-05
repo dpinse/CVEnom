@@ -36,7 +36,10 @@ type Allow = string | { literal: string } | { comment: string };
  *  - the DB-IP attribution hyperlink required by DB-IP Lite's CC-BY 4.0 licence. It is an
  *    <a href> the user may click (a navigation in a new tab), never a request the page makes.
  */
-const ALLOWED: Allow[] = ["http://www.w3.org/2000/svg", "http://www.w3.org/1999/xlink", { literal: "https://db-ip.com" }];
+const ALLOWED: Allow[] = ["http://www.w3.org/2000/svg", "http://www.w3.org/1999/xlink", { literal: "https://db-ip.com" },
+  // ransomware.live attribution hyperlink (src/lib/credits.ts): an <a href> only, exact literal.
+  { literal: "https://www.ransomware.live" },
+];
 
 const HOST_CHAR = /[A-Za-z0-9.-]/;
 /** Remove exact occurrences of `uri`, but not when it is merely a prefix of a longer host/path (svg.evil.test). */
@@ -130,6 +133,11 @@ describe("findRemote detector", () => {
     expect(findRemote(`* @license BSD: ${lic}\n*/`, DIST_EXTRA)).toEqual([]);
     expect(findRemote(`fetch("${lic}?x")`, DIST_EXTRA)).toHaveLength(1);
     expect(findRemote(`fetch("${lic}")`, DIST_EXTRA)).toHaveLength(1);
+  });
+  it("the ransomware.live credit URL is allowed only as the exact literal", () => {
+    expect(findRemote('export const U = "https://www.ransomware.live";')).toEqual([]);
+    expect(findRemote('fetch("https://www.ransomware.live/api")')).toHaveLength(1);
+    expect(findRemote('fetch("https://www.ransomware.live.evil.test")')).toHaveLength(1);
   });
   it("the DB-IP attribution link is allowed only as the exact literal", () => {
     expect(findRemote('<ExternalLink href="https://db-ip.com">')).toEqual([]);

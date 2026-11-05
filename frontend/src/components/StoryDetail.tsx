@@ -3,6 +3,7 @@ import { relTime } from "../lib/relTime";
 import { CVE_ID_RE, useSelection } from "../lib/selection";
 import { ExternalLink, safeHref, Text } from "../lib/text";
 import { useNow } from "../lib/useNow";
+import { isRansomwareSource, RansomwareCredit } from "./RansomwareCredit";
 
 /** A story drawer body. There is no single-story endpoint, so it reads the cached loud feed. */
 export function StoryDetail({ url }: { url: string }) {
@@ -42,6 +43,7 @@ export function StoryDetail({ url }: { url: string }) {
         <span>
           <Text value={story.source} /> · {relTime(story.published, now)}
         </span>
+        {isRansomwareSource(story.source) && <RansomwareCredit />}
       </div>
       <div>
         <div className="seclabel">What happened</div>
