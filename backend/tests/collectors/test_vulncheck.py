@@ -1,3 +1,4 @@
+from pydantic import SecretStr
 import logging
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
@@ -23,7 +24,7 @@ def fast_sleep(monkeypatch):
 
 @pytest.fixture
 def token(monkeypatch):
-    s = SimpleNamespace(vulncheck_api_token="tok-123", kev_alert_max_age_days=14)
+    s = SimpleNamespace(vulncheck_api_token=SecretStr("tok-123"), kev_alert_max_age_days=14)
     monkeypatch.setattr(vulncheck, "get_settings", lambda: s)
     return s
 

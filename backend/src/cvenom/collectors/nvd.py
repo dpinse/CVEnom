@@ -70,7 +70,8 @@ class NvdCollector(Collector):
         elif since.tzinfo is None:
             since = since.replace(tzinfo=UTC)
 
-        key = settings.nvd_api_key
+        secret = settings.nvd_api_key
+        key = secret.get_secret_value() if secret else None
         headers = {"apiKey": key} if key else None
         delay = DELAY_WITH_KEY if key else DELAY_NO_KEY
 

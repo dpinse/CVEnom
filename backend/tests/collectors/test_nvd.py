@@ -1,3 +1,4 @@
+from pydantic import SecretStr
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -80,7 +81,7 @@ async def test_fetch_sends_window_params_no_key(page, settings):
 
 @respx.mock
 async def test_fetch_sends_api_key_header(page, settings):
-    settings.nvd_api_key = "sekret"
+    settings.nvd_api_key = SecretStr("sekret")
     route = respx.get(NVD_URL).respond(json=page)
     await NvdCollector().fetch(since=datetime.now(UTC) - timedelta(days=1))
     assert route.calls[0].request.headers["apiKey"] == "sekret"
@@ -104,7 +105,7 @@ async def test_fetch_paginates_and_sleeps(page, settings, fast_sleep, monkeypatc
 @respx.mock
 async def test_fetch_sleep_shorter_with_key(page, settings, fast_sleep, monkeypatch):
     monkeypatch.setattr(nvd, "PAGE_SIZE", 2)
-    settings.nvd_api_key = "k"
+    settings.nvd_api_key = SecretStr("k")
     p = {**page, "totalResults": 4}
     respx.get(NVD_URL).mock(
         side_effect=[httpx.Response(200, json=p), httpx.Response(200, json=p)]
