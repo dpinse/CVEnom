@@ -69,6 +69,18 @@ def test_parse_index_stops_at_since_and_takes_id_after_last_slash():
     ]
 
 
+def test_parse_index_multi_slash_takes_last_segment():
+    text = "2026-11-04T10:00:00Z,Ubuntu/22.04/USN-1\n2026-11-04T09:00:00Z,Foo/bar/GHSA-x\n"
+    assert osv.parse_index(text, SINCE) == ["USN-1", "GHSA-x"]
+
+
+def test_parse_index_warns_with_malformed_count(caplog):
+    with caplog.at_level(logging.WARNING, logger="cvenom.collectors.osv"):
+        osv.parse_index(INDEX + "nope,Go/X\n", SINCE)
+    msgs = [r.getMessage() for r in caplog.records if "malformed" in r.getMessage()]
+    assert msgs == ["osv: skipped 1 malformed index line(s)"]
+
+
 def test_parse_index_cap_warns(monkeypatch, caplog):
     monkeypatch.setattr(osv, "MAX_IDS", 2)
     with caplog.at_level(logging.WARNING, logger="cvenom.collectors.osv"):
@@ -111,6 +123,7 @@ def test_normalize_skips_malformed_record(caplog):
     with caplog.at_level(logging.WARNING, logger="cvenom.collectors.osv"):
         res = OsvCollector().normalize([{"id": "CVE-2026-1", "affected": "nope"}, OWN_CVE])
     assert [c.cve_id for c in res.cves] == ["CVE-2026-3001"]
+    assert any("skipping malformed record CVE-2026-1" in r.getMessage() for r in caplog.records)
 
 
 def test_enrich_only_and_registration():
@@ -150,3 +163,13 @@ async def test_fetch_defaults_since_to_seven_days(respx_mock):
     )
     raw = await OsvCollector().fetch()
     assert len(raw) == 1 and route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_uses_self_since(respx_mock):
+    text = "2026-11-04T10:00:00Z,Go/GO-A-1\n2026-11-02T00:00:00Z,Go/GO-B-1\n"
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=text))
+    a = respx_mock.get(VULN_URL.format(id="GO-A-1")).mock(return_value=httpx.Response(200, json=OWN_CVE))
+    b = respx_mock.get(VULN_URL.format(id="GO-B-1")).mock(return_value=httpx.Response(200, json=OWN_CVE))
+    await OsvCollector(since=datetime(2026, 11, 3, tzinfo=UTC)).fetch()
+    assert a.call_count == 1 and b.call_count == 0

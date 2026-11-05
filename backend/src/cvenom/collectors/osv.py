@@ -40,13 +40,16 @@ def parse_index(text: str, since: datetime) -> list[str]:
         since = since.replace(tzinfo=UTC)
     ids: list[str] = []
     seen: set[str] = set()
+    malformed = 0
     for line in text.splitlines():
         ts_text, sep, key = line.partition(",")
         if not sep or not key.strip():
+            malformed += 1
             continue
         try:
             ts = _parse_ts(ts_text)
         except ValueError:
+            malformed += 1
             continue
         if ts < since:
             break
@@ -54,10 +57,12 @@ def parse_index(text: str, since: datetime) -> list[str]:
         if not vuln_id or vuln_id in seen:
             continue
         if len(ids) >= MAX_IDS:
-            log.warning("osv: id cap of %d reached; remaining modified ids deferred", MAX_IDS)
+            log.warning("osv: capped at %d ids; older ids not processed this run", MAX_IDS)
             break
         seen.add(vuln_id)
         ids.append(vuln_id)
+    if malformed:
+        log.warning("osv: skipped %d malformed index line(s)", malformed)
     return ids
 
 
