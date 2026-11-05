@@ -77,6 +77,11 @@ class TokenReuse(InvalidToken):
     """A rotated-out refresh token was presented again (possible theft)."""
 
 
+class RefreshGrace(InvalidToken):
+    """The immediate predecessor refresh token was presented within `REUSE_GRACE`
+    (a client racing itself). Callers must not clear the shared refresh cookie."""
+
+
 @dataclass(frozen=True)
 class AccessClaims:
     sub: int
@@ -368,7 +373,7 @@ def rotate_refresh(
 
     Exception: the immediate predecessor presented within `REUSE_GRACE` of the
     last rotation is treated as a client racing itself; it gets a plain
-    `InvalidToken` and the session is left untouched.
+    `RefreshGrace` and the session is left untouched.
     """
     _require_aware(now)
     h = _hash(raw)
@@ -386,7 +391,7 @@ def rotate_refresh(
         )
         if reused is not None:
             if reused.prev_refresh_hash == h and now - reused.last_used_at < REUSE_GRACE:
-                raise InvalidToken("invalid refresh token")
+                raise RefreshGrace("invalid refresh token")
             if reused.revoked_at is None:
                 reused.revoked_at = now
             session.commit()
