@@ -37,6 +37,12 @@ class CollectorLock(Protocol):
     def release(self, name: str) -> None: ...
 
 
+_RELEASE_LUA = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('del', KEYS[1]) else return 0 end"
+)
+
+
 class RedisLock:
     """Per-collector lock: SET NX EX; release deletes only if we still hold it."""
 
@@ -56,26 +62,26 @@ class RedisLock:
         return bool(self.client.set(LOCK_PREFIX + name, self._token, nx=True, ex=ttl))
 
     def release(self, name: str) -> None:
-        key = LOCK_PREFIX + name
-        held = self.client.get(key)
-        if isinstance(held, bytes):
-            held = held.decode()
-        if held == self._token:
-            self.client.delete(key)
+        # Atomic compare-and-delete: never delete another worker's lock.
+        self.client.eval(_RELEASE_LUA, 1, LOCK_PREFIX + name, self._token)
 
 
 def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLock | None = None) -> dict:
     cls = REGISTRY[name]
     lock = lock if lock is not None else RedisLock()
     summary = {"collector": name, "ok": False, "cves": 0, "stories": 0, "events": [], "skipped": False}
-    if not lock.acquire(name, cls.cadence_seconds):
+    # The Redis lock is the cheap skip; the row lock (FOR UPDATE) below is the
+    # correctness guarantee. TTL is 2x cadence so a slow run rarely outlives it.
+    if not lock.acquire(name, 2 * cls.cadence_seconds):
         log.info("collector %s already running; skipping", name)
         summary["skipped"] = True
         return summary
     try:
         started_at = datetime.now(timezone.utc)
+        # The DB session stays open during the network fetch by design
+        # (single-transaction decision).
         with session_factory() as session:
-            row = session.get(CollectorRun, name)
+            row = session.get(CollectorRun, name, with_for_update=True)
             if row is None:
                 row = CollectorRun(collector=name, last_run=None, state={})
                 session.add(row)
@@ -83,7 +89,7 @@ def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLo
             result = asyncio.run(collector.run())
             if collector.last_error is not None:
                 log.error("collector %s failed; window not advanced", name)
-                if row.last_run is None and not row.state:
+                if row in session.new:
                     session.expunge(row)
                 return summary
             events = ingest(session, result, enrich_only=getattr(cls, "enrich_only", False))

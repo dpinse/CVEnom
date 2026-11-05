@@ -94,7 +94,7 @@ def test_run_collector_success(db_session, factory, fake_registry):
     assert before <= row.last_run <= after
     assert row.state == {"cursor": "new"}
     assert db_session.get(Cve, "CVE-2099-0001") is not None
-    assert lock.acquired == [("fake_t", 123)] and lock.released == ["fake_t"]
+    assert lock.acquired == [("fake_t", 246)] and lock.released == ["fake_t"]
 
 
 def test_run_collector_failure_does_not_advance(db_session, factory, fake_registry):
@@ -119,8 +119,8 @@ def test_run_collector_failure_without_prior_row_creates_no_advance(
     fake_registry(make_fake(fail=True))
     out = run_collector("fake_t", session_factory=factory, lock=FakeLock())
     assert out["ok"] is False
-    row = db_session.get(CollectorRun, "fake_t")
-    assert row is None or row.last_run is None
+    assert db_session.get(CollectorRun, "fake_t") is None
+    assert db_session.get(Cve, "CVE-2099-0001") is None
 
 
 def test_run_collector_passes_since_and_state(db_session, factory, fake_registry):
@@ -186,8 +186,12 @@ def test_redis_lock_token_semantics():
         def get(self, k):
             return self.d.get(k)
 
-        def delete(self, k):
-            self.d.pop(k, None)
+        def eval(self, script, numkeys, key, token):
+            assert "'del'" in script and numkeys == 1
+            if self.d.get(key) == token:
+                del self.d[key]
+                return 1
+            return 0
 
     r = FakeRedis()
     a, b = RedisLock(r), RedisLock(r)
@@ -215,3 +219,78 @@ def test_celery_config():
             "schedule": cls.cadence_seconds,
             "args": (name,),
         }
+
+
+def test_row_loaded_with_for_update(db_session, factory, fake_registry):
+    from sqlalchemy import event
+    from cvenom.tasks import run_collector
+    fake_registry(make_fake())
+    stmts = []
+
+    def spy(conn, cursor, statement, *a):
+        stmts.append(statement)
+
+    bind = db_session.get_bind()
+    event.listen(bind, "before_cursor_execute", spy)
+    try:
+        run_collector("fake_t", session_factory=factory, lock=FakeLock())
+    finally:
+        event.remove(bind, "before_cursor_execute", spy)
+    sel = [s for s in stmts if "FROM collector_run" in s and s.lstrip().startswith("SELECT")]
+    assert sel and all("FOR UPDATE" in s for s in sel)
+
+
+def test_ingest_failure_rolls_back_and_releases_lock(db_session, fake_registry, monkeypatch):
+    import cvenom.tasks as tasks
+    fake_registry(make_fake())
+    prior = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    db_session.add(CollectorRun(collector="fake_t", last_run=prior, state={"k": 1}))
+    db_session.flush()
+
+    @contextmanager
+    def tx():
+        sp = db_session.begin_nested()
+        try:
+            yield db_session
+            sp.commit()
+        except Exception:
+            sp.rollback()
+            raise
+
+    def bad_ingest(session, result, *, enrich_only=False):
+        from cvenom.pipeline import ingest
+        ingest(session, result, enrich_only=enrich_only)  # writes CVE rows first
+        raise RuntimeError("ingest boom")
+
+    monkeypatch.setattr(tasks, "ingest", bad_ingest)
+    lock = FakeLock()
+    with pytest.raises(RuntimeError, match="ingest boom"):
+        tasks.run_collector("fake_t", session_factory=tx, lock=lock)
+    assert lock.released == ["fake_t"]
+    assert db_session.get(Cve, "CVE-2099-0001") is None
+    db_session.expire_all()
+    row = db_session.get(CollectorRun, "fake_t")
+    assert row.last_run == prior and row.state == {"k": 1}
+
+
+def test_ingest_failure_creates_no_run_row(db_session, fake_registry, monkeypatch):
+    import cvenom.tasks as tasks
+    fake_registry(make_fake())
+
+    @contextmanager
+    def tx():
+        sp = db_session.begin_nested()
+        try:
+            yield db_session
+            sp.commit()
+        except Exception:
+            sp.rollback()
+            raise
+
+    def bad_ingest(session, result, *, enrich_only=False):
+        raise RuntimeError("ingest boom")
+
+    monkeypatch.setattr(tasks, "ingest", bad_ingest)
+    with pytest.raises(RuntimeError):
+        tasks.run_collector("fake_t", session_factory=tx, lock=FakeLock())
+    assert db_session.get(CollectorRun, "fake_t") is None
