@@ -79,6 +79,13 @@ export function fetchHealth(): Promise<Health> {
   return api<Health>("/health");
 }
 
+export function useHealth() {
+  return useRead({
+    queryKey: qk.health(),
+    queryFn: () => fetchHealth(),
+  });
+}
+
 export function useLanes() {
   return useRead({
     queryKey: qk.lanes(),

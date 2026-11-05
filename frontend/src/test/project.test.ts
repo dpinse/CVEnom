@@ -100,11 +100,15 @@ describe("no third-party runtime requests (source)", () => {
 });
 
 const dist = join(root, "dist");
-/** Inert strings that react-dom itself embeds in the bundle (namespace identifiers and an error-message link; never requested). */
+/** Inert strings that react-dom and react-router embed in the bundle (namespace identifiers and an error-message link; never requested). */
 const DIST_EXTRA = [
   "http://www.w3.org/1998/Math/MathML",
   "http://www.w3.org/XML/1998/namespace",
   "https://react.dev/errors/",
+  // react-router: a dummy base for `new URL(path, base)` parsing, and two dev-warning doc links; none is requested.
+  "http://localhost",
+  "https://reactrouter.com/en/main/routers/picking-a-router.",
+  "https://github.com/ungap/url-search-params.",
 ];
 describe.skipIf(!existsSync(dist))("no third-party runtime requests (dist)", () => {
   const files = existsSync(dist) ? walk(dist).filter((f) => /\.(html|js|css|mjs|json|svg)$/.test(f)) : [];

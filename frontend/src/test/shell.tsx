@@ -1,0 +1,87 @@
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
+import { render } from "@testing-library/react";
+import { HttpResponse, http } from "msw";
+import { setupServer } from "msw/node";
+import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router-dom";
+import { afterAll, afterEach, beforeAll, vi } from "vitest";
+import { authStore } from "../lib/api";
+import { createQueryClient } from "../lib/queries";
+import type { CveItem, LanesOut, Me } from "../lib/types";
+
+export const server = setupServer();
+
+/** Wires MSW + a relative-URL fetch into the calling test file. */
+export function setupMsw() {
+  beforeAll(() => {
+    server.listen({ onUnhandledRequest: "error" });
+    const mswFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", (u: RequestInfo | URL, i?: RequestInit) => mswFetch(new URL(String(u), "http://localhost"), i));
+  });
+  afterEach(() => {
+    server.resetHandlers();
+    authStore.clear();
+    authStore.setReady(false);
+    try {
+      sessionStorage.clear();
+      localStorage.clear();
+    } catch {
+      // ignore
+    }
+  });
+  afterAll(() => {
+    server.close();
+    vi.unstubAllGlobals();
+  });
+}
+
+export const item = (o: Partial<CveItem> = {}): CveItem => ({
+  cve_id: "CVE-2026-0001",
+  cvss: 9.8,
+  epss_percentile: 0.9,
+  kev: true,
+  kev_added: null,
+  kev_source: "cisa",
+  poc_badge: false,
+  patch_available: null,
+  published: null,
+  summary: "A summary",
+  recent_story_count: 0,
+  ...o,
+});
+
+export const lanes = (exploited: CveItem[] = [], rest: Partial<LanesOut> = {}): LanesOut => ({
+  EXPLOITED: exploited,
+  LIKELY: [],
+  LOUD: [],
+  FRESH: [],
+  ...rest,
+});
+
+export function handlers(opts: { publicRead?: boolean; lanes?: LanesOut } = {}) {
+  server.use(
+    http.get("http://localhost/api/health", () => HttpResponse.json({ status: "ok", public_read: opts.publicRead ?? true })),
+    http.get("http://localhost/api/lanes", () => HttpResponse.json(opts.lanes ?? lanes())),
+    http.post("http://localhost/api/auth/logout", () => new HttpResponse(null, { status: 204 })),
+  );
+}
+
+export const member: Me = { id: 2, email: "member@example.com", role: "member" };
+export const admin: Me = { id: 1, email: "admin@example.com", role: "admin" };
+
+export function signIn(u: Me) {
+  authStore.setUser(u);
+  authStore.setReady(true);
+}
+export function guest() {
+  authStore.setReady(true);
+}
+
+export function renderAt(ui: ReactNode, path = "/", qc: QueryClient = createQueryClient()) {
+  qc.setDefaultOptions({ queries: { ...qc.getDefaultOptions().queries, retry: false } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
