@@ -43,9 +43,9 @@ export function recipientProblem(d: RecipientDraft): string | null {
   try {
     u = new URL(raw);
   } catch {
-    return "Webhook address must be a valid https:// URL";
+    return "Webhook address must be a valid https URL";
   }
-  if (raw.length > 4096 || u.protocol !== "https:") return "Webhook address must use https://";
+  if (raw.length > 4096 || u.protocol !== "https:") return "Webhook address must use https";
   if (u.username !== "" || u.password !== "") return "Webhook address must not contain a username or password";
   const s = d.secret;
   if (s !== "" && (s.length < 16 || s.length > 256)) return "Webhook secret must be 16 to 256 characters (or leave blank to generate one)";

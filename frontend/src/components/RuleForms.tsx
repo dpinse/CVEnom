@@ -82,7 +82,7 @@ export function RecipientFields({
             autoComplete="off"
             maxLength={4096}
             required={false}
-            hint="Must be an https:// address. The server also checks that it is a public endpoint."
+            hint="Must be an https address. The server also checks that it is a public endpoint."
           />
           <Field
             label={`Recipient ${n} webhook secret (optional)`}
