@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { RateLimited } from "../lib/api";
+import { ApiError, RateLimited } from "../lib/api";
 import { relTime } from "../lib/relTime";
 import { parseSelection, useSelection } from "../lib/selection";
 import type { LoudStory } from "../lib/types";
@@ -254,6 +254,13 @@ describe("LanesView", () => {
   test("RateLimited banner shows the countdown", () => {
     render(<LanesView error={new RateLimited(30)} onSelect={noop} />);
     expect(screen.getByRole("alert")).toHaveTextContent("Rate limited — retrying in 30s");
+  });
+
+  test("a 401 does not promise a retry", () => {
+    render(<LanesView error={new ApiError(401, "unauthorized")} onSelect={() => {}} />);
+    const text = screen.getByRole("alert").textContent ?? "";
+    expect(text).toMatch(/sign in/i);
+    expect(text).not.toMatch(/retrying/i);
   });
 
   test("I3: the banner counts down to the real next refetch, then says it is retrying now", () => {

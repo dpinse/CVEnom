@@ -1,5 +1,5 @@
 import { RateLimited } from "../lib/api";
-import { errorRefetchMs, nextRetryAt, useLanes, useLoudStories } from "../lib/queries";
+import { errorRefetchMs, nextRetryAt, pollsAfterError, useLanes, useLoudStories } from "../lib/queries";
 import { useSelection, type Selection } from "../lib/selection";
 import type { CveItem, Lane, LoudStory } from "../lib/types";
 import { useNow } from "../lib/useNow";
@@ -59,12 +59,17 @@ export function LanesView({ lanes, stories = [], loading, error, retryAt, now, o
     Math.ceil((retryAt === undefined ? errorRefetchMs(error) : retryAt - clock.getTime()) / 1000),
   );
   const when = secs > 0 ? `retrying in ${secs}s` : "retrying now";
+  const polls = pollsAfterError(error);
   const selectCve = (id: string) => onSelect({ kind: "cve", id });
   return (
     <div className="lanes-wrap">
       {error ? (
         <div className="lanes-error" role="alert">
-          {rate ? `Rate limited — ${when}` : `Couldn't load the lanes — ${when}`}
+          {!polls
+            ? "Sign in to see the lanes"
+            : rate
+              ? `Rate limited — ${when}`
+              : `Couldn't load the lanes — ${when}`}
         </div>
       ) : null}
       <div className="lanes">

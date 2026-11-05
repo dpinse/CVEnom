@@ -16,13 +16,15 @@ export class ApiError extends Error {
     this.body = body;
   }
 }
+/** Upper bound (s) on any Retry-After: setInterval overflows past 2^31-1 ms and would fire immediately. */
+export const MAX_RETRY_AFTER_S = 3600;
 export class RateLimited extends ApiError {
-  /** seconds, from the Retry-After header */
+  /** seconds, from the Retry-After header; clamped to MAX_RETRY_AFTER_S in this one place */
   readonly retryAfter: number;
   constructor(retryAfter: number, body?: unknown) {
     super(429, "rate_limited", body);
     this.name = "RateLimited";
-    this.retryAfter = retryAfter;
+    this.retryAfter = Math.min(retryAfter, MAX_RETRY_AFTER_S);
   }
 }
 export class NetworkError extends Error {

@@ -203,7 +203,9 @@ worker is a same-origin module worker; React and MapLibre set styles through the
 - `PUBLIC_READ` (default `true`): anonymous read-only access to radar data. Set `false` to require
   login for everything.
 - `CORS_ORIGINS`: JSON list of exact origins, e.g. `'["https://cvenom.example.com"]'`. No wildcards.
-  Empty means same-origin only.
+  Empty means same-origin only, and that includes the live WebSocket: its `Origin` host[:port] must
+  equal the `Host` header (nginx forwards the client's `Host` unchanged, port included). A WebSocket
+  without an `Origin` header (non-browser clients) is still accepted.
 - `API_DOCS` (default `false`): enables `/docs`, `/redoc` and `/openapi.json` on the api. Keep off in
   production. They are not reachable through nginx (see "Content Security Policy" above).
 

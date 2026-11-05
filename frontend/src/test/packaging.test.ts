@@ -58,7 +58,7 @@ describe("nginx.conf", () => {
     expect(conf).toContain("proxy_pass http://$api_upstream;");
     expect(conf).toContain("proxy_set_header X-Forwarded-For $xff_to_api;");
     expect(conf).toContain("$realip_remote_addr");
-    expect(conf).toContain("proxy_set_header Host $host;");
+    expect(conf).toContain("proxy_set_header Host $http_host;");
     expect(conf).toContain('proxy_set_header CF-Connecting-IP "";');
     expect(conf).toContain("proxy_set_header Upgrade $http_upgrade;");
     expect(conf).toContain("proxy_read_timeout 75s;");

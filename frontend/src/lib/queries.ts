@@ -120,7 +120,13 @@ export function errorRefetchMs(error: unknown): number {
 }
 /** refetchInterval for dashboard reads: only while the query is in its error state. */
 export function errorRefetchInterval(query: Pick<Query, "state">): number | false {
-  return query.state.status === "error" ? errorRefetchMs(query.state.error) : false;
+  if (query.state.status !== "error") return false;
+  return pollsAfterError(query.state.error) ? errorRefetchMs(query.state.error) : false;
+}
+/** A 401/403 is futile to poll: only an identity change fixes it, and that resets the cache. */
+export function pollsAfterError(error: unknown): boolean {
+  if (error instanceof AuthError) return false;
+  return !(error instanceof ApiError && (error.status === 401 || error.status === 403));
 }
 /** When an errored query will next be refetched by errorRefetchInterval (epoch ms). */
 export function nextRetryAt(query: { errorUpdatedAt: number; error: unknown }): number {

@@ -218,6 +218,21 @@ describe("I3: error-state polling", () => {
     expect(errorRefetchInterval({ state: { status: "error", error: new RateLimited(45) } } as never)).toBe(45_000);
   });
 
+  test("a capped Retry-After keeps the interval within 3_600_000 ms", () => {
+    const interval = errorRefetchInterval({
+      state: { status: "error", error: new RateLimited(99_999_999) },
+    } as never) as number;
+    expect(interval).toBeLessThanOrEqual(3_600_000);
+  });
+
+  test("401/403 never poll; 500 and 429 still do", () => {
+    const at = (error: unknown) => errorRefetchInterval({ state: { status: "error", error } } as never);
+    expect(at(new ApiError(401, "unauthorized"))).toBe(false);
+    expect(at(new ApiError(403, "forbidden"))).toBe(false);
+    expect(at(new ApiError(500, "x"))).toBe(30_000);
+    expect(at(new RateLimited(45))).toBe(45_000);
+  });
+
   test("an errored lanes query refetches after 30 s", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

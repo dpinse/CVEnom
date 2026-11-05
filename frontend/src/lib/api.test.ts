@@ -115,6 +115,17 @@ describe("api client basics", () => {
     expect(err.code).toBe("rate_limited");
   });
 
+  test("Retry-After is capped so a hostile value cannot overflow setInterval", async () => {
+    server.use(
+      http.get(`${B}/cves`, () =>
+        HttpResponse.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": "99999999" } }),
+      ),
+    );
+    const { client } = mk();
+    const err = await caught(client.api("/cves"));
+    expect(err.retryAfter).toBe(3600);
+  });
+
   test("other errors throw ApiError(status, code); code defaults to http_<status>", async () => {
     server.use(
       http.get(`${B}/a`, () => HttpResponse.json({ error: "not_found" }, { status: 404 })),
