@@ -132,7 +132,7 @@ async def test_deliveries_shape_filter_paginate(ctx):
     rule1, rule2 = seed_deliveries(db)
     app = make_app(db)
     async with client(app) as c:
-        r = await c.get("/api/alerts/deliveries", headers=member)  # any authed user
+        r = await c.get("/api/alerts/deliveries", headers=admin)  # admin only
         assert r.status_code == 200
         b = r.json()
         assert set(b) == {"items", "page", "page_size", "total"}
@@ -145,18 +145,18 @@ async def test_deliveries_shape_filter_paginate(ctx):
         for banned in ("ops@example.com", "hooks.example.com", "SECRETPATH", HOOK_SECRET):
             assert banned not in r.text
 
-        r = await c.get("/api/alerts/deliveries?status=failed", headers=member)
+        r = await c.get("/api/alerts/deliveries?status=failed", headers=admin)
         assert [i["last_error"] for i in r.json()["items"]] == ["boom"]
-        r = await c.get(f"/api/alerts/deliveries?rule_id={rule2.id}", headers=member)
+        r = await c.get(f"/api/alerts/deliveries?rule_id={rule2.id}", headers=admin)
         assert r.json()["total"] == 2
-        r = await c.get(f"/api/alerts/deliveries?rule_id={rule1.id}&status=sent", headers=member)
+        r = await c.get(f"/api/alerts/deliveries?rule_id={rule1.id}&status=sent", headers=admin)
         assert [i["channel"] for i in r.json()["items"]] == ["webhook"]
 
-        r = await c.get("/api/alerts/deliveries?page_size=2&page=2", headers=member)
+        r = await c.get("/api/alerts/deliveries?page_size=2&page=2", headers=admin)
         b = r.json()
         assert b["total"] == 5 and b["page"] == 2 and b["page_size"] == 2
         assert [i["cve_id"] for i in b["items"]] == ["CVE-2024-0002", "CVE-2024-0001"]
-        r = await c.get("/api/alerts/deliveries?page_size=2&page=9", headers=member)
+        r = await c.get("/api/alerts/deliveries?page_size=2&page=9", headers=admin)
         assert r.json()["items"] == []
 
 
@@ -167,7 +167,7 @@ async def test_deliveries_shape_filter_paginate(ctx):
 async def test_deliveries_bad_params_422(ctx, qs):
     db, admin, member = ctx
     async with client(make_app(db)) as c:
-        r = await c.get(f"/api/alerts/deliveries?{qs}", headers=member)
+        r = await c.get(f"/api/alerts/deliveries?{qs}", headers=admin)
     assert r.status_code == 422
     assert set(r.json()) == {"error", "detail"}
 
@@ -175,6 +175,16 @@ async def test_deliveries_bad_params_422(ctx, qs):
 async def test_deliveries_requires_auth(ctx):
     async with client(make_app(ctx[0])) as c:
         assert (await c.get("/api/alerts/deliveries")).status_code == 401
+
+
+async def test_deliveries_member_forbidden_admin_ok(ctx):
+    db, admin, member = ctx
+    seed_deliveries(db)
+    async with client(make_app(db)) as c:
+        r = await c.get("/api/alerts/deliveries", headers=member)
+        assert r.status_code == 403
+        assert "CVE-2024" not in r.text and "boom" not in r.text
+        assert (await c.get("/api/alerts/deliveries", headers=admin)).status_code == 200
 
 
 # ------------------------------------------------------------ test-send
