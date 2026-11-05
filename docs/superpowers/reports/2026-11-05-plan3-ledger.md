@@ -1,0 +1,379 @@
+# SDD ledger: plan docs/superpowers/plans/2026-11-05-cvenom-api-alerts.md
+
+- **Spec:** docs/superpowers/specs/2026-11-04-cvenom-vuln-threat-radar-design.md (reachable)
+- **Worktree:** .worktrees/feat-api-alerts, branch feat/api-alerts. It is stacked on feat/geo-news @ 17b5515, which is pushed.
+- **Base commit at start:** c30d1fc (Plan 3 plan committed)
+- **Prior records:** docs/superpowers/reports/2026-11-05-plan{1,2}-{summary,ledger,security-review}.md
+
+## Environment
+- Python 3.14, with its own venv at backend/.venv. Baseline: 497 passed.
+- Shared Postgres runs under compose project `feat-backend-foundation` on port 5432, database `cvenom_test`. Do NOT compose-up from this worktree.
+- Redis is not running; tests inject fakes.
+- Push policy: the controller pushes at checkpoints, subagents never push, and main is never touched.
+
+## Pre-flight scan
+
+### Cross-task (shared file / interface)
+| Produces | Consumes | Finding |
+|---|---|---|
+| T0 lazy `get_engine`/`get_sessionmaker` | every later task using session_scope | OK. T0 must update all importers of `engine`/`SessionLocal`. |
+| T1 secretbox, settings, deps | T4 (key enc), T10 (webhook secret), T12 (SMTP), T14 (lock covers deps) | OK |
+| T2 models | T3, T4, T7, T9, T10, T11 | OK |
+| T4 `decode_access` claims incl. `sid` | T7 require_user (session revoked check), T13 WS auth | OK |
+| T5 `client_ip`, deps | T6, T7, T8, T13 | OK |
+| T6 `rate_limit`, `ResponseCache` | T7 login limiter, T8 reads | OK (T6 precedes) |
+| T9 outbox in run_collector (tasks.py) | T11 consumes AlertEvent; T13 also edits run_collector | Sequential, same file. OK |
+| T10 needs `validate_url` | T12 owns webhook.py | Plan-author ruling: T10 implements validate_url fully; T12 adds pinning/sending |
+| T11 `sinks[...].send(...)` | T12 sinks | **Conflict:** the draft's signatures disagreed (T11 `send(delivery,cve,rule)`; T12 `send(...)`, and the sink needs the recipient's URL/secret) → Ruling 1 |
+| T13 WS `?token=` | Plan 4 WS hook | **Security conflict** with the Global Constraints rule that secrets must never appear in URLs; access logs record query strings → Ruling 2 |
+| T5 `/api/health` | Plan 4 needs `public_read` | Gap → Ruling 3 |
+| T8 geo items | Plan 2 security note: external_id unsanitized | Ruling 4 |
+| T14 Dockerfile `python:3.12-slim` | dev venv is 3.14 | Mismatch → Ruling 5 |
+
+### Intra-task self-consistency
+- T0–T14: each task's tests resolve to symbols that the same task or an earlier one produces. T10 needs `email-validator` for EmailStr, which T1's dependency list omitted (Ruling 6). T11's "two concurrent dispatchers" test allows a documented SQL assertion as the fallback, so it is not vacuous. No test asserts nothing.
+
+### Rulings
+- Ruling 1: Sink protocol in `alerts/sinks.py` (T11 creates it). `send(delivery, cve, rule, recipient) -> None` is sync and raises `SinkError`/`SinkNotConfigured` with secret-free messages. `dispatch_once(session_factory, now, sinks)` takes a factory so each delivery gets its own transaction. The plan text has been amended. Why: the recipient's URL/secret is needed by the sink, and the per-delivery tx needs a factory. Cost if wrong: an interface reshuffle inside T11/T12 only.
+- Ruling 2: WS auth moves to a first message `{"type":"auth","token":...}` within 5 s; a `?token=` in the URL is never accepted. Plan 3 T13 and the Plan 4 draft have been amended. Why: tokens in URLs leak via uvicorn/proxy access logs (Global Constraints: secrets never in URLs). Cost if wrong: slightly more client code.
+- Ruling 3: `/api/health` returns `{"status":"ok","public_read":bool}`, so Plan 4 can gate login and WS auth. Cost if wrong: it discloses one boolean, which the anonymous 401 already reveals.
+- Ruling 4: API geo items never include `external_id`. Fields are kind/country_code/label/magnitude/observed_at/details. Cost if wrong: none.
+- Ruling 5: the Dockerfile uses `python:3.14-slim`, matching dev; 3.13 is the fallback only if a wheel is missing, and that must be reported. Cost if wrong: a rebuild on a different base.
+- Ruling 6: T10 adds the `email-validator` dependency. Cost if wrong: none.
+
+Pre-flight complete with 6 rulings, all applied to the plan text before commit c30d1fc. Dispatching Task 0.
+
+## Task log
+- Task 0: BASE=c30d1fc, dispatched (sonnet). Implemented 2e29bf5, suite 502/0 (5 new, RED shown), not pushed. pyyaml added to dev extras. Review dispatched (sonnet).
+- Task 0: **complete** (commits c30d1fc..2e29bf5, review clean). Deferred minors: unreachable-URL subprocess test redundant with (a)+currsize; worker_process_init builds an unused engine in the child if parent never did (harmless); `_live_receivers` private Celery API in test; get_settings.cache_clear() doesn't clear get_engine cache (latent trap → carried into Task 1 dispatch: tests overriding DATABASE_URL must clear engine caches).
+- Ruling 7: Settings has NO env prefix (existing convention: DATABASE_URL, NVD_API_KEY…). The plan's `CVENOM_SECRETS_KEY`/`CVENOM_ADMIN_PASSWORD` become `SECRETS_KEY`/`ADMIN_PASSWORD`. Every env name is the upper-cased field name. Carry into T3 (CLI), T14 (.env.example, docs). Cost if wrong: generic names could collide in a shared env; containers isolate env, so low.
+- Ruling 8: rate-limit setting names are `rate_anon_per_min=60`, `rate_login_per_15min_ip=10`, `rate_login_per_15min_email=10`, `rate_authed_per_min=300`. SMTP is `smtp_host/smtp_port=587/smtp_username/smtp_password(SecretStr)/smtp_from_addr/smtp_starttls=True`. Empty-string secrets map to None. Cost if wrong: renames in T6/T12.
+- TODO (controller, after T1 commits): fix the Plan 2 summary, which says `CVENOM_RANSOMWARE_LIVE_API_KEY` etc.; the real names have no prefix.
+- Task 1: BASE=2e29bf5, dispatched (sonnet). Implemented f0022b3, suite 514/0 (RED 12), not pushed. nvd/vulncheck test stubs wrapped in SecretStr.
+- Controller: 28d9258 docs — env names corrected in the Plan 2 summary and the Plan 3 plan (no CVENOM_ prefix); T3/T14 briefs re-extracted.
+- Task 1: **complete** (commits 2e29bf5..f0022b3, review clean). Deferred minors: decrypt uses lenient urlsafe_b64decode (GCM still authenticates); decrypt(non-str) raises AttributeError; tamper/wrong-key tests use broad `pytest.raises(Exception)`, with no tests for malformed tokens; import-order nit; whitespace-only secret is not mapped to None. Hardening idea: no AAD binding, so a token could be swapped between stored values. Consider an optional `aad` param in the final review.
+- Ruling (Task 2 schema):
+  - Table `app_user`: `user` is reserved in PG.
+  - Enumerations are String columns with named CHECK constraints, not native enums.
+  - Foreign keys: CASCADE on sessions, recipients and deliveries; SET NULL on `created_by`. `cve_id` is a plain string with no FK.
+  - Added `alert_delivery.next_attempt_at` for T11 backoff, with an index on (status, next_attempt_at).
+  - `user_session.id` is UUID. Emails are lower-cased via `@validates`. Hash columns are String(64).
+  - `alert_event` gets a BRIN index on `created_at`.
+  - Cost if wrong: a follow-up migration.
+- Task 2: BASE=28d9258, dispatched (sonnet). Implemented f7c29c9 (524 passing, RED shown), not pushed. Deviations: extra FK-side indexes; Invite has no created_at; migration test skips serial PK default; tests live in test_auth_models.py. Review dispatched (sonnet).
+- Task 2: **complete** (commits 28d9258..f7c29c9, review clean). Minors routed:
+  - Ruling (→ T3): add `CheckConstraint("email = lower(email)")` on app_user and invite in **0003**. Amending is safe because 0003 is unpushed and unreleased. Also add a None-guard in the `@validates` email normalizer. All email lookups (authenticate, invite) normalize with `.strip().lower()`. Cost if wrong: none; it is a backstop.
+  - → T10: a recipient whose channel/field pairing is inconsistent (email channel with no email, webhook channel with no url) must be rejected by the API schema.
+  - → T11: skip events whose cve_id is None (alert_delivery.cve_id is NOT NULL). Add a raw-SQL test of the server defaults alongside the Core ON CONFLICT insert.
+  - Deferred: the migration-vs-model test compares types only by family (lengths not compared), does not check unnamed uniques, and does not compare default values. created_by FKs have no index.
+- Task 3: BASE=f7c29c9, dispatched (sonnet).
+- Task 3: implemented a012454, suite 555/0, DONE_WITH_CONCERNS (email-backstop tests had no isolated RED; no ruff; accept_invite FOR UPDATE + password validated before consuming + savepoint IntegrityError→InvalidInvite). Review (sonnet) asked to judge backstop test discrimination.
+- Task 3: review: spec ✅, Approved, no Critical or Important findings. Backstop tests verified as discriminating by reading (no other constraint would raise, and the migration name test covers the migration side). The accept_invite race is serialized by FOR UPDATE.
+- Task 3: **complete** (commits f7c29c9..a012454, review clean).
+  - Ruling (→ T7 dispatch, auth follow-ups):
+    - (1) The rehash on login uses the raw hasher, not `hash_password`, so the policy never runs on login (avoids WeakPassword → 500 for legacy users).
+    - (2) The CLI catches IntegrityError when the email already exists as a non-admin. It exits 1 with a clean message and never prints the SQL params or hash.
+    - (3) The login API validates email and password types and caps password length (≤ 256) BEFORE authenticate. An over-length password returns the same generic 401, after a dummy verify for timing parity.
+    - (4) Expose `dummy_hash`/hasher publicly from passwords.py instead of the private `_hasher` import.
+    - (5) Add a test for accept_invite's IntegrityError→InvalidInvite branch.
+    - Cost if wrong: none; these are hardening.
+  - Deferred: naive `now` in accept_invite raises TypeError (aware contract); create_admin email-format validation (API layer).
+- Task 4: BASE=a012454, dispatched.
+- Ruling (Task 4):
+  - Keys: PKCS8 DER encrypted via secretbox; kid = token_urlsafe(16).
+  - Key creation takes a pg advisory xact lock and re-checks.
+  - decode_access checks the unverified header first (alg == EdDSA, kid present), then exp/iat manually against the injected now (60s iat skew), and requires the claim kid to equal the header kid.
+  - On refresh-token reuse, revoke then COMMIT inside rotate_refresh before raising TokenReuse, so the revocation survives the caller's rollback.
+  - Adds create_session and session_is_active for T7.
+  - Cost if wrong: a commit inside a library function surprises a caller. It is documented, and only T7 calls it.
+- Task 4: dispatched (sonnet), BASE=a012454.
+- Task 4: implemented 94eaa02, suite 583/0 (RED ImportError), not pushed. Concern flagged by controller: current() calls session.expire_all() after the advisory lock — may discard callers' unflushed changes. Review dispatched (opus, security-critical).
+- Task 4 review (opus): spec ✅, Changes requested. The probes rejected every forgery variant (alg confusion/none/HS256-pubkey, jwk/jku/x5c, crit, non-str/huge kid, garbage input).
+  - Important #1: `expire_all()` has side effects across the whole session (it discards unflushed changes under no_autoflush, and can cause DetachedInstance later).
+  - Important #2: a client that races itself (two tabs) gets its session revoked.
+  - Important #3: reuse detection covers only the immediate predecessor.
+- Ruling (#3): this is a SPEC gap. The spec says "reusing an already-rotated token revokes that whole session", so we keep the full used-hash history in a new table `user_session_used_refresh(hash PK, session_id FK CASCADE, used_at)` by amending the unreleased 0003. Cost if wrong: one small table, which grows with refreshes and is purged with its sessions.
+- Ruling (#2): a 10s grace window. If the immediate predecessor is presented within 10s of rotation, raise InvalidToken without revoking. Plan 4 adds a cross-tab single-flight refresh (Web Locks / BroadcastChannel). Cost if wrong: an attacker who replays within 10s of the legitimate rotation isn't revoked, but still gets no token.
+- Minors folded: tz-aware `now` guards, bool `iat`, and regression tests for the probe cases.
+- Task 4: fix round 1, resuming the implementer. FIX_BASE=94eaa02.
+- Task 4: fix round 1/5 (3 addressed + 3 folded minors, 0 open; commits 94eaa02..63237b8). Covering tests 63, suite 603.
+- Task 4: **complete** (commits a012454..63237b8, clean after 1 fix round). Out-of-scope notes, deferred:
+  - `user_session_used_refresh` grows with every rotation and is removed only by session cascade. → Ruling (→ T11): add a daily `purge_sessions` maintenance job that deletes sessions whose expires_at or revoked_at is older than 7 days; the cascade purges their used hashes.
+  - `populate_existing` on the key re-check affects only SigningKey objects (benign).
+- Task 5: BASE=63237b8, dispatched (sonnet).
+- Ruling (Task 5):
+  - API docs/openapi are off by default (`api_docs=False`), because the app is internet-facing.
+  - Middleware is pure ASGI only (no BaseHTTPMiddleware). Security headers are applied on every status.
+  - 422 responses strip `input`/`ctx` so request values are never echoed.
+  - An invalid bearer token returns 401 even under public_read (no silent anonymous fallback).
+  - Error JSON is flat `{"error":...}`.
+  - CORS is omitted when there are no origins.
+  - client_ip walks XFF right-to-left past trusted proxies.
+  - Cost if wrong: operators must set API_DOCS=true to browse docs.
+- Task 5: implemented 42b525e, suite 627/0 (RED confirmed after the fact by moving the module aside). Deviations: ErrorCatchMiddleware sits inside CORS/headers so 500s carry the headers; a streamed-oversize body gets its 413 sent by the middleware plus a disconnect fed to the app; tests use raise_app_exceptions=False. Review dispatched (opus, security-critical).
+- Task 5 review (opus): spec ✅, Changes requested.
+  - Important #1: the XFF walk skipped invalid hops (`unknown`, `ip:port`, `[v6]:port`, empty), so an attacker-supplied left value was returned. That defeats per-IP rate limits. The bug came from my ruling 5 wording.
+  - Important #2: `cors_origins=["*"]` with credentials reflects any origin.
+  - Design note: CF-Connecting-IP was trusted from any trusted peer, including a non-Cloudflare reverse proxy.
+- Ruling (amends ruling 5): the XFF walk goes right to left with port stripping. Valid trusted hops are skipped, the first valid untrusted hop is returned, and an INVALID hop stops the walk and returns the peer. Cost if wrong: a misconfigured proxy degrades to peer-IP bucketing (fails closed).
+- Ruling: cors_origins accepts bare http(s) origins only; `*`, paths and userinfo are rejected at settings load. Cost if wrong: none.
+- Ruling: CF-Connecting-IP is honoured only with `trust_cf_connecting_ip=True` (opt-in, default False) AND a trusted peer. T14 docs must cover enabling it under Cloudflare Tunnel and stripping it at any other proxy. Cost if wrong: a Tunnel deployment that forgets the flag sees the cloudflared IP for all users (fails closed).
+- Minors folded into round 1: quiet ClientDisconnect, re-raise after the response has started, IP normalization (zone ids, ipv4-mapped), generic 422 msg and truncated loc, BodyLimit moved inside CORS, drop raise_app_exceptions=False, cache CIDR parsing.
+- Deferred minors: the CSP blocks Swagger UI when api_docs=True; RED was observed only at collection time.
+- Task 5: fix round 1, resumed implementer. FIX_BASE=42b525e.
+- Task 5: fix round 1/5 (2 Important + CF ruling + 7 minors addressed, 0 open; commits 42b525e..be5bf62). Covering 45, suite 642.
+- Task 5: **complete** (commits 63237b8..be5bf62, clean after 1 round). Deferred minors: `[1.2.3.4]:80` accepted (harmless); cors origin host not lowercased (fails closed); peer fallback returns raw host string; no direct ClientDisconnect/started-reraise tests.
+- Task 6: BASE=be5bf62, dispatched (sonnet).
+- Ruling (Task 6): Redis failure policy is fail-CLOSED (503) for login/auth scopes and fail-OPEN, with a throttled warning, for reads. The login email key is hashed (sha256), so Redis holds no PII. ResponseCache is a pure-ASGI middleware with an explicit path allowlist instead of the brief's decorator, because Cache-Control/Set-Cookie handling is cleaner there.
+  - Cached: anonymous only (no Authorization and no Cookie header), GET, 200 JSON responses up to 1 MB with no Set-Cookie, and only while public_read is true.
+  - Test Redis is fakeredis[lua].
+  - Cost if wrong: if Redis goes down, logins are refused until it recovers.
+- Task 6: implemented 482b091, suite 667/0 (RED 21), fakeredis[lua] OK on Win/3.14. Note: cache hits skip rate_limit dep. Review dispatched (sonnet).
+- Task 6 review (sonnet): spec ✅, Approved. No CORS or auth-state cache poisoning, and lifespan close is correct.
+  - Important #1: requests with an invalid bearer token raise 401 before the limiter runs, so they are unlimited (each costs a JWT verify plus a DB session).
+  - Important #2: the cache keyspace is unbounded across rotating IPs, and eviction could drop the rate-limit and login counters.
+- Ruling (#1): `rate_limit` resolves identity without raising. An invalid token counts against the ip bucket, then gets the 401.
+- Ruling (#2): the cache gets a per-path query-param allowlist. A request with any unknown param bypasses the cache, and the key uses only allowed params. max_bytes drops to 256 KB. An IP limiter runs before cache hits (counted once).
+  - T14 must also give Redis a maxmemory and an eviction policy that cannot evict the rate-limit counters. Options: a separate Redis logical DB/instance for the cache, or volatile-ttl. Carried to T14.
+  - Cost if wrong: extra Redis memory.
+- Minors folded: key-only stable sort, PTTL Retry-After, Vary: Origin, surrogate-safe email hash.
+- Deferred minors: HITs drop ETag/Link; email-lockout DoS is spec-inherent; no stampede protection; ruff not run.
+- Rule for T8: routes on the cache allowlist must not vary on request headers.
+- Task 6: fix round 1 resumed. FIX_BASE=482b091.
+- Task 6: fix round 1/5 (2 Important + 4 minors addressed, 0 open; commits 482b091..ef677fb). api tests 72, suite 677.
+- Task 6: **complete** (commits be5bf62..ef677fb, clean after 1 round).
+  - Ruling (→ T7): an invalid-token request still costs one signing-key DB lookup before it is counted. Add an in-process verification-key cache in tokens (TTL 60s, invalidated when this process rotates). This bounds DB cost per junk token. Cost if wrong: a retired key stays usable at most 60s past its grace window, while kid lookup still enforces the grace on refresh.
+  - Deferred: duplicate `Vary: Origin` (harmless); allowed-param value space bounded only by TTL/size/limiter.
+- Task 7: BASE=ef677fb, dispatched.
+- Ruling (Task 7):
+  - Refresh cookie: `cvenom_refresh`, attributes HttpOnly, Secure, SameSite=Strict, Path=/api/auth, Max-Age=30d.
+  - Login: enforce_login_limits runs before any DB work. A password over 256 chars gets a dummy verify plus the generic 401. The unknown-user and wrong-password 401s are byte-identical.
+  - Refresh: CSRF header is checked before the cookie. rotate_refresh is the first DB write. Any token failure returns 401 and clears the cookie.
+  - Logout: 204. Sessions list returns active sessions only, with no hashes; another user's session or a non-UUID id returns 404.
+  - Invites: EmailStr (email-validator is added here, not in T10). Accepting an invite does not auto-login.
+  - Folds in the T3 follow-ups and the signing-key in-process cache (60s TTL, one forced refresh per 10s on an unknown kid, grace filtered at use time).
+- Task 7: implemented 88165be (API) + 58257a4 (follow-ups), suite 702/0. DONE_WITH_CONCERNS. The implementer found and fixed a T3 bug: accept_invite begin_nested() flushed pending state outside the savepoint, so a dup-email IntegrityError would have poisoned the session (route 500). Other concerns: some follow-ups were written code-first; cache invalidated before commit (staleness bounded by the 10s/60s refresh); missing cookie → 401 without clear. Review dispatched (opus).
+- Task 7 review (opus): spec ✅, Changes requested.
+  - Clean on CSRF, enumeration/timing, session fixation, rotation sid, inactive user, member→admin invite, and uniform errors. The accept_invite savepoint fix is verified correct.
+  - Important I1: any stale or invalid Authorization header makes /refresh and /accept return 401 before their own logic runs, so an SPA can never refresh.
+  - Important I2: get_session is request-scoped, so every write route RESPONDS BEFORE COMMIT. FastAPI 0.162 exits yield deps after send, so logout can return 204 while the revocation rolls back.
+- Ruling: I1 → `rate_limit(..., identity="ip")` on refresh/accept. I2 → `Depends(get_session, scope="function")` everywhere via a shared alias. Folded minors: M1 per-kid LRU plus a 1/s global cap on forced key refresh and after_commit invalidation; M2 clear the cookie on every refresh 401; M3 extra="forbid"; M4 test gaps.
+- Parked: M5, login leaves the previous cookie's session alive. Ruling: it stays revocable from the sessions list, and auto-revoking on login would log out other tabs and devices that share the cookie jar. Cost if wrong: an orphaned session lives up to 30 days.
+- Task 7: fix round 1 resumed; FIX_BASE=58257a4.
+- Task 7: fix round 1/5 (I1, I2, M1–M4 addressed, 0 open; commits 58257a4..ca62cdd). Results: api 96 passed, auth 89 passed, full suite 714 passed.
+- Task 7: **complete** (commits ef677fb..ca62cdd, clean after 1 round). Deferred minors:
+  - tokens.py import order and line length (for when ruff is enabled);
+  - test_kid_tracking_bounded re-implements the eviction loop in the test;
+  - the 1s global cap can be monopolized by a multi-IP flood (60s TTL backstop).
+- Task 8: BASE=ca62cdd, dispatched.
+- Ruling (Task 8): `/api/velocity` drops the plan's `cve_id` param. cve_velocity is GLOBAL publication velocity, so a cve_id filter would be meaningless. days is 1–30 with default 30, because `rising` needs ≥14 days and the plan's default of 7 made it always false.
+  - Lane items are enriched from Cve rows with one IN query (no N+1).
+  - `source` filters on kev_source.
+  - Cached: lanes, velocity, geo and loud. Search and detail are not cached.
+  - `cache_paths=None` falls back to routes_read.CACHE_PATHS.
+  - Cost if wrong: the frontend loses per-CVE velocity. That would need a new read model, and the spec's "CVE velocity" reads as global.
+- Task 8: implemented 0d61bd3; suite 737/0 (RED 21). Deviations: strict UTF-8 query dependency (Starlette maps %FF→U+FFFD); detail uses CVE_ID_RE.fullmatch + {cve_id:path} (shared validator upper-cases); lanes = 3 SQL. Review dispatched (sonnet).
+- Task 8 review (sonnet): spec ✅, Changes requested. Deviations a–e accepted. Escaping, the cache and the field allowlist are clean.
+  - Important: `q=%00` passes the UTF-8 check, then psycopg DataError → 500.
+- Ruling: reject NUL in the decoded query string → 422 on every read route.
+  - Folded minors: from/to as timestamp-range predicates (BRIN-friendly); lane filter as one array param (bind-limit safe); datetimes normalized to UTC in responses; extra edge-case tests.
+- Parked, ruling: ASN-like data stays in geo details/label. It is public BGP/abuse.ch data, and ruling 4 meant "no asn column". Cost if wrong: minor data exposure of public info.
+- Deferred: ILIKE search has no trigram index (a pg_trgm option for later); rising is always false when days<14 (docs note).
+- Task 8: fix round 1 resumed; FIX_BASE=0d61bd3.
+- Task 8: fix round 1/5 (Important + 4 folds addressed, 0 open; commits 0d61bd3..c008965). test_read_api 34, suite 748.
+- Task 8: **complete** (commits ca62cdd..c008965, clean after 1 round). Deferred: no explicit empty-lane test. Path-param NUL is rejected by CVE_ID_RE before the DB (controller check).
+- Task 9: BASE=c008965, dispatched.
+- Task 9: implemented b6ad40f, suite 756/0 (RED ImportError). Extras: source validation, NUL/NaN scrub in payload. Review dispatched (sonnet).
+- Task 9: review spec ✅ Approved, no Critical/Important. Events and CollectorRun are written in one commit, and the KEV filter runs before the events are persisted.
+- Task 9: **complete** (commits c008965..b6ad40f, review clean). Minors routed:
+  - → T11: in persist_events, reject NUL in `type`/`source`, so a NUL can't DataError-fail the run. Skip dedupe when cve_id is None.
+  - → T12: the event payload is RAW (not sanitize_text'd). Email and webhook bodies must build from the Cve row and escape on output, never trust the payload as decoded-once text.
+  - Deferred: str(k) payload-key collisions; no real session_scope commit test.
+- Task 10: BASE=b6ad40f, dispatched.
+- Ruling (Task 10):
+  - validate_url is implemented in full: https only, no userinfo, IDNA, port 1–65535, every resolved IP must be is_global after unwrapping ipv4-mapped/6to4/teredo forms, an explicit denylist of special ranges, zone ids rejected, and generic error messages.
+  - Recipients are add/delete only (no in-place edit), so a stored secret never needs merging.
+  - Recipient bodies are a discriminated union on channel (covers the T2 channel/field consistency item).
+  - The secret is generated with token_urlsafe(32) when omitted, returned exactly once, and stored with secretbox. url_masked shows scheme://host[:port]/… only.
+  - PATCH can't change `kind`.
+  - Handlers that resolve DNS are sync def (threadpool).
+  - Cost if wrong: an admin has to delete and re-add a recipient to change its URL.
+- Task 10: implemented dea6447, suite 829/0 (73 new). No separate RED captured. Extras: 20-recipient cap. Review dispatched (opus, SSRF-critical).
+- Task 10 review (opus): spec ✅, Changes requested.
+  - Rejected in probes: numeric host forms via the resolved check, userinfo/backslash/%2f tricks, IDNA fullwidth dots, zone ids, teredo/6to4, and special-purpose v4/v6 ranges.
+  - Error leakage clean; mass assignment clean.
+  - I1: a failed create RETURNED a 422 after a flush, so session_scope committed the partial rule (DNS-rebind probe).
+  - I2: NAT64 64:ff9b::/96, ::/96 and ::ffff:0:0:0/96 pass is_global on 3.14. Real SSRF under DNS64.
+  - I3: webhook_url stored in cleartext, but for Discord/Slack/Telegram the URL IS the credential.
+  - The unwrap/blocklist tests were non-discriminating on 3.14 (weakening probes).
+- Ruling (I3): encrypt webhook_url at rest with secretbox (Text column, no migration). Decrypt only to mask, and in T12 to send. An undecryptable value masks as "(unavailable)". Spec: "webhook secrets encrypted at rest". Cost if wrong: one decrypt per list item.
+- Ruling: error helpers RAISE HTTPException, never return, so every error path rolls back. Audit all handlers.
+- Folded minors: control chars in Name, add-recipient URL-absence test, FOR UPDATE on the parent rule for the recipient cap.
+- Task 10: fix round 1 resumed; FIX_BASE=dea6447.
+- FINAL-REVIEW NOTE: audit ALL route modules (auth, read, alerts, ws) for 'return error response after a DB write' (session_scope commits on normal exit). routes_auth refresh returns 401 after rotate_refresh's own revocation commit — intended; verify no other pending writes.
+- Task 10: fix round 1/5 (I1–I3 + 3 minors addressed, 0 open; commits dea6447..04f05e3). Re-reviewer proved the I2 tests discriminate (old code accepted 6/7 NAT64/compat forms). Suite 849.
+- Task 10: **complete** (commits b6ad40f..04f05e3, clean after 1 round). Deferred: add_recipient resolves DNS while holding the rule row lock; a legacy plaintext webhook_url would mask as "(unavailable)" (none exist).
+- Task 11: BASE=04f05e3, dispatched.
+- Ruling (Task 11):
+  - Sinks are sync and raise SinkError, with SinkNotConfigured as a subclass.
+  - Evaluate stage runs in one transaction per 200-event batch with SKIP LOCKED. It skips events that are not kev_added or have no cve_id. Keyword match is done on html.unescape(summary) and on affected. Inserts use Core ON CONFLICT DO NOTHING on uq_alert_delivery_rule_recipient_cve.
+  - Send stage runs one transaction per delivery and re-selects the row with SKIP LOCKED.
+    - A missing sink or SinkNotConfigured defers the delivery by 1h without counting an attempt, so an unconfigured SMTP never burns a delivery into `failed`.
+    - Backoff is 2^attempts minutes; the delivery is marked failed at 6 attempts.
+    - last_error is scrubbed of the decrypted secret and URL, then truncated to 300 chars.
+  - The alerts-dispatch beat runs every 60s (interval) under a lock. purge_sessions runs daily at crontab 03:41.
+  - Folds in the T9 follow-ups: NUL in type/source is skipped, and there is no dedupe when cve_id is None.
+  - Cost if wrong: deliveries for an unconfigured channel pile up as pending, deferred hourly.
+- Task 11: implemented c2fc48d, suite 885/0 (+36, incl real two-connection SKIP LOCKED test). Review dispatched (opus).
+- Task 11 review (opus): spec ✅, Changes requested.
+  - Verified correct: commit boundaries, crash windows, backoff values, scrub guards, starvation behaviour, deleted-recipient handling, and no double successful send.
+  - I1 (probe-confirmed): a run can outlive the 120s lock (100 sequential sends at 10s each). The re-check ignored next_attempt_at, so overlapping dispatchers bypass backoff and send duplicate alerts.
+  - I2: the send stage doesn't re-check rule.enabled, and deferred deliveries can fire weeks later.
+- Ruling: I1 fixed both ways: a due re-check under the lock, plus a 90s send deadline per run.
+- Ruling: I2 → defer when the rule is disabled. Pending deliveries older than 7 days → failed "expired". Cost if wrong: an alert delayed more than 7 days by misconfiguration is dropped, which is intended (stale).
+- Minors folded: M1 (non-SinkError stores type name only), M2 (evaluate failure doesn't block sends), M3 (traceback frames without message), M6 (wrap lock release).
+- Deferred: M4 (deleted Cve row defers hourly until the 7d expiry, now bounded); M5 (brittle source-substring SKIP LOCKED test).
+- Task 11: fix round 1 resumed; FIX_BASE=c2fc48d.
+- Task 11: fix round 1/5 (I1, I2 + M1/M2/M3/M6 addressed, 0 open; commits c2fc48d..a5907f3). The race test fails without the due-check. Suite 893.
+- Task 11: **complete** (commits 04f05e3..a5907f3, clean after 1 round). Deferred: the deadline test is brittle on the monotonic call count; a single slow sink can exceed the TTL (safe thanks to the due re-check); dead `bad()` helper in the M3 test.
+- Task 12: BASE=a5907f3, dispatched.
+- Ruling (Task 12):
+  - Content is built from the Cve row plus the rule only, never from the raw event payload. Stored text is unescaped exactly once.
+  - Email is plain text only: CR/LF are stripped from the subject, port 465 uses implicit TLS, certs are validated, and errors report the exception type name only.
+  - Webhooks:
+    - The URL and secret are decrypted, the target is re-validated at send time, and the connection is pinned to the first validated IP. The Host header and SNI carry the hostname.
+    - No redirects, 10s timeout, at most 64 KB of the response is read, and only a 2xx counts as success.
+    - The JSON body also carries `content` and `text` (Discord/Slack compatibility) plus `allowed_mentions: {"parse":[]}`, so a summary cannot trigger @everyone.
+    - Requests are signed with HMAC over `t.` plus the exact body bytes.
+  - Cost if wrong: Telegram's bot API needs a different payload shape (chat_id plus text). Telegram is deferred and not covered by the generic shape.
+- Task 12: implemented 943449e, suite 919/0. Extras: 30s overall timeout, trust_env=False (env proxy can't bypass pinning), shared clean_summary. sni verified from httpcore 1.0.9 source. Review dispatched (opus).
+- Task 12: review (opus): spec ✅, Approved, no Critical or Important findings.
+  - A live local TLS handshake confirmed the cert is verified against the SNI hostname even when the connection is pinned to an IP.
+  - Wire bytes: Host is honored, the signed body equals the wire body, the fragment is not sent, and percent-encoding is preserved.
+  - `trust_env=False` keeps env proxies off. The response cap closes the connection, and email header injection is impossible under policy=SMTP.
+- Task 12: **complete** (commits a5907f3..943449e, review clean). Deferred minors, recommended FIX in the final wave:
+  - M1: a 2xx response with a stalled body times out, gets treated as a transport error, and the retry duplicates the delivery. Capture the status first; on 2xx, drain errors count as success.
+  - M2: the email sink has no overall cap (aiosmtplib's timeout is per command). Wrap in `wait_for(30)`.
+  - M3: a comma in a stored email fans out to multiple recipients. Assert a single address or pass `recipients=[addr]`.
+  - M4: `asyncio.run` sits outside the try.
+  - M5: only `ips[0]` is tried (accepted per ruling).
+- Task 13: BASE=943449e, dispatched.
+- Ruling (Task 13): run_collector publishes after commit (best-effort, sync redis). what_changed maps cves→lanes, stories→stories+lanes, geo→geo.
+  - WS checks Origin before accept (prevents cross-site WebSocket hijacking): 4403 when cors_origins is set and the Origin isn't in it.
+  - Redis per-IP INCR/DECR cap of 5 (4429); fails open.
+  - When public_read is false, the first-message auth must arrive within 5s or the socket closes 4401. `?token=` is ignored.
+  - Close at the access token's exp.
+  - Forward only `updated` messages, ignore client input, ping every 30s.
+  - Cost if wrong: clients must reconnect every 15 min when public_read is false.
+- Task 13: implemented 1364e9c, suite 944/0 (+25). Tests-after (no literal RED). Concern (controller): existing run_collector tests now call the DEFAULT redis publisher; if the shared dev Redis is up on 6379 they publish to it — test isolation issue. 1KB client-frame limit not enforced in-app (ASGI ws max size governs) → carry to T14: uvicorn --ws-max-size 4096. Review dispatched (opus).
+- Task 13 review (opus): spec ✅, Changes requested.
+  - I1: per-IP INCR/DECR goes negative with no TTL, which bypasses the limit (probe: 10 sockets from 1 IP, counter -10).
+  - I2: run_collector tests hit the real default Redis (+4s each, ~40s total; publishes to the dev Redis when it is up).
+  - I3: no global cap, and one Redis pubsub connection per socket, so fds and Redis clients can be exhausted.
+  - I4: WS auth does sync DB I/O on the event loop.
+  - Minors: pre-accept close becomes HTTP 403, so clients never see 4429; WS auth skips user.is_active; cors_origins is not case/port-normalized; redis client has no socket timeouts; reconnect storms (→ Plan 4 backoff).
+- Ruling: I1 → heartbeat ZSET per IP via Lua (self-heals after a crash).
+- Ruling: I2 → `_publish_live` hook, an autouse no-op fixture, and redis socket timeouts of 5s.
+- Ruling: I3 → in-process WS_MAX_TOTAL=200, ONE shared subscriber per process fanning out to bounded queues (maxsize 16, drop on full), IPv6 buckets per /64.
+- Ruling: I4 → run_in_threadpool.
+- Minors folded: accept-then-close for 4429, a shared resolve_access with is_active, cors_origins normalization.
+- Carry to T14: uvicorn `--ws-max-size 8192` (must fit a 4096-char auth message) and a small `--ws-max-queue`.
+- Carry to Plan 4: WS reconnect with exponential backoff and jitter.
+- Task 13: fix round 1 resumed; FIX_BASE=1364e9c.
+- Task 13: fix round 1/5 (I1–I4 + 3 minors addressed, 0 open; commits 1364e9c..fd6ee04). Suite 954 in 34s (was 944 in 74s).
+- Task 13: **complete** (commits 943449e..fd6ee04, clean after 1 round). Deferred:
+  - `hub.total` increment happens before the try, so get_redis/_bucket raising would leak one slot (unrealistic). → final wave.
+  - Async get_redis (ratelimit.py) has no socket timeouts. → T14 fold.
+- Task 14: BASE=fd6ee04, dispatched.
+- Ruling (Task 14):
+  - Image: python:3.14-slim, multi-stage, --require-hashes, USER 10001.
+  - Entrypoint subcommands: api/worker/beat/migrate/create-admin. The api runs uvicorn with --factory, --ws-max-size 8192 (from T13), --proxy-headers and FORWARDED_ALLOW_IPS.
+  - Prod compose:
+    - App containers are read_only with tmpfs /tmp, cap_drop ALL, no-new-privileges.
+    - Postgres and Redis publish no ports. The API publishes on 127.0.0.1 only.
+    - The DB is owned by a non-superuser cvenom_app; the password is passed via psql -v.
+    - Redis: requirepass, maxmemory 256mb with volatile-ttl (from T6), appendonly.
+  - The async Redis client gets socket timeouts (from T13).
+  - deploy.md covers the CF Tunnel setup with TRUST_CF_CONNECTING_IP, and notes that SECRETS_KEY rotation is manual.
+- Task 14: implemented 81cf5f1, suite 970/0 (RED 6F+10E). uv lock linux/py3.14, 58 pkgs. docker build smoke OK (uid 10001). Extras: .gitattributes eol=lf for sh/Dockerfile/lock, .dockerignore, redisdata volume. Unverified: init script vs real PG. Review dispatched (sonnet; allowed a throwaway docker run of postgres to verify init script).
+- Task 14 review (sonnet): spec ✅ Approved. Checked against a real postgres:16 container: the init script works with a special-char password; cvenom_app is a non-superuser owning the DB and the public schema; alembic upgrade head works as cvenom_app (15 tables). Entrypoint is LF with exec. Read-only fs paths are OK. Lock covers every runtime import with no dev deps.
+  - Important 1: FORWARDED_ALLOW_IPS/TRUSTED_PROXY_CIDRS guidance is wrong for cloudflared on the host. The container peer is the bridge gateway, not 127.0.0.1, so all clients share one rate-limit bucket.
+- Ruling: pin the compose network 172.28.0.0/24 with gateway 172.28.0.1. FORWARDED_ALLOW_IPS defaults to the gateway, TRUSTED_PROXY_CIDRS example = gateway/32, and deploy.md gets concrete topology steps plus a verification step. Cost if wrong: a subnet clash on a host already using 172.28/24 (documented as overridable).
+- Minors folded: pg_isready -h 127.0.0.1 (init race); fully hashed build (setuptools via build constraints, --no-build-isolation); URL-safe password note; note that the Redis requirepass is visible in inspect.
+- Deferred: env_file passes infra passwords to app containers (ignored by the app); cvenom_app can CONNECT to the postgres DB (no privileges); duplicate HEALTHCHECK.
+- Task 14: fix round 1 resumed; FIX_BASE=81cf5f1.
+- Task 14: fix round 1/5 (Important + 4 minors addressed, 0 open; commits 81cf5f1..c4856c8). Packaging 21, suite 975.
+- Task 14: **complete** (commits fd6ee04..c4856c8, clean after 1 round). Verified: uvicorn ProxyHeaders plus the app's client_ip yield the correct IP for both cloudflared and a generic proxy.
+  - Deferred → FINAL WAVE (docs):
+    - (i) deploy.md must use `docker compose --env-file ./.env -f deploy/docker-compose.prod.yml ...`. The project dir is deploy/, so the root .env isn't used for interpolation, and the `${..:?}` vars would fail on first run.
+    - (ii) "127.0.0.1 → one bucket" is overstated: only a wrong TRUSTED_PROXY_CIDRS does that.
+    - (iii) The access log is on by default (no rebuild needed). Add `docker network inspect`. Note the Docker Desktop difference.
+    - (iv) TRUST_CF_CONNECTING_IP is effectively inert behind uvicorn when XFF is present. Document it.
+    - (v) Optional ACCESS_LOG toggle.
+- ALL 15 TASKS COMPLETE. Final whole-branch review: base 17b5515 (Plan 2 tip) → head c4856c8, opus.
+- Final review (opus): 975 passed. Verdict "With fixes"; no Critical.
+  - Important:
+    - I1: the read router put public_or_user before rate_limit, and 5 auth routes had no limiter, so the limiter was bypassed (probe-confirmed).
+    - I2: a SECRETS_KEY change makes every login 500 for up to 7d; the doc claimed otherwise.
+    - I3: the documented first run fails (--env-file).
+    - I4: non-KEV rule kinds are KEV-gated, so an unscored new CVE never fires.
+    - I5: no user-management API (offboarding is impossible without SQL).
+  - Minors: M-a through M-n.
+  - Error-after-write audit: clean in all modules.
+- Ruling (I4): cvss_min/epss_min with an UNKNOWN score at evaluation → MATCH (exploited and unscored should alert, not drop silently). Documented. Re-evaluate-on-enrichment deferred. Cost if wrong: extra alerts for unscored KEV entries, a few per day.
+- Ruling (I5 + M-i): not in the fix wave. It becomes a NEW follow-up Task 15 on this branch AFTER the fix wave, re-review and checkpoint push: user mgmt (list, deactivate→revoke sessions, role, password change/reset, invite list/revoke) + delivery status + test-send. Plan 4 depends on it. Cost if wrong: the branch is pushed without offboarding support for one checkpoint.
+- Ruling: fix wave = I1, I2 (code: rotate an undecryptable active key), I3 + docs (i)(ii)(iii)(iv), I4, M-a, M-b, M-c, M-d, M-e, M-f, M-g, M-h, M-j, M-k, M-l, plus doc extras. Brief: final-fix-brief.md.
+- Deferred: M-m (no WS connect-rate limit; revoked socket lives ≤15 min); M-n (no CI/pip-audit; documented); T14 (v) ACCESS_LOG toggle. All other ledger deferrals stay deferred, per the reviewer's triage.
+- Fix wave: FIX_BASE=c4856c8, dispatched (opus, given the breadth).
+- Fix wave done: a942b03..c0b1eff (6 commits), suite 1032/0. Deviations: M-j purges events only when NO delivery references them (stricter, avoids cascade-deleting in-window deliveries); login + WS exempt from structural limiter test (login limits in-handler before DB; WS own caps); any undecryptable webhook cred defers; purge job name kept. Scoped re-review dispatched (opus).
+- Fix-wave re-review (opus): every finding ADDRESSED, no new breakage. The I1 probe now returns 60×401 then 10×429 on every route.
+  - Out-of-scope observations, deferred:
+    - authenticate holds a DB connection while waiting for the argon2 semaphore;
+    - hash/rehash are not bounded by the semaphore;
+    - the packaging "" exemption is broader than BLANKED;
+    - the used-invite 30d clause is shadowed by the expiry clause;
+    - the 90d delivery purge frees the dedupe slot;
+    - migrations/env.py has no hide_parameters;
+    - two processes with different SECRETS_KEY values would retire each other's keys.
+- Controller verified the suite: 1032 passed.
+- CHECKPOINT PUSH: `git push -u origin feat/api-alerts` at c0b1eff (controller, per push policy). main untouched.
+- Next: Task 15 (user mgmt + alert ops), per the I5 ruling. Then the Plan 3 security review, a push, and the reports.
+- Task 15: plan text committed 3d49a7d. BASE=3d49a7d, dispatched (sonnet).
+- Ruling (T15):
+  - Migration 0004 adds invite.purpose (invite|reset).
+  - Reset is accepted through the existing accept endpoint, branched on purpose. It never creates a user and revokes all of that user's sessions.
+  - A last-admin check takes FOR UPDATE on the admin rows.
+  - Deactivation revokes the user's sessions in the same transaction.
+  - Password change revokes the user's other sessions and is limited by the login limits.
+  - The deliveries list never exposes recipient addresses.
+  - Test-send uses an unsaved synthetic CVE, an injectable sinks_factory, and a 45s cap, and shares the dispatcher's error scrubbing.
+- Task 15: implemented 9f2a0cd, suite 1080/0 (+48). Extras: invite.created_at in 0004; reset supersedes prior resets; test-send timeout 504; rate_limit per_min kw; dispatch.error_text extracted. last_admin unreachable via HTTP (tested at service level + FOR UPDATE SQL capture). Review dispatched (opus).
+- Task 15 review (opus): spec ✅, Approved, no Critical or Important findings.
+  - A real two-transaction probe confirmed the last-admin invariant holds under concurrency.
+  - Reset-token email binding, single use, the password-change flow, the test-send SSRF parity and migration 0004 all verified.
+  - Minors:
+    - M1: admin self-reset bypasses the current-password requirement.
+    - M2: reset tokens survive a password change or deactivation.
+    - M3: test-send keeps sending after a 504.
+    - M4: test payloads look like real alerts.
+    - M5 (Plan 4): /password returns 401 on a wrong current password, so the client interceptor must special-case it.
+    - M6: a deactivated user's WS lives ≤15 min.
+- Ruling: fold M1–M4 into one hardening round. They are cheap and security-relevant: they close a stolen-admin-token persistence path and leaked-reset-token reuse. Cost: one round.
+- Carry M5 → Plan 4 (the API client must not refresh or logout on 401 from /api/auth/password or /api/auth/login).
+- M6 → deploy docs note (final docs).
+- Task 15: fix round 1, implementer resumed; FIX_BASE=9f2a0cd.
+- Task 15: fix round 1/5 (M1–M4 addressed, 0 open; commits 9f2a0cd..88277cb). Re-review: all addressed, no breakage.
+- Task 15: **complete** (commits 3d49a7d..88277cb). Deferred: no regression test that a purpose='invite' token survives a password change; one end-to-end deadline test is wall-clock based (wide margins); cosmetic import/line-length issues.
+- Controller verified suite: 1089 passed. Security review (opus) dispatched on review-17b5515..88277cb.diff.
+- Security review (opus): NO High findings.
+  - One Medium (reviewer confidence 7/10, so below the report bar): deactivating an admin doesn't invalidate the invite/reset tokens THAT admin created. A rogue ex-admin can take over another admin or mint a new admin (probe-confirmed).
+  - Every other area was verified safe, with probes: JWT, refresh/CSRF, enumeration, IDOR, SSRF (incl. obfuscated IPs, NAT64), secrets in errors, SMTP injection, SQLi, the cache, WS CSWSH, client IP, and deploy.
+- Ruling: fix it as hardening even though it's below the bar (cheap, real insider-persistence path).
+  - Consume creator's unused tokens on deactivate/demote.
+  - accept_invite requires the creator to still be an active admin.
+  - The invite list shows created_by.
+  - Plus the M6 docs line (WS ≤15 min after deactivation).
+  - Implementer resumed.
+- Security hardening: 489aad4. Re-review: addressed, no breakage. Creator check can't be bypassed by re-promotion: tokens were already consumed at demotion.
+- Controller verified suite: 1093 passed.
+- PLAN 3 COMPLETE. Reports committed. Final push follows.
