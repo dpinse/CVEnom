@@ -406,7 +406,9 @@ async def test_invite_list_has_no_secrets_and_only_pending(ctx):
     items = r.json()
     assert {i["email"] for i in items} == {"p1@example.com", "m@example.com"}
     for i in items:
-        assert set(i) == {"id", "email", "role", "purpose", "expires_at", "created_at"}
+        assert set(i) == {"id", "email", "role", "purpose", "expires_at", "created_at",
+                          "created_by"}
+        assert {i["created_by"] for i in items} == {admin.id}
     assert {i["purpose"] for i in items} == {"invite", "reset"}
     hashes = [x.token_hash for x in db.scalars(select(Invite))]
     for secret in [raw, reset_raw, used_raw, *hashes]:
@@ -489,3 +491,58 @@ def test_accepting_a_reset_consumes_other_outstanding_resets(db_session):
     with pytest.raises(InvalidInvite):
         accept_invite(db_session, t2, "attacker passphrase")
     assert verify_password(victim.password_hash, NEW_PW)
+
+
+# ------------------------------------------------------------ security hardening
+
+
+def _rogue_setup(db):
+    a = mk(db, "rogue@example.com", "admin")
+    b = mk(db, "b@example.com", "admin")
+    c = mk(db, "c@example.com", "admin")
+    reset = create_invite(db, a, b.email, "admin", 24, purpose="reset")
+    invite = create_invite(db, a, "fresh@example.com", "admin")
+    return a, b, c, reset, invite
+
+
+def _assert_tokens_dead(db, b, reset, invite):
+    with pytest.raises(InvalidInvite):
+        accept_invite(db, reset, "attacker passphrase")
+    with pytest.raises(InvalidInvite):
+        accept_invite(db, invite, "attacker passphrase")
+    assert verify_password(b.password_hash, PW)
+    assert db.scalars(select(User).where(User.email == "fresh@example.com")).first() is None
+
+
+def test_deactivating_issuer_kills_their_tokens(db_session):
+    a, b, c, reset, invite = _rogue_setup(db_session)
+    update_user(db_session, a, is_active=False)
+    _assert_tokens_dead(db_session, b, reset, invite)
+
+
+def test_demoting_issuer_kills_their_tokens(db_session):
+    a, b, c, reset, invite = _rogue_setup(db_session)
+    update_user(db_session, a, role="member")
+    _assert_tokens_dead(db_session, b, reset, invite)
+
+
+def test_accept_rejects_tokens_of_inactive_or_demoted_or_missing_creator(db_session):
+    a, b, c, reset, invite = _rogue_setup(db_session)
+    a.is_active = False  # bypass update_user: defense in depth in accept_invite itself
+    db_session.flush()
+    _assert_tokens_dead(db_session, b, reset, invite)
+    a.is_active, a.role = True, "member"
+    db_session.flush()
+    _assert_tokens_dead(db_session, b, reset, invite)
+    a.role = "admin"
+    db_session.flush()
+    for inv in db_session.scalars(select(Invite)):
+        inv.created_by = None
+    db_session.flush()
+    _assert_tokens_dead(db_session, b, reset, invite)
+
+
+def test_invite_from_active_admin_still_works(db_session):
+    a, b, c, reset, invite = _rogue_setup(db_session)
+    assert accept_invite(db_session, invite, PW).email == "fresh@example.com"
+    assert accept_invite(db_session, reset, NEW_PW).id == b.id

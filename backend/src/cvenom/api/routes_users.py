@@ -191,6 +191,7 @@ def list_invites(
             "purpose": i.purpose,
             "expires_at": i.expires_at,
             "created_at": i.created_at,
+            "created_by": i.created_by,
         }
         for i in rows
     ]

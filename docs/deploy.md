@@ -192,3 +192,8 @@ release) against the lock file:
 ```sh
 pip-audit -r backend/requirements.lock
 ```
+
+## Security notes
+
+- After a user is deactivated, an already-open live WebSocket stays connected until its access token
+  expires (at most 15 minutes). It carries only "data changed" hints and no data.

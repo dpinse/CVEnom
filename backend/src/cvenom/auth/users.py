@@ -108,6 +108,11 @@ def accept_invite(
         raise InvalidInvite()
     if invite.purpose not in _PURPOSES:
         raise InvalidInvite()
+    # Tokens are only as trustworthy as their issuer: the creator must still be an
+    # active admin (also rejects creator-less rows; no legitimate path makes them).
+    creator = session.get(User, invite.created_by) if invite.created_by is not None else None
+    if creator is None or not creator.is_active or creator.role != "admin":
+        raise InvalidInvite()
     validate_password(pw)  # before consuming the invite
     if invite.purpose == "reset":
         return _accept_reset(session, invite, pw, now)
@@ -208,5 +213,12 @@ def update_user(session: Session, target: User, *, role: str | None = None,
     if not new_active:
         revoke_sessions(session, target.id, now)
         consume_resets(session, target.email, now)
+    if not new_active or new_role != "admin":
+        # Tokens this user issued must not outlive their authority.
+        session.execute(
+            update(Invite)
+            .where(Invite.created_by == target.id, Invite.used_at.is_(None))
+            .values(used_at=now)
+        )
     session.flush()
     return target
