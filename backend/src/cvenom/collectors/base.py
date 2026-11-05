@@ -64,15 +64,15 @@ def _retry_after(resp: httpx.Response) -> float | None:
         return None
 
 
-async def http_get_json(
+async def _request(
     url: str,
     *,
-    headers: dict[str, str] | None = None,
-    params: dict[str, Any] | None = None,
-    retries: int = 3,
-    timeout: float = 20,
-) -> Any:
-    """GET url and return parsed JSON, retrying 429/5xx/transport errors."""
+    headers: dict[str, str] | None,
+    params: dict[str, Any] | None,
+    retries: int,
+    timeout: float,
+) -> httpx.Response:
+    """GET url, retrying 429/5xx/transport errors; return the OK response."""
     hdrs = {"User-Agent": USER_AGENT, **(headers or {})}
     attempts = max(retries, 1)
     async with httpx.AsyncClient(timeout=timeout, headers=hdrs) as client:
@@ -93,8 +93,34 @@ async def http_get_json(
                 await _sleep(delay if wait is None else wait)
                 continue
             resp.raise_for_status()
-            return resp.json()
+            return resp
     raise RuntimeError("unreachable")  # pragma: no cover
+
+
+async def http_get_json(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    retries: int = 3,
+    timeout: float = 20,
+) -> Any:
+    """GET url and return parsed JSON, retrying 429/5xx/transport errors."""
+    resp = await _request(url, headers=headers, params=params, retries=retries, timeout=timeout)
+    return resp.json()
+
+
+async def http_get_text(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    retries: int = 3,
+    timeout: float = 20,
+) -> str:
+    """GET url and return the body text, retrying 429/5xx/transport errors."""
+    resp = await _request(url, headers=headers, params=params, retries=retries, timeout=timeout)
+    return resp.text
 
 
 REGISTRY: dict[str, type[Collector]] = {}

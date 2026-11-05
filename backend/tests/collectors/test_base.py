@@ -177,3 +177,26 @@ def test_collector_init_deep_copies_nested_state():
     c = C(state=state)
     state["seen"].append("z")
     assert c.state == {"seen": ["a"]}
+
+
+@pytest.mark.asyncio
+async def test_http_get_text_returns_body(respx_mock):
+    respx_mock.get("https://api.test/t").mock(return_value=httpx.Response(200, text="a,b\nc,d\n"))
+    assert await base.http_get_text("https://api.test/t") == "a,b\nc,d\n"
+
+
+@pytest.mark.asyncio
+async def test_http_get_text_retries_then_succeeds_with_user_agent(respx_mock):
+    route = respx_mock.get("https://api.test/t")
+    route.side_effect = [httpx.Response(503), httpx.Response(200, text="ok")]
+    assert await base.http_get_text("https://api.test/t") == "ok"
+    assert route.call_count == 2
+    assert route.calls[0].request.headers["user-agent"].startswith("CVEnom/")
+
+
+@pytest.mark.asyncio
+async def test_http_get_text_raises_when_retries_exhausted(respx_mock):
+    route = respx_mock.get("https://api.test/t").mock(return_value=httpx.Response(500))
+    with pytest.raises(httpx.HTTPStatusError):
+        await base.http_get_text("https://api.test/t", retries=2)
+    assert route.call_count == 2
