@@ -6,7 +6,8 @@
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,8 +15,8 @@ from cvenom.collectors.base import CollectorResult
 from cvenom.config import get_settings
 from cvenom.db import upsert_cve
 from cvenom.extract import extract_cve_ids, link_story
-from cvenom.models import Cve, Story, StoryCveLink
-from cvenom.schemas import NormalizedCve, NormalizedStory
+from cvenom.models import Cve, GeoEvent, Story, StoryCveLink
+from cvenom.schemas import NormalizedCve, NormalizedGeoEvent, NormalizedStory
 from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve
 from cvenom.textutil import content_hash, find_existing_story, sanitize_text
 
@@ -101,6 +102,50 @@ def _sanitized(cve: NormalizedCve) -> NormalizedCve:
     })
 
 
+_GEO_CHUNK = 500
+_GEO_UPDATE_COLS = (
+    "observed_at", "magnitude", "label", "details", "kind",
+    "country_code", "asn", "cve_id", "story_url",
+)
+
+
+def _upsert_geo_events(session: Session, events: list[NormalizedGeoEvent]) -> None:
+    """Chunked ON CONFLICT upsert keyed on (source, external_id); first_seen is kept.
+
+    A chunk may not repeat a key (Postgres would reject the second touch), so
+    duplicates collapse to the last occurrence first.
+    """
+    by_key = {}
+    for e in events:
+        by_key[(e.source, e.external_id)] = {
+            "source": e.source,
+            "external_id": e.external_id,
+            "kind": e.kind,
+            "country_code": e.country_code,
+            "asn": e.asn,
+            "observed_at": e.observed_at,
+            "magnitude": e.magnitude,
+            "label": sanitize_text(e.label) if e.label is not None else None,
+            "cve_id": e.cve_id,
+            "story_url": e.story_url,
+            "details": e.details,
+        }
+    values = list(by_key.values())
+    for i in range(0, len(values), _GEO_CHUNK):
+        stmt = pg_insert(GeoEvent).values(values[i : i + _GEO_CHUNK])
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["source", "external_id"],
+            set_={c: getattr(stmt.excluded, c) for c in _GEO_UPDATE_COLS},
+        )
+        session.execute(stmt)
+
+
+def purge_old_geo_events(session: Session, now: datetime, *, days: int) -> int:
+    """Delete geo events observed before ``now - days``; returns the row count. No commit."""
+    cutoff = now - timedelta(days=days)
+    return session.execute(delete(GeoEvent).where(GeoEvent.observed_at < cutoff)).rowcount
+
+
 def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = False) -> list[dict]:
     """Persist a collector result and return its events.
 
@@ -125,6 +170,11 @@ def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = Fal
             _retry_unique(session, lambda data=data: upsert_cve(session, data))
         for story in result.stories:
             _retry_unique(session, lambda story=story: _ingest_story(session, story))
+
+    # Geo events never create CVE rows (cve_id is a plain reference), so they are
+    # processed regardless of enrich_only.
+    if result.geo_events:
+        _upsert_geo_events(session, result.geo_events)
 
     session.flush()
     return events

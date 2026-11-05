@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     backfill_days: int = 90
     # KEV/VulnCheck: alert only for entries whose own add date is this recent.
     kev_alert_max_age_days: int = 14
+    geo_retention_days: int = 30
 
 
 @lru_cache
