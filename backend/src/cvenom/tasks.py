@@ -14,13 +14,13 @@ from typing import Any, Protocol
 import httpx
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_ready
+from celery.signals import worker_process_init, worker_ready
 from sqlalchemy import func, select
 
 from cvenom.collectors import abusech, cfradar, dshield, epss, kev, news, nvd, osv, ransomware, vulncheck  # noqa: F401  (register)
 from cvenom.collectors.base import REGISTRY
 from cvenom.config import get_settings
-from cvenom.db import session_scope
+from cvenom.db import get_engine, session_scope
 from cvenom.models import CollectorRun, Cve
 from cvenom.geoip import ASN_FILE, COUNTRY_FILE, refresh_geoip
 from cvenom.pipeline import ingest, purge_old_geo_events
@@ -207,6 +207,15 @@ def bootstrap_geoip(*args: Any, **kwargs: Any) -> None:
         refresh_geoip_task.delay()
     except Exception as exc:
         log.warning("geoip bootstrap enqueue failed: %s", type(exc).__name__)
+
+
+@worker_process_init.connect
+def reset_db_engine_after_fork(*args: Any, **kwargs: Any) -> None:
+    """Drop pooled connections inherited from the parent so forked children never share sockets."""
+    try:
+        get_engine().dispose(close=False)
+    except Exception as exc:
+        log.warning("db engine reset after fork failed: %s", type(exc).__name__)
 
 
 @celery_app.task(name="cvenom.tasks.purge_geo_task")

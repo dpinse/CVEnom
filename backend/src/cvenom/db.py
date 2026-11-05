@@ -1,20 +1,28 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import lru_cache
 
-from sqlalchemy import create_engine
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from cvenom.config import get_settings
 from cvenom.models import Cve
 from cvenom.schemas import NormalizedCve
 
-engine = create_engine(get_settings().database_url, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+@lru_cache
+def get_engine() -> Engine:
+    return create_engine(get_settings().database_url, pool_pre_ping=True)
+
+
+@lru_cache
+def get_sessionmaker() -> sessionmaker[Session]:
+    return sessionmaker(bind=get_engine(), expire_on_commit=False)
 
 
 @contextmanager
 def session_scope() -> Iterator[Session]:
-    session = SessionLocal()
+    session = get_sessionmaker()()
     try:
         yield session
         session.commit()

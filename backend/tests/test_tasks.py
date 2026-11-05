@@ -576,3 +576,27 @@ def test_worker_ready_handler_swallows_errors(monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="cvenom.tasks"):
         tasks.bootstrap_geoip()
     assert "geoip bootstrap" in caplog.text
+
+
+def test_worker_process_init_disposes_engine_without_closing(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from celery.signals import worker_process_init
+
+    from cvenom import tasks
+
+    engine = MagicMock()
+    monkeypatch.setattr(tasks, "get_engine", lambda: engine)
+    assert tasks.reset_db_engine_after_fork in list(worker_process_init._live_receivers(None))
+    tasks.reset_db_engine_after_fork()
+    engine.dispose.assert_called_once_with(close=False)
+
+
+def test_worker_process_init_handler_never_raises(monkeypatch):
+    from cvenom import tasks
+
+    def boom():
+        raise RuntimeError("no db")
+
+    monkeypatch.setattr(tasks, "get_engine", boom)
+    tasks.reset_db_engine_after_fork()
