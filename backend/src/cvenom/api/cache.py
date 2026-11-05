@@ -14,12 +14,16 @@ import json
 from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode
 
+from fastapi import HTTPException
 from redis.exceptions import RedisError
+from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .ratelimit import warn_rate_limited
+from .middleware import client_ip
+from .ratelimit import COUNTED_KEY, _check, warn_rate_limited
 
 CACHE_CONTROL = b"public, max-age=30"
+VARY = b"Origin"
 
 
 class ResponseCacheMiddleware:
@@ -27,38 +31,66 @@ class ResponseCacheMiddleware:
         self,
         app: ASGIApp,
         redis_getter: Callable[[], object],
-        paths: tuple[str, ...],
+        paths: dict[str, frozenset[str]],
         ttl: int = 30,
-        max_bytes: int = 1_048_576,
+        max_bytes: int = 262_144,
     ) -> None:
+        # paths: cached path prefix -> ALLOWED query-param names. A request with
+        # any other param bypasses the cache (bounds the keyspace so attackers
+        # cannot fill Redis with distinct-query entries).
         self.app = app
         self.redis_getter = redis_getter
-        self.paths = tuple(p.rstrip("/") for p in paths)
+        self.paths = {p.rstrip("/"): frozenset(v) for p, v in paths.items()}
         self.ttl = ttl
         self.max_bytes = max_bytes
 
-    def _applies(self, scope: Scope) -> bool:
+    def _key_for(self, scope: Scope) -> str | None:
+        """Cache key, or None when this request must bypass the cache."""
         if scope["method"] != "GET":
-            return False
+            return None
         path: str = scope.get("path", "")
-        if not any(path == p or path.startswith(p + "/") for p in self.paths):
-            return False
+        matches = [p for p in self.paths if path == p or path.startswith(p + "/")]
+        if not matches:
+            return None
+        allowed = self.paths[max(matches, key=len)]
         names = {k.lower() for k, _ in scope.get("headers", [])}
-        return b"authorization" not in names and b"cookie" not in names
-
-    @staticmethod
-    def _key(scope: Scope) -> str:
+        if b"authorization" in names or b"cookie" in names:
+            return None
         qs = scope.get("query_string", b"").decode("latin-1")
-        norm = urlencode(sorted(parse_qsl(qs, keep_blank_values=True)))
-        raw = f"{scope.get('path', '')}?{norm}"
+        pairs = parse_qsl(qs, keep_blank_values=True)
+        if any(k not in allowed for k, _ in pairs):
+            return None
+        # stable sort by name only: repeated-key value order is preserved
+        norm = urlencode(sorted(pairs, key=lambda kv: kv[0]))
+        raw = f"{path}?{norm}"
         return "cvenom:cache:" + hashlib.sha256(raw.encode()).hexdigest()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not self._applies(scope):
+        key = self._key_for(scope) if scope["type"] == "http" else None
+        if key is None:
             await self.app(scope, receive, send)
             return
 
-        key = self._key(scope)
+        # Count this anonymous request in the shared `read` IP bucket BEFORE the
+        # cache lookup so HIT floods are limited. Mark the scope so the handler's
+        # rate_limit("read") dependency does not count the same request again.
+        request = Request(scope)
+        try:
+            await _check(
+                request,
+                "read",
+                f"ip:{client_ip(request)}",
+                request.app.state.settings.rate_anon_per_min,
+                60,
+            )
+        except HTTPException as exc:
+            body = json.dumps(exc.detail).encode()
+            hdrs = [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]
+            hdrs += [(k.lower().encode(), v.encode()) for k, v in (exc.headers or {}).items()]
+            await send({"type": "http.response.start", "status": exc.status_code, "headers": hdrs})
+            await send({"type": "http.response.body", "body": body})
+            return
+        scope[COUNTED_KEY] = "read"
         try:
             redis = self.redis_getter()
             cached = await redis.get(key)
@@ -84,6 +116,7 @@ class ResponseCacheMiddleware:
                             (b"content-length", str(len(body)).encode()),
                             (b"cache-control", CACHE_CONTROL),
                             (b"x-cache", b"HIT"),
+                            (b"vary", VARY),
                         ],
                     }
                 )
@@ -118,9 +151,9 @@ class ResponseCacheMiddleware:
                 payload = json.dumps({"ct": ctype.decode("latin-1"), "body": body.decode()})
                 await redis.set(key, payload, ex=self.ttl)
                 headers = [
-                    (k, v) for k, v in headers if k.lower() not in (b"cache-control", b"x-cache")
+                    (k, v) for k, v in headers if k.lower() not in (b"cache-control", b"x-cache", b"vary")
                 ]
-                headers += [(b"cache-control", CACHE_CONTROL), (b"x-cache", b"MISS")]
+                headers += [(b"cache-control", CACHE_CONTROL), (b"x-cache", b"MISS"), (b"vary", VARY)]
             except (RedisError, OSError, UnicodeDecodeError):
                 warn_rate_limited("cache", "response cache unavailable; not storing")
         await send({**start, "headers": headers})

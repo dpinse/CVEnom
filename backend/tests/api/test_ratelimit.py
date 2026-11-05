@@ -44,6 +44,9 @@ class SetFailsRedis:
     def __init__(self, inner):
         self.inner = inner
 
+    async def eval(self, *a, **k):
+        return await self.inner.eval(*a, **k)
+
     async def get(self, *a, **k):
         return await self.inner.get(*a, **k)
 
@@ -51,7 +54,7 @@ class SetFailsRedis:
         raise RedisConnectionError("down")
 
 
-def make_app(db_session, redis, cache_paths=(), **overrides):
+def make_app(db_session, redis, cache_paths=None, **overrides):
     settings = get_settings().model_copy(update=overrides)
 
     @contextmanager
@@ -59,6 +62,11 @@ def make_app(db_session, redis, cache_paths=(), **overrides):
         yield db_session
 
     app = create_app(settings, redis=redis, session_factory=factory, cache_paths=cache_paths)
+
+    @app.get("/pub/rl", dependencies=[Depends(rate_limit("read"))])
+    def pub_rl():
+        app.state.calls["n"] += 1
+        return {"n": app.state.calls["n"]}
     calls = {"n": 0}
 
     @app.get("/t/read", dependencies=[Depends(rate_limit("read"))])
@@ -242,7 +250,7 @@ async def test_warning_logged_again_after_interval(monkeypatch, caplog):
 # ------------------------------------------------------------------ cache
 
 
-CP = ("/pub",)
+CP = {"/pub": frozenset({"a", "b"})}
 
 
 async def test_second_anonymous_call_served_from_cache(db_session, redis):
@@ -391,3 +399,96 @@ def test_redis_client_created_lazily_and_closed_on_shutdown(db_session):
             pass
 
     asyncio.run(run())
+
+
+# -------------------------------------------------------- fix round 1
+
+
+async def test_invalid_token_flood_is_rate_limited(db_session, redis):
+    app = make_app(db_session, redis)
+    h = {"Authorization": "Bearer junk"}
+    async with client(app) as c:
+        for _ in range(60):
+            r = await c.get("/t/read", headers=h)
+            assert r.status_code == 401 and r.json() == {"error": "invalid_token"}
+        r = await c.get("/t/read", headers=h)
+    assert r.status_code == 429 and "retry-after" in r.headers
+    assert await redis.get("cvenom:rl:read:ip:1.2.3.4") is not None
+
+
+async def test_malformed_auth_header_counts_against_ip(db_session, redis):
+    app = make_app(db_session, redis, rate_anon_per_min=1)
+    async with client(app) as c:
+        assert (await c.get("/t/read", headers={"Authorization": "Basic x"})).status_code == 401
+        assert (await c.get("/t/read", headers={"Authorization": "Basic x"})).status_code == 429
+
+
+async def test_retry_after_never_zero_and_ceils(redis):
+    lim = RateLimiter(redis)
+    await lim.hit("k", 1, 30)
+    await redis.pexpire("k", 50)  # 50 ms left
+    allowed, retry = await lim.hit("k", 1, 30)
+    assert allowed is False and retry == 1
+
+
+async def test_unknown_query_param_bypasses_cache(db_session, redis):
+    app = make_app(db_session, redis, cache_paths=CP)
+    async with client(app) as c:
+        r1 = await c.get("/pub/json?a=1&evil=zz")
+        r2 = await c.get("/pub/json?a=1&evil=zz")
+    assert app.state.calls["n"] == 2
+    assert "x-cache" not in r1.headers and "x-cache" not in r2.headers
+    assert [k async for k in redis.scan_iter("cvenom:cache:*")] == []
+
+
+async def test_allowed_params_all_part_of_key(db_session, redis):
+    app = make_app(db_session, redis, cache_paths=CP)
+    async with client(app) as c:
+        await c.get("/pub/json?a=1")
+        r_same = await c.get("/pub/json?a=1")
+        r_b = await c.get("/pub/json?a=1&b=2")
+    assert r_same.headers["x-cache"] == "HIT" and r_b.headers["x-cache"] == "MISS"
+
+
+async def test_repeated_key_order_distinguishes_entries(db_session, redis):
+    app = make_app(db_session, redis, cache_paths=CP)
+    async with client(app) as c:
+        await c.get("/pub/json?a=1&a=2")
+        r = await c.get("/pub/json?a=2&a=1")
+    assert r.headers["x-cache"] == "MISS"
+    assert len([k async for k in redis.scan_iter("cvenom:cache:*")]) == 2
+
+
+async def test_hit_flood_limited_to_429_after_60(db_session, redis):
+    app = make_app(db_session, redis, cache_paths=CP)
+    async with client(app) as c:
+        codes = [(await c.get("/pub/json")).status_code for _ in range(61)]
+    assert codes[:60] == [200] * 60 and codes[60] == 429
+    assert app.state.calls["n"] == 1
+
+
+async def test_cache_miss_counts_exactly_once(db_session, redis):
+    app = make_app(db_session, redis, cache_paths={"/pub/rl": frozenset()})
+    async with client(app) as c:
+        r = await c.get("/pub/rl")
+    assert r.headers["x-cache"] == "MISS"
+    assert int(await redis.get("cvenom:rl:read:ip:1.2.3.4")) == 1
+
+
+async def test_cacheable_responses_carry_vary_origin(db_session, redis):
+    app = make_app(db_session, redis, cache_paths=CP)
+    async with client(app) as c:
+        r1 = await c.get("/pub/json")
+        r2 = await c.get("/pub/json")
+    assert r1.headers["vary"] == "Origin" and r2.headers["vary"] == "Origin"
+
+
+async def test_lone_surrogate_email_does_not_500(db_session, redis):
+    app = make_app(db_session, redis)
+    async with client(app) as c:
+        r = await c.post(
+            "/t/login",
+            content=rb'{"email": "\ud800x@example.com"}',
+            headers={"content-type": "application/json"},
+        )
+    assert r.status_code == 200

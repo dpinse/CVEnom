@@ -25,25 +25,40 @@ def _unauthorized(error: str = "invalid_token") -> HTTPException:
     )
 
 
-def current_user(request: Request, session: Session = Depends(get_session)) -> User | None:
+def try_current_user(
+    request: Request, session: Session = Depends(get_session)
+) -> tuple[User | None, bool]:
+    """Non-raising identity resolution: (user, auth_failed).
+
+    No Authorization header -> (None, False). Any invalid credential ->
+    (None, True) so callers can rate-limit before answering 401."""
     header = request.headers.get("authorization")
     if header is None:
-        return None
+        return None, False
     scheme, _, token = header.partition(" ")
     token = token.strip()
     if scheme.lower() != "bearer" or not token:
-        raise _unauthorized()
+        return None, True
     now = datetime.now(UTC)
     try:
         claims = decode_access(session, token, now=now)
     except InvalidToken:
-        raise _unauthorized() from None
+        return None, True
     if not session_is_active(session, claims.sid, now):
-        raise _unauthorized()
+        return None, True
     user = session.get(User, claims.sub)
     if user is None or not user.is_active:
-        raise _unauthorized()
+        return None, True
     request.state.claims = claims
+    return user, False
+
+
+def current_user(
+    request: Request, resolved: tuple[User | None, bool] = Depends(try_current_user)
+) -> User | None:
+    user, failed = resolved
+    if failed:
+        raise _unauthorized()
     return user
 
 

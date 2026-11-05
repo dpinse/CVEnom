@@ -16,7 +16,7 @@ from redis.exceptions import RedisError
 
 from cvenom.models import User
 
-from .deps import current_user
+from .deps import try_current_user
 from .middleware import client_ip
 
 log = logging.getLogger(__name__)
@@ -27,10 +27,10 @@ _last_warn: dict[str, float] = {}
 
 _HIT_LUA = """
 local c = redis.call('INCR', KEYS[1])
-local t = redis.call('TTL', KEYS[1])
-if c == 1 or t == -1 then
+local t = redis.call('PTTL', KEYS[1])
+if c == 1 or t < 0 then
   redis.call('EXPIRE', KEYS[1], ARGV[1])
-  t = tonumber(ARGV[1])
+  t = tonumber(ARGV[1]) * 1000
 end
 return {c, t}
 """
@@ -62,7 +62,7 @@ class RateLimiter:
     async def hit(self, key: str, limit: int, window_s: int) -> tuple[bool, int]:
         count, ttl = await self.redis.eval(_HIT_LUA, 1, key, window_s)
         count, ttl = int(count), int(ttl)
-        retry_after = ttl if ttl > 0 else window_s
+        retry_after = max(1, -(-ttl // 1000))  # PTTL ms, ceil; never 0
         return count <= limit, retry_after
 
 
@@ -92,14 +92,35 @@ async def _check(request: Request, scope: str, ident: str, limit: int, window_s:
         raise _limited(retry_after)
 
 
+COUNTED_KEY = "cvenom_rl_counted"
+
+
 def rate_limit(scope: str):
-    async def dependency(request: Request, user: User | None = Depends(current_user)) -> None:
+    """Dependency: valid user -> bucket u:{id} (authed limit); anonymous OR an
+    invalid token -> bucket ip:{ip} (anon limit). Identity is resolved without
+    raising, so bad-token floods are counted; the 401 is raised after counting
+    (429 wins when the bucket is exhausted). No-Authorization requests do no DB
+    work. If ResponseCacheMiddleware already counted this scope for the
+    request's IP bucket, an anonymous request is not counted a second time."""
+
+    async def dependency(
+        request: Request, resolved: tuple[User | None, bool] = Depends(try_current_user)
+    ) -> None:
+        user, failed = resolved
         settings = request.app.state.settings
         if user is not None:
-            ident, limit = f"u:{user.id}", settings.rate_authed_per_min
-        else:
-            ident, limit = f"ip:{client_ip(request)}", settings.rate_anon_per_min
-        await _check(request, scope, ident, limit, 60)
+            await _check(request, scope, f"u:{user.id}", settings.rate_authed_per_min, 60)
+            return
+        if request.scope.get(COUNTED_KEY) != scope:
+            await _check(
+                request, scope, f"ip:{client_ip(request)}", settings.rate_anon_per_min, 60
+            )
+        if failed:
+            raise HTTPException(
+                status_code=401,
+                detail={"error": "invalid_token"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
     return dependency
 
@@ -107,7 +128,7 @@ def rate_limit(scope: str):
 async def enforce_login_limits(request: Request, email: str) -> None:
     settings = request.app.state.settings
     normalized = email.strip().lower()
-    digest = hashlib.sha256(normalized.encode()).hexdigest()
+    digest = hashlib.sha256(normalized.encode("utf-8", errors="replace")).hexdigest()
     await _check(
         request, "login", f"login-ip:{client_ip(request)}", settings.rate_login_per_15min_ip, 900
     )

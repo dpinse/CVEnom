@@ -61,7 +61,7 @@ def create_app(
     *,
     redis=None,
     session_factory=None,
-    cache_paths: tuple[str, ...] = (),
+    cache_paths: dict[str, frozenset[str]] | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     docs = settings.api_docs
@@ -85,7 +85,7 @@ def create_app(
     # add_middleware: last added is outermost. Order outer -> inner:
     # security headers, CORS, body limit, response cache, error catch, router.
     app.add_middleware(ErrorCatchMiddleware)
-    if cache_paths and settings.public_read:
+    if cache_paths and settings.public_read:  # {path prefix: allowed query params}
         app.add_middleware(
             ResponseCacheMiddleware, redis_getter=lambda: get_redis(app), paths=cache_paths
         )
