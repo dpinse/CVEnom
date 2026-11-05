@@ -90,6 +90,17 @@ def test_long_running_restart_and_redis_policy(compose):
     assert "volatile-ttl" in cmd and "--requirepass" in cmd
 
 
+def test_worker_and_beat_do_not_inherit_the_api_healthcheck(compose):
+    # backend/Dockerfile's HEALTHCHECK probes the api's port 8000; worker/beat serve no HTTP
+    # and would show "unhealthy" if they inherited it.
+    worker = compose["services"]["worker"]["healthcheck"]
+    assert worker["test"][0] == "CMD-SHELL"
+    assert "celery -A cvenom.tasks:celery_app inspect ping" in worker["test"][1]
+    assert "-d celery@$$HOSTNAME" in worker["test"][1]  # $$ = literal $ after compose escaping
+    assert "8000" not in worker["test"][1]
+    assert compose["services"]["beat"]["healthcheck"] == {"disable": True}
+
+
 def test_postgres_init_env_and_mounts(compose):
     pg = compose["services"]["postgres"]
     assert "${APP_DB_PASSWORD:?" in pg["environment"]["APP_DB_PASSWORD"]
