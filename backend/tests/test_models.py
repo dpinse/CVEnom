@@ -14,30 +14,30 @@ def test_kev_flag_is_not_cleared_by_later_feed(db_session):
     from cvenom.db import upsert_cve
     from cvenom.schemas import NormalizedCve
     from cvenom.models import Cve
-    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-1", kev=True))
-    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-1", kev=False))
-    assert db_session.get(Cve, "CVE-2026-1").kev is True
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0001", kev=True))
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0001", kev=False))
+    assert db_session.get(Cve, "CVE-2026-0001").kev is True
 
 
 def test_affected_is_unioned_across_upserts(db_session):
     from cvenom.db import upsert_cve
     from cvenom.schemas import NormalizedCve
-    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-2", affected=["a", "b"]))
-    row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-2", affected=["b", "c"]))
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0002", affected=["a", "b"]))
+    row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0002", affected=["b", "c"]))
     assert sorted(row.affected) == ["a", "b", "c"]
 
 
 def test_poc_badge_is_sticky(db_session):
     from cvenom.db import upsert_cve
     from cvenom.schemas import NormalizedCve
-    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-3", poc_badge=True))
-    row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-3", poc_badge=False))
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0003", poc_badge=True))
+    row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0003", poc_badge=False))
     assert row.poc_badge is True
 
 
 def test_null_and_blank_fields_do_not_clobber(db_session):
     from cvenom.db import upsert_cve
     from cvenom.schemas import NormalizedCve
-    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-4", cvss=7.5, summary="orig"))
-    row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-4", cvss=None, summary=""))
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0004", cvss=7.5, summary="orig"))
+    row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0004", cvss=None, summary=""))
     assert row.cvss == 7.5 and row.summary == "orig"

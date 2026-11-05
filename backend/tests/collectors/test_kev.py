@@ -135,3 +135,11 @@ def test_corrupt_seen_state_rebaselines_without_events(bad, caplog):
     assert res.events == []
     assert "corrupt" in caplog.text and "cisa_kev" in caplog.text
     assert k.state["seen"] == ["CVE-2026-1001", "CVE-2026-1002", "CVE-2026-1003"]
+
+
+def test_invalid_cve_id_skipped_and_logged(caplog):
+    feed = _feed(_entry("CVE-1<img src=x>"), _entry(" cve-2026-1001 "), _entry("CVE-26-1"))
+    with caplog.at_level("WARNING"):
+        res = KevCollector().normalize(feed)
+    assert [c.cve_id for c in res.cves] == ["CVE-2026-1001"]
+    assert "CVE-1<img src=x>" in caplog.text

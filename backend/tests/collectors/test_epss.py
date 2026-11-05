@@ -60,9 +60,9 @@ async def test_fetch_paginates_with_advancing_offset(monkeypatch, fast_sleep):
     monkeypatch.setattr(epss, "PAGE_SIZE", 2)
     route = respx.get(EPSS_URL).mock(
         side_effect=[
-            httpx.Response(200, json=_page([_rec("CVE-2026-1"), _rec("CVE-2026-2")], 5, 0)),
-            httpx.Response(200, json=_page([_rec("CVE-2026-3"), _rec("CVE-2026-4")], 5, 2)),
-            httpx.Response(200, json=_page([_rec("CVE-2026-5")], 5, 4)),
+            httpx.Response(200, json=_page([_rec("CVE-2026-0001"), _rec("CVE-2026-0002")], 5, 0)),
+            httpx.Response(200, json=_page([_rec("CVE-2026-0003"), _rec("CVE-2026-0004")], 5, 2)),
+            httpx.Response(200, json=_page([_rec("CVE-2026-0005")], 5, 4)),
         ]
     )
     raw = await EpssCollector().fetch()
@@ -71,20 +71,20 @@ async def test_fetch_paginates_with_advancing_offset(monkeypatch, fast_sleep):
     assert all(r.request.url.params["limit"] == "2" for r in route.calls)
     assert len(fast_sleep) == 2
     ids = [c.cve_id for c in EpssCollector().normalize(raw).cves]
-    assert ids == [f"CVE-2026-{i}" for i in range(1, 6)]
+    assert ids == [f"CVE-2026-{i:04d}" for i in range(1, 6)]
 
 
 @respx.mock
 async def test_fetch_stops_on_empty_page_even_if_total_larger():
     route = respx.get(EPSS_URL).mock(
         side_effect=[
-            httpx.Response(200, json=_page([_rec("CVE-2026-1")], 99, 0)),
+            httpx.Response(200, json=_page([_rec("CVE-2026-0001")], 99, 0)),
             httpx.Response(200, json=_page([], 99, 1)),
         ]
     )
     raw = await EpssCollector().fetch()
     assert route.call_count == 2
-    assert [c.cve_id for c in EpssCollector().normalize(raw).cves] == ["CVE-2026-1"]
+    assert [c.cve_id for c in EpssCollector().normalize(raw).cves] == ["CVE-2026-0001"]
 
 
 def test_enrich_only_and_registration():

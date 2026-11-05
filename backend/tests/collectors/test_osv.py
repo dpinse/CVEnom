@@ -123,9 +123,9 @@ def test_affected_formatting_and_no_canonical_fields():
 
 def test_normalize_skips_malformed_record(caplog):
     with caplog.at_level(logging.WARNING, logger="cvenom.collectors.osv"):
-        res = OsvCollector().normalize([{"id": "CVE-2026-1", "affected": "nope"}, OWN_CVE])
+        res = OsvCollector().normalize([{"id": "CVE-2026-0001", "affected": "nope"}, OWN_CVE])
     assert [c.cve_id for c in res.cves] == ["CVE-2026-3001"]
-    assert any("skipping malformed record CVE-2026-1" in r.getMessage() for r in caplog.records)
+    assert any("skipping malformed record CVE-2026-0001" in r.getMessage() for r in caplog.records)
 
 
 def test_enrich_only_and_registration():

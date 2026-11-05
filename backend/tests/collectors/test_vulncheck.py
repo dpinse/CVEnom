@@ -94,14 +94,14 @@ async def test_with_token_sends_bearer_and_expands_cves(token):
 async def test_pagination_terminates_on_total_pages(token, fast_sleep):
     route = respx.get(VULNCHECK_URL).mock(
         side_effect=[
-            httpx.Response(200, json=_page([_rec(["CVE-2026-1"])], 1, 2)),
-            httpx.Response(200, json=_page([_rec("CVE-2026-2")], 2, 2)),
+            httpx.Response(200, json=_page([_rec(["CVE-2026-0001"])], 1, 2)),
+            httpx.Response(200, json=_page([_rec("CVE-2026-0002")], 2, 2)),
         ]
     )
     res = await VulnCheckCollector().run()
     assert route.call_count == 2
     assert [r.request.url.params["page"] for r in route.calls] == ["1", "2"]
-    assert {c.cve_id for c in res.cves} == {"CVE-2026-1", "CVE-2026-2"}
+    assert {c.cve_id for c in res.cves} == {"CVE-2026-0001", "CVE-2026-0002"}
     assert len(fast_sleep) == 1
 
 
@@ -109,43 +109,51 @@ async def test_pagination_terminates_on_total_pages(token, fast_sleep):
 async def test_pagination_terminates_on_empty_page(token):
     route = respx.get(VULNCHECK_URL).mock(
         side_effect=[
-            httpx.Response(200, json=_page([_rec("CVE-2026-1")], 1, 99)),
+            httpx.Response(200, json=_page([_rec("CVE-2026-0001")], 1, 99)),
             httpx.Response(200, json=_page([], 2, 99)),
         ]
     )
     res = await VulnCheckCollector().run()
     assert route.call_count == 2
-    assert {c.cve_id for c in res.cves} == {"CVE-2026-1"}
+    assert {c.cve_id for c in res.cves} == {"CVE-2026-0001"}
 
 
 def test_malformed_records_skipped(token):
     raw = [
         _page(
             [
-                _rec("CVE-2026-1"),
+                _rec("CVE-2026-0001"),
                 "garbage",
                 None,
                 {"vendorProject": "X"},
-                _rec(["CVE-2026-2", "", 5, "CVE-2026-3"]),
-                _rec("CVE-2026-4", added="not-a-date"),
+                _rec(["CVE-2026-0002", "", 5, "CVE-2026-0003"]),
+                _rec("CVE-2026-0004", added="not-a-date"),
             ]
         )
     ]
     res = VulnCheckCollector().normalize(raw)
-    assert {c.cve_id for c in res.cves} == {"CVE-2026-1", "CVE-2026-2", "CVE-2026-3", "CVE-2026-4"}
+    assert {c.cve_id for c in res.cves} == {"CVE-2026-0001", "CVE-2026-0002", "CVE-2026-0003", "CVE-2026-0004"}
     by_id = {c.cve_id: c for c in res.cves}
-    assert by_id["CVE-2026-4"].kev_added is None
+    assert by_id["CVE-2026-0004"].kev_added is None
 
 
 def test_missing_vendor_or_product_no_affected(token):
-    rec = _rec("CVE-2026-1")
+    rec = _rec("CVE-2026-0001")
     del rec["product"]
     res = VulnCheckCollector().normalize([_page([rec])])
     assert res.cves[0].affected == []
 
 
 def test_second_run_new_id_emits_event(token):
-    k = VulnCheckCollector(state={"seen": ["CVE-2026-1"]})
-    res = k.normalize([_page([_rec("CVE-2026-1"), _rec("CVE-2026-2")])])
-    assert res.events == [{"type": "kev_added", "cve_id": "CVE-2026-2", "source": "vulncheck"}]
-    assert k.state["seen"] == ["CVE-2026-1", "CVE-2026-2"]
+    k = VulnCheckCollector(state={"seen": ["CVE-2026-0001"]})
+    res = k.normalize([_page([_rec("CVE-2026-0001"), _rec("CVE-2026-0002")])])
+    assert res.events == [{"type": "kev_added", "cve_id": "CVE-2026-0002", "source": "vulncheck"}]
+    assert k.state["seen"] == ["CVE-2026-0001", "CVE-2026-0002"]
+
+
+def test_invalid_cve_id_skipped_and_logged(token, caplog):
+    raw = [_page([_rec(["CVE-1<img src=x>", "cve-2026-1001", "CVE-24-1"])])]
+    with caplog.at_level("WARNING"):
+        res = VulnCheckCollector().normalize(raw)
+    assert [c.cve_id for c in res.cves] == ["CVE-2026-1001"]
+    assert "CVE-1<img src=x>" in caplog.text

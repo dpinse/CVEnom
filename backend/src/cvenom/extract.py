@@ -6,7 +6,8 @@ from cvenom.db import upsert_cve
 from cvenom.models import Story, StoryCveLink
 from cvenom.schemas import NormalizedCve
 
-_CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE)
+# ASCII digits only, matching NormalizedCve.cve_id validation (else ingest would raise).
+_CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE | re.ASCII)
 
 
 def extract_cve_ids(text: str | None) -> set[str]:

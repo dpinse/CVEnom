@@ -55,3 +55,11 @@ def test_link_story_does_not_overwrite_existing_cve(db_session):
     cve = db_session.get(Cve, "CVE-2026-0003")
     assert (cve.cvss, cve.kev, cve.summary) == (9.8, True, "real")
     assert db_session.get(StoryCveLink, (story.id, "CVE-2026-0003")) is not None
+
+
+def test_extract_ignores_non_ascii_digits():
+    from cvenom.extract import extract_cve_ids
+    # Fullwidth / Arabic-Indic digits would fail NormalizedCve validation and abort ingest.
+    assert extract_cve_ids("see CVE-２０２４-１２３４ and CVE-2024-5678") == {
+        "CVE-2024-5678"
+    }
