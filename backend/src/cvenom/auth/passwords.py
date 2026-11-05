@@ -1,3 +1,5 @@
+import secrets
+
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
@@ -35,3 +37,17 @@ def verify_password(hashed: str, pw: str) -> bool:
 
 def needs_rehash(hashed: str) -> bool:
     return _hasher.check_needs_rehash(hashed)
+
+
+def rehash(pw: str) -> str:
+    """Hash without the password policy (used when upgrading a verified login)."""
+    return _hasher.hash(pw)
+
+
+# Same parameters as real hashes: burned when no real hash applies.
+DUMMY_HASH = _hasher.hash(secrets.token_urlsafe(32))
+
+
+def dummy_verify(pw: str = "") -> None:
+    """Spend one verify's worth of time against a dummy hash."""
+    verify_password(DUMMY_HASH, pw)

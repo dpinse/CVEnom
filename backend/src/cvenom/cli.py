@@ -3,6 +3,8 @@ import getpass
 import os
 import sys
 
+from sqlalchemy.exc import IntegrityError
+
 from cvenom.auth.passwords import WeakPassword
 from cvenom.auth.users import AdminExists, create_admin
 
@@ -33,6 +35,9 @@ def main(argv=None, *, session_factory=None) -> int:
             email = user.email
     except WeakPassword as e:
         print(f"error: {e}", file=sys.stderr)
+        return 1
+    except IntegrityError:
+        print("error: a user with that email already exists", file=sys.stderr)
         return 1
     except AdminExists:
         print("error: an admin already exists", file=sys.stderr)

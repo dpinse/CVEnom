@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -34,6 +36,28 @@ _IAT_LEEWAY = timedelta(seconds=60)
 # lose its session: the immediate predecessor is tolerated inside this window.
 REUSE_GRACE = timedelta(seconds=10)
 _REQUIRED_CLAIMS = ["exp", "iat", "sub", "sid", "kid", "iss", "aud"]
+
+
+# Process-wide cache of signing-key rows (kid, public key, retired_at). The grace
+# window is applied at use time against the caller's `now`, never at fetch time.
+KEY_CACHE_TTL_S = 60.0
+KEY_FORCE_REFRESH_MIN_S = 10.0
+_key_cache_lock = threading.Lock()
+_key_cache: tuple[float, list[tuple[str, Ed25519PublicKey, datetime | None]]] | None = None
+_last_forced_refresh: float | None = None
+
+
+def reset_key_cache() -> None:
+    global _key_cache, _last_forced_refresh
+    with _key_cache_lock:
+        _key_cache = None
+        _last_forced_refresh = None
+
+
+def _invalidate_key_cache() -> None:
+    global _key_cache
+    with _key_cache_lock:
+        _key_cache = None
 
 
 class InvalidToken(Exception):
@@ -120,24 +144,44 @@ class KeyRing:
         new = KeyRing._generate(now)
         session.add(new)
         session.flush()
+        _invalidate_key_cache()
         return new
 
     @staticmethod
-    def verification_keys(session: Session, now: datetime) -> dict[str, Ed25519PublicKey]:
-        """Active key plus keys retired within access_ttl + 1h (grace window)."""
-        _require_aware(now)
-        grace = timedelta(minutes=get_settings().access_ttl_minutes) + timedelta(hours=1)
-        rows = session.scalars(
-            select(SigningKey).where(
-                SigningKey.retired_at.is_(None) | (SigningKey.retired_at > now - grace)
-            )
-        ).all()
-        keys: dict[str, Ed25519PublicKey] = {}
+    def _load_keys(
+        session: Session,
+    ) -> list[tuple[str, Ed25519PublicKey, datetime | None]]:
+        rows = session.scalars(select(SigningKey)).all()
+        out: list[tuple[str, Ed25519PublicKey, datetime | None]] = []
         for row in rows:
             pub = serialization.load_pem_public_key(row.public_pem.encode("ascii"))
             if isinstance(pub, Ed25519PublicKey):
-                keys[row.kid] = pub
-        return keys
+                out.append((row.kid, pub, row.retired_at))
+        return out
+
+    @staticmethod
+    def verification_keys(
+        session: Session, now: datetime, *, force: bool = False
+    ) -> dict[str, Ed25519PublicKey]:
+        """Active key plus keys retired within access_ttl + 1h (grace window).
+
+        Backed by a process-wide cache (TTL 60 s); `force` bypasses it.
+        """
+        global _key_cache
+        _require_aware(now)
+        grace = timedelta(minutes=get_settings().access_ttl_minutes) + timedelta(hours=1)
+        mono = time.monotonic()
+        cached = _key_cache
+        if force or cached is None or mono - cached[0] >= KEY_CACHE_TTL_S:
+            entries = KeyRing._load_keys(session)
+            with _key_cache_lock:
+                _key_cache = (mono, entries)
+        else:
+            entries = cached[1]
+        cutoff = now - grace
+        return {
+            kid: pub for kid, pub, retired in entries if retired is None or retired > cutoff
+        }
 
 
 def issue_access(session: Session, user: User, sid: uuid.UUID, now: datetime) -> str:
@@ -159,6 +203,16 @@ def issue_access(session: Session, user: User, sid: uuid.UUID, now: datetime) ->
     return jwt.encode(claims, priv, algorithm=ALGORITHM, headers={"kid": key.kid})  # type: ignore[arg-type]
 
 
+def _may_force_refresh() -> bool:
+    global _last_forced_refresh
+    mono = time.monotonic()
+    with _key_cache_lock:
+        if _last_forced_refresh is not None and mono - _last_forced_refresh < KEY_FORCE_REFRESH_MIN_S:
+            return False
+        _last_forced_refresh = mono
+        return True
+
+
 def decode_access(session: Session, token: str, now: datetime) -> AccessClaims:
     _require_aware(now)
     s = get_settings()
@@ -170,6 +224,9 @@ def decode_access(session: Session, token: str, now: datetime) -> AccessClaims:
     if header.get("alg") != ALGORITHM or not isinstance(kid, str):
         raise InvalidToken("invalid token")
     pub = KeyRing.verification_keys(session, now).get(kid)
+    if pub is None and _may_force_refresh():
+        # Unknown kid: a key created by another worker? One refresh, rate-limited.
+        pub = KeyRing.verification_keys(session, now, force=True).get(kid)
     if pub is None:
         raise InvalidToken("invalid token")
     try:

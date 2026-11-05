@@ -231,3 +231,64 @@ def test_cli_rejects_password_argument():
     )
     assert r.returncode != 0
     assert "unrecognized arguments" in r.stderr
+
+
+def test_authenticate_rehash_skips_password_policy(db_session):
+    """A legacy account whose password violates today's policy can still log in."""
+    short = "short"
+    u = create_admin(db_session, "a@b.com", GOOD)
+    u.password_hash = passwords_rehash(short)
+    db_session.flush()
+    with patch.object(users, "needs_rehash", return_value=True):
+        assert authenticate(db_session, "a@b.com", short) is not None
+    assert verify_password(u.password_hash, short)
+
+
+def passwords_rehash(pw):
+    from cvenom.auth.passwords import rehash
+
+    return rehash(pw)
+
+
+def test_dummy_verify_runs_without_error():
+    from cvenom.auth.passwords import dummy_verify
+
+    assert dummy_verify("anything") is None
+
+
+def test_accept_invite_integrity_error_maps_to_invalid_invite(db_session, monkeypatch):
+    admin = create_admin(db_session, "a@b.com", GOOD)
+    raw = create_invite(db_session, admin, "dup@x.com", "member")
+    # Make the pre-check miss, then collide with an existing user at flush time.
+    db_session.add(User(email="dup@x.com", password_hash="x", role="member"))
+    db_session.flush()
+    real_scalars = db_session.scalars
+    calls = {"n": 0}
+
+    class Empty:
+        def first(self):
+            return None
+
+    def fake(stmt, *a, **k):
+        if "app_user" in str(stmt) and "invite" not in str(stmt):
+            calls["n"] += 1
+            return Empty()
+        return real_scalars(stmt, *a, **k)
+
+    monkeypatch.setattr(db_session, "scalars", fake)
+    with pytest.raises(InvalidInvite):
+        accept_invite(db_session, raw, GOOD)
+    assert calls["n"] == 1
+    monkeypatch.undo()
+    inv = db_session.scalars(select(Invite)).one()
+    assert inv.used_at is None  # savepoint rolled the consumption back
+
+
+def test_cli_email_exists_as_non_admin_clean_exit(db_session, monkeypatch, capsys):
+    monkeypatch.setenv("ADMIN_PASSWORD", GOOD)
+    db_session.add(User(email="m@x.com", password_hash="SECRETHASH", role="member"))
+    db_session.flush()
+    rc = cli.main(["create-admin", "--email", "m@x.com"], session_factory=_factory(db_session))
+    cap = capsys.readouterr()
+    assert rc == 1 and cap.out == ""
+    assert "SECRETHASH" not in cap.err and "INSERT" not in cap.err and "argon2" not in cap.err

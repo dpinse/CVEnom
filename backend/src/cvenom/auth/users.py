@@ -7,16 +7,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from cvenom.auth.passwords import (
-    _hasher,
+    DUMMY_HASH,
     hash_password,
     needs_rehash,
+    rehash,
     validate_password,
     verify_password,
 )
 from cvenom.models import Invite, User
-
-# Computed once, same parameters as real hashes: burned when no real hash applies.
-DUMMY_HASH = _hasher.hash(secrets.token_urlsafe(32))
 
 _ROLES = ("admin", "member")
 _INVALID_INVITE_MSG = "invalid or expired invite"
@@ -47,7 +45,7 @@ def authenticate(session: Session, email: str, pw: str) -> User | None:
     if not (usable and ok):
         return None
     if needs_rehash(user.password_hash):
-        user.password_hash = hash_password(pw)
+        user.password_hash = rehash(pw)
         session.flush()
     return user
 
@@ -103,10 +101,13 @@ def accept_invite(
     if session.scalars(select(User.id).where(User.email == _norm(invite.email))).first():
         raise InvalidInvite()
     user = User(email=invite.email, password_hash=hash_password(pw), role=invite.role)
-    invite.used_at = now
-    session.add(user)
     try:
+        # begin_nested() flushes pending state first, so the add and the invite
+        # update must happen inside the savepoint or an IntegrityError would
+        # escape it and leave the outer transaction deactivated.
         with session.begin_nested():
+            invite.used_at = now
+            session.add(user)
             session.flush()
     except IntegrityError:
         raise InvalidInvite() from None

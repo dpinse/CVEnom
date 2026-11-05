@@ -36,3 +36,12 @@ def db_session(test_engine):
         session.close()
         trans.rollback()
         conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_key_cache():
+    from cvenom.auth import tokens
+
+    tokens.reset_key_cache()
+    yield
+    tokens.reset_key_cache()

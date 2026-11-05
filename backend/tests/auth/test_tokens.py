@@ -428,3 +428,110 @@ def test_attacker_jwk_header_rejected(db_session):
     )
     with pytest.raises(InvalidToken):
         decode_access(db_session, tok, NOW)
+
+
+# ---------------------------------------------------------------- key cache
+
+
+def _count_queries(db_session):
+    from sqlalchemy import event
+
+    n = {"q": 0}
+    bind = db_session.get_bind()
+
+    def hook(*a, **k):
+        n["q"] += 1
+
+    event.listen(bind, "before_cursor_execute", hook)
+    return n, lambda: event.remove(bind, "before_cursor_execute", hook)
+
+
+def test_key_cache_avoids_second_query(db_session, user):
+    tok = issue_access(db_session, user, uuid.uuid4(), NOW)
+    decode_access(db_session, tok, NOW)  # warms the cache
+    n, stop = _count_queries(db_session)
+    try:
+        decode_access(db_session, tok, NOW + timedelta(seconds=30))
+    finally:
+        stop()
+    assert n["q"] == 0
+
+
+def test_key_cache_expires_after_ttl(db_session, user, monkeypatch):
+    tok = issue_access(db_session, user, uuid.uuid4(), NOW)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tokens.time, "monotonic", lambda: clock["t"])
+    decode_access(db_session, tok, NOW)
+    clock["t"] += 61
+    n, stop = _count_queries(db_session)
+    try:
+        decode_access(db_session, tok, NOW)
+    finally:
+        stop()
+    assert n["q"] == 1
+
+
+def test_unknown_kid_forces_one_refresh_rate_limited(db_session, user, monkeypatch):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tokens.time, "monotonic", lambda: clock["t"])
+    tok = issue_access(db_session, user, uuid.uuid4(), NOW)
+    KeyRing.verification_keys(db_session, NOW)  # warm cache
+    # a key appears behind the cache's back (another worker)
+    other = KeyRing._generate(NOW)
+    db_session.add(other)
+    db_session.flush()
+    priv = serialization.load_der_private_key(secretbox.decrypt(other.private_enc), password=None)
+    claims = jwt.decode(tok, options={"verify_signature": False})
+    claims["kid"] = other.kid
+    foreign = jwt.encode(claims, priv, algorithm="EdDSA", headers={"kid": other.kid})
+    assert decode_access(db_session, foreign, NOW).kid == other.kid  # picked up by refresh
+    # unknown kid again within 10 s: no further refresh, rejected without a query
+    n, stop = _count_queries(db_session)
+    try:
+        bogus = jwt.encode(claims, priv, algorithm="EdDSA", headers={"kid": "nope"})
+        with pytest.raises(InvalidToken):
+            decode_access(db_session, bogus, NOW)
+        with pytest.raises(InvalidToken):
+            decode_access(db_session, bogus, NOW)
+    finally:
+        stop()
+    assert n["q"] == 0
+    clock["t"] += 11
+    n, stop = _count_queries(db_session)
+    try:
+        with pytest.raises(InvalidToken):
+            decode_access(db_session, bogus, NOW)
+    finally:
+        stop()
+    assert n["q"] == 1
+
+
+def old_kid_in_cache(tokens):
+    return tokens._key_cache is not None and any(r is not None for _, _, r in tokens._key_cache[1])
+
+
+def test_cached_retired_key_rejected_past_grace(db_session, user):
+    old_tok = issue_access(db_session, user, uuid.uuid4(), NOW)
+    later = NOW + timedelta(days=7)
+    issue_access(db_session, user, uuid.uuid4(), later)  # rotates, invalidates cache
+    inside = later + timedelta(minutes=30)
+    # warm the cache, then use it past grace with the same cached entries
+    KeyRing.verification_keys(db_session, inside)
+    after = later + timedelta(hours=1, minutes=16)
+    assert old_kid_in_cache(tokens)
+    n, stop = _count_queries(db_session)
+    try:
+        with pytest.raises(InvalidToken):
+            decode_access(db_session, old_tok, after)
+    finally:
+        stop()
+    assert n["q"] <= 1  # at most the single forced refresh for the unknown kid
+    # the cache still holds the retired key; it is rejected by the use-time filter
+    assert tokens._key_cache is not None
+    assert any(r is not None for _, _, r in tokens._key_cache[1])
+
+
+def test_current_creating_key_invalidates_cache(db_session):
+    KeyRing.verification_keys(db_session, NOW)
+    KeyRing.current(db_session, NOW)
+    assert tokens._key_cache is None
