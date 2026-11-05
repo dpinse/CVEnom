@@ -1,0 +1,119 @@
+# Production stack. Run from the repo root:
+#   docker compose -f deploy/docker-compose.prod.yml up -d
+# Secrets come from ../.env (copy .env.example); `${VAR:?}` aborts if unset.
+x-app: &app
+  build:
+    context: ../backend
+  image: cvenom-backend:latest
+  env_file: ../.env
+  environment:
+    DATABASE_URL: postgresql+psycopg://cvenom_app:${APP_DB_PASSWORD:?}@postgres:5432/cvenom
+    REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
+    GEOIP_DIR: /data/geoip
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - "no-new-privileges:true"
+  user: "10001:10001"
+
+services:
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: ["api"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    restart: unless-stopped
+    volumes:
+      - geoip:/data/geoip
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  beat:
+    <<: *app
+    command: ["beat"]
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: cvenom
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cvenom"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    # volatile-ttl evicts only keys with a TTL, shortest first: 30 s cache entries
+    # go before rate-limit counters (60 s / 900 s). Celery broker messages carry
+    # no TTL and are never evicted.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?}", "--maxmemory", "256mb", "--maxmemory-policy", "volatile-ttl", "--appendonly", "yes"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # frontend:
+  #   image: cvenom-frontend:latest   # added with the frontend plan
+  #   restart: unless-stopped
+  #   read_only: true
+  #   cap_drop: [ALL]
+  #   security_opt: ["no-new-privileges:true"]
+  #   ports:
+  #     - "127.0.0.1:8080:8080"
+
+volumes:
+  pgdata:
+  redisdata:
+  geoip:

@@ -51,7 +51,9 @@ def get_redis(app):
     if app.state.redis is None:
         import redis.asyncio as aioredis
 
-        app.state.redis = aioredis.from_url(app.state.settings.redis_url)
+        app.state.redis = aioredis.from_url(
+            app.state.settings.redis_url, socket_timeout=5, socket_connect_timeout=5
+        )
         app.state.redis_owned = True
     return app.state.redis
 
