@@ -31,6 +31,9 @@ router = APIRouter(prefix="/api/auth")
 COOKIE_NAME = "cvenom_refresh"
 COOKIE_PATH = "/api/auth"
 INVITE_TTL_HOURS = 72
+# Authed routes: route-level dependencies run before the endpoint's own
+# require_user/require_admin, so invalid-token floods are counted before 401.
+_API_LIMIT = Depends(rate_limit("api"))
 _MAX_REFRESH_LEN = 256
 
 
@@ -155,7 +158,7 @@ async def refresh(request: Request, session: Session = SessionDep) -> JSONRespon
 # ---------------------------------------------------------------- logout / me
 
 
-@router.post("/logout")
+@router.post("/logout", dependencies=[_API_LIMIT])
 def logout(
     request: Request,
     user: User = Depends(require_user),
@@ -170,7 +173,7 @@ def logout(
     return resp
 
 
-@router.get("/me")
+@router.get("/me", dependencies=[_API_LIMIT])
 def me(user: User = Depends(require_user)) -> dict:
     return _user_json(user)
 
@@ -178,7 +181,7 @@ def me(user: User = Depends(require_user)) -> dict:
 # ---------------------------------------------------------------- sessions
 
 
-@router.get("/sessions")
+@router.get("/sessions", dependencies=[_API_LIMIT])
 def list_sessions(
     request: Request,
     user: User = Depends(require_user),
@@ -208,7 +211,7 @@ def list_sessions(
     ]
 
 
-@router.delete("/sessions/{session_id}")
+@router.delete("/sessions/{session_id}", dependencies=[_API_LIMIT])
 def revoke_session(
     session_id: str,
     user: User = Depends(require_user),
@@ -243,7 +246,7 @@ class AcceptBody(BaseModel):
     password: str = Field(max_length=1024)
 
 
-@router.post("/invites", status_code=201)
+@router.post("/invites", status_code=201, dependencies=[_API_LIMIT])
 def create_invite_route(
     body: InviteBody,
     admin: User = Depends(require_admin),

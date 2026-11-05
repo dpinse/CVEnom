@@ -54,9 +54,11 @@ def _utf8_query(request: Request) -> None:
         raise HTTPException(status_code=422, detail={"error": "validation_error"})
 
 
+# The limiter MUST precede public_or_user: otherwise invalid-token and (with
+# public_read=False) anonymous requests get a 401 before they are counted.
 router = APIRouter(
     prefix="/api",
-    dependencies=[Depends(_utf8_query), Depends(public_or_user), Depends(rate_limit("read"))],
+    dependencies=[Depends(_utf8_query), Depends(rate_limit("read")), Depends(public_or_user)],
 )
 
 

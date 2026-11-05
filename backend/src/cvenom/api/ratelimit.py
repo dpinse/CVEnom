@@ -121,6 +121,7 @@ def rate_limit(scope: str, identity: Literal["auto", "ip"] = "auto"):
                     60,
                 )
 
+        ip_dependency.cvenom_rate_limit_scope = scope  # type: ignore[attr-defined]
         return ip_dependency
 
     async def dependency(
@@ -142,6 +143,8 @@ def rate_limit(scope: str, identity: Literal["auto", "ip"] = "auto"):
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
+    # Marker for the structural test asserting limiters run before auth deps.
+    dependency.cvenom_rate_limit_scope = scope  # type: ignore[attr-defined]
     return dependency
 
 
