@@ -17,6 +17,7 @@ from cvenom.db import session_scope
 from .cache import ResponseCacheMiddleware
 from .middleware import BodyLimitMiddleware, ErrorCatchMiddleware, SecurityHeadersMiddleware
 from .ratelimit import get_redis
+from .routes_alerts import router as alerts_router
 from .routes_auth import router as auth_router
 from .routes_read import CACHE_PATHS
 from .routes_read import router as read_router
@@ -106,6 +107,7 @@ def create_app(
     app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(auth_router)
+    app.include_router(alerts_router)
     app.include_router(read_router)
 
     @app.get("/api/health")
