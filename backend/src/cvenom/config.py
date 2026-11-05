@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     geoip_dir: str = "data/geoip"
     maxmind_account_id: str | None = None
     maxmind_license_key: SecretStr | None = None
+    ransomware_live_api_key: SecretStr | None = None
 
 
 @lru_cache

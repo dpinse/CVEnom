@@ -88,3 +88,19 @@ def test_batch_over_chunk_size_with_duplicate_across_chunks(db_session):
     got = rows(db_session)
     assert len(got) == 600
     assert next(r for r in got if r.external_id == "e0").magnitude == 7.0
+
+
+def test_details_strings_sanitized_recursively(db_session):
+    details = {
+        "group": "<script>alert(1)</script>evil",
+        "n": 5,
+        "flag": True,
+        "nested": {"a": ["<b>x</b>", {"b": "<img src=x onerror=1>y"}], "k": 1.5},
+        "none": None,
+    }
+    run(db_session, ev(details=details))
+    row = rows(db_session)[0]
+    assert "<" not in str(row.details)
+    assert row.details["n"] == 5 and row.details["flag"] is True
+    assert row.details["nested"]["k"] == 1.5 and row.details["none"] is None
+    assert row.details["nested"]["a"][0] == "x"

@@ -103,6 +103,20 @@ def _sanitized(cve: NormalizedCve) -> NormalizedCve:
 
 
 _GEO_CHUNK = 500
+_DETAILS_MAX_DEPTH = 4
+
+
+def _sanitize_details(value, depth: int = 0):
+    """Sanitize every string inside a details structure (keys untouched, depth-limited)."""
+    if isinstance(value, str):
+        return sanitize_text(value)
+    if depth >= _DETAILS_MAX_DEPTH:
+        return None if isinstance(value, (dict, list, tuple)) else value
+    if isinstance(value, dict):
+        return {k: _sanitize_details(v, depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_details(v, depth + 1) for v in value]
+    return value
 _GEO_UPDATE_COLS = (
     "observed_at", "magnitude", "label", "details", "kind",
     "country_code", "asn", "cve_id", "story_url",
@@ -128,7 +142,7 @@ def _upsert_geo_events(session: Session, events: list[NormalizedGeoEvent]) -> No
             "label": sanitize_text(e.label) if e.label is not None else None,
             "cve_id": e.cve_id,
             "story_url": e.story_url,
-            "details": e.details,
+            "details": _sanitize_details(e.details),
         }
     values = list(by_key.values())
     for i in range(0, len(values), _GEO_CHUNK):
