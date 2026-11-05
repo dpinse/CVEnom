@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,13 @@ class Settings(BaseSettings):
     backfill_days: int = 90
     # KEV/VulnCheck: alert only for entries whose own add date is this recent.
     kev_alert_max_age_days: int = 14
+    geo_retention_days: int = 30
+    geoip_dir: str = "data/geoip"
+    maxmind_account_id: str | None = None
+    maxmind_license_key: SecretStr | None = None
+    ransomware_live_api_key: SecretStr | None = None
+    cf_radar_token: SecretStr | None = None
+    abusech_auth_key: SecretStr | None = None
 
 
 @lru_cache

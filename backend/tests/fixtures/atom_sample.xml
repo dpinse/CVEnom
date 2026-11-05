@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>The Hacker News</title>
+  <id>tag:example.com,2026:feed</id>
+  <updated>2026-11-04T10:00:00Z</updated>
+  <entry>
+    <title>Zero-Day Patched in Popular VPN</title>
+    <link rel="alternate" href="https://thehackernews.com/2026/11/zero-day-patched-in-popular-vpn.html"/>
+    <id>tag:example.com,2026:1</id>
+    <published>2026-11-04T08:15:00+02:00</published>
+    <updated>2026-11-04T09:00:00Z</updated>
+    <summary>Vendor ships emergency fix.</summary>
+  </entry>
+  <entry>
+    <title>Updated Only Entry</title>
+    <link rel="alternate" href="https://thehackernews.com/2026/11/updated-only.html"/>
+    <id>tag:example.com,2026:2</id>
+    <updated>2026-11-03T12:00:00Z</updated>
+    <summary>No published element.</summary>
+  </entry>
+</feed>

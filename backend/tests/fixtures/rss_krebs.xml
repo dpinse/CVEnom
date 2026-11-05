@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<channel>
+  <title>Krebs on Security</title>
+  <link>https://krebsonsecurity.com</link>
+  <description>In-depth security news and investigation</description>
+  <item>
+    <title>Botnet Operators Exploit CVE-2026-109618 in the Wild</title>
+    <link>https://krebsonsecurity.com/2026/11/botnet-operators-exploit-cve-2026-109618/</link>
+    <dc:creator>BrianKrebs</dc:creator>
+    <pubDate>Tue, 03 Nov 2026 14:30:00 +0000</pubDate>
+    <description><![CDATA[<p>Attackers are chaining a router flaw. <script>x</script> The patch is out.</p>]]></description>
+  </item>
+  <item>
+    <title>Phishing Kit Targets Payroll Portals</title>
+    <link>https://krebsonsecurity.com/2026/11/phishing-kit-targets-payroll-portals/</link>
+    <pubDate>Mon, 02 Nov 2026 09:00:00 -0500</pubDate>
+    <description>A new kit steals payroll logins.</description>
+  </item>
+  <item>
+    <title>Evil Entry</title>
+    <link>javascript:alert(1)</link>
+    <pubDate>Mon, 02 Nov 2026 08:00:00 +0000</pubDate>
+    <description>should be skipped</description>
+  </item>
+</channel>
+</rss>

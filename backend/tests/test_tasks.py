@@ -8,16 +8,128 @@ from cvenom.models import Cve, CollectorRun
 from cvenom.schemas import NormalizedCve
 
 
-def test_registry_contains_all_core_collectors():
-    import cvenom.tasks  # triggers collector imports/registration
-    from cvenom.collectors.base import REGISTRY
-    assert {"nvd","epss","cisa_kev","vulncheck_kev","osv"} <= set(REGISTRY)
+ALL_COLLECTORS = {
+    "nvd", "epss", "cisa_kev", "vulncheck_kev", "osv", "news_krebs", "news_thn",
+    "news_bleeping", "news_securityweek", "ransomware_live", "dshield", "cf_radar", "abusech",
+}
 
 
-def test_beat_schedule_has_entry_per_collector():
-    from cvenom.tasks import beat_schedule
-    from cvenom.collectors.base import REGISTRY
-    assert len(beat_schedule) == len(REGISTRY)
+def test_registry_contains_exactly_all_collectors(fake_registry):
+    assert {n for n in REGISTRY if not n.startswith("fake")} == ALL_COLLECTORS
+
+
+def test_beat_schedule_has_entry_per_collector_and_maintenance():
+    from cvenom.tasks import beat_schedule, purge_geo_task, refresh_geoip_task
+    collect = {k for k in beat_schedule if k.startswith("collect-")}
+    assert {k.removeprefix("collect-") for k in collect} == set(REGISTRY)
+    from celery.schedules import crontab
+
+    geo = beat_schedule["maintenance-geoip"]
+    assert geo["task"] == refresh_geoip_task.name
+    assert isinstance(geo["schedule"], crontab)
+    assert geo["schedule"] == crontab(minute=17, hour="*/6")
+    purge = beat_schedule["maintenance-purge-geo"]
+    assert purge["task"] == purge_geo_task.name
+    assert isinstance(purge["schedule"], crontab)
+    assert purge["schedule"] == crontab(minute=23)
+    assert set(beat_schedule) == collect | {"maintenance-geoip", "maintenance-purge-geo"}
+
+
+def test_maintenance_tasks_registered_on_celery_app():
+    from cvenom.tasks import celery_app, purge_geo_task, refresh_geoip_task
+    assert refresh_geoip_task.name in celery_app.tasks
+    assert purge_geo_task.name in celery_app.tasks
+    assert celery_app.conf.beat_schedule["maintenance-geoip"]["task"] == refresh_geoip_task.name
+
+
+def test_refresh_geoip_job_success(monkeypatch):
+    import cvenom.tasks as tasks
+    from cvenom.config import get_settings
+    calls = []
+
+    async def fake_refresh(d, settings):
+        calls.append(d)
+        return "dbip"
+
+    monkeypatch.setattr(tasks, "refresh_geoip", fake_refresh)
+    lock = FakeLock()
+    out = tasks.refresh_geoip_job(lock=lock)
+    assert out == {"ok": True, "provider": "dbip"}
+    assert calls == [get_settings().geoip_dir]
+    assert lock.acquired == [("maintenance-geoip", 3600)]
+    assert lock.released == ["maintenance-geoip"]
+
+
+def test_refresh_geoip_job_lock_held(monkeypatch):
+    import cvenom.tasks as tasks
+
+    async def boom(*a, **k):
+        raise AssertionError("should not run")
+
+    monkeypatch.setattr(tasks, "refresh_geoip", boom)
+    lock = FakeLock(held=True)
+    assert tasks.refresh_geoip_job(lock=lock) == {"skipped": True}
+    assert lock.released == []
+
+
+def test_refresh_geoip_job_failure_is_swallowed(monkeypatch, caplog):
+    import cvenom.tasks as tasks
+
+    async def boom(*a, **k):
+        raise RuntimeError("net down")
+
+    monkeypatch.setattr(tasks, "refresh_geoip", boom)
+    lock = FakeLock()
+    with caplog.at_level("WARNING", logger="cvenom.tasks"):
+        assert tasks.refresh_geoip_job(lock=lock) == {"ok": False}
+    assert lock.released == ["maintenance-geoip"]
+    assert "geoip refresh failed" in caplog.text
+    assert "net down" not in caplog.text
+
+
+def _seed_geo(db_session, now):
+    from cvenom.models import GeoEvent
+    for i, days in enumerate((200, 100, 1)):
+        db_session.add(GeoEvent(source="t", external_id=f"e{i}", kind="k",
+                                observed_at=now - timedelta(days=days)))
+    db_session.flush()
+
+
+def test_purge_geo_job_deletes_only_old(db_session, factory, monkeypatch):
+    import cvenom.tasks as tasks
+    from sqlalchemy import select
+    from cvenom.models import GeoEvent
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    _seed_geo(db_session, now)
+    monkeypatch.setattr(tasks, "get_settings", lambda: type("S", (), {"geo_retention_days": 150})())
+    lock = FakeLock()
+    out = tasks.purge_geo_job(session_factory=factory, lock=lock, now=now)
+    assert out == {"ok": True, "deleted": 1}
+    left = {e.external_id for e in db_session.scalars(select(GeoEvent))}
+    assert left == {"e1", "e2"}
+    assert lock.acquired == [("maintenance-purge-geo", 3600)]
+    assert lock.released == ["maintenance-purge-geo"]
+
+
+def test_purge_geo_job_lock_held(db_session, factory):
+    import cvenom.tasks as tasks
+    lock = FakeLock(held=True)
+    assert tasks.purge_geo_job(session_factory=factory, lock=lock) == {"skipped": True}
+    assert lock.released == []
+
+
+def test_purge_geo_job_releases_lock_on_failure(db_session):
+    import cvenom.tasks as tasks
+
+    @contextmanager
+    def bad():
+        raise RuntimeError("db down")
+        yield
+
+    lock = FakeLock()
+    with pytest.raises(RuntimeError):
+        tasks.purge_geo_job(session_factory=bad, lock=lock)
+    assert lock.released == ["maintenance-purge-geo"]
 
 
 class FakeLock:
@@ -145,6 +257,24 @@ def test_window_overlap_constant_and_first_run_since_is_none(db_session, factory
     fake_registry(make_fake(seen=seen))
     tasks.run_collector("fake_t", session_factory=factory, lock=FakeLock())
     assert seen == [(None, {})]
+
+
+def test_run_collector_passes_cve_count_to_enrich_only_state(db_session, factory, fake_registry):
+    from sqlalchemy import func, select
+    from cvenom.tasks import run_collector
+    seen = []
+    fake_registry(make_fake(enrich=True, seen=seen))
+    expected = db_session.scalar(select(func.count()).select_from(Cve))
+    run_collector("fake_t", session_factory=factory, lock=FakeLock())
+    assert seen[0][1]["cve_count"] == expected
+
+
+def test_run_collector_non_enrich_state_has_no_cve_count(db_session, factory, fake_registry):
+    from cvenom.tasks import run_collector
+    seen = []
+    fake_registry(make_fake(seen=seen))
+    run_collector("fake_t", session_factory=factory, lock=FakeLock())
+    assert "cve_count" not in seen[0][1]
 
 
 def test_run_collector_enrich_only_creates_no_rows(db_session, factory, fake_registry):
@@ -332,3 +462,117 @@ def test_injected_redis_client_still_used():
     from cvenom.tasks import RedisLock
     sentinel = object()
     assert RedisLock(sentinel).client is sentinel
+
+
+def test_refresh_geoip_failure_does_not_log_presigned_url(monkeypatch, caplog):
+    import httpx
+
+    import cvenom.tasks as tasks
+
+    url = "https://r2.example/db?X-Amz-Signature=SECRETSIG"
+
+    async def boom(*a, **k):
+        req = httpx.Request("GET", url)
+        raise httpx.HTTPStatusError(f"403 for {url}", request=req,
+                                    response=httpx.Response(403, request=req))
+
+    monkeypatch.setattr(tasks, "refresh_geoip", boom)
+    with caplog.at_level("DEBUG"):
+        assert tasks.refresh_geoip_job(lock=FakeLock()) == {"ok": False}
+    assert "SECRETSIG" not in caplog.text
+    assert "geoip refresh failed" in caplog.text and "403" in caplog.text
+
+
+def _geoip_dir(monkeypatch, tmp_path, age_days=None, files=("country.mmdb", "asn.mmdb")):
+    import os
+    import time
+
+    from cvenom.config import get_settings
+
+    monkeypatch.setenv("GEOIP_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    for name in files:
+        f = tmp_path / name
+        f.write_bytes(b"x")
+        if age_days is not None:
+            old = time.time() - age_days * 86400
+            os.utime(f, (old, old))
+
+
+@pytest.fixture
+def geoip_calls(monkeypatch):
+    import cvenom.tasks as tasks
+    from cvenom.config import get_settings
+
+    calls = []
+
+    async def fake_refresh(d, settings):
+        calls.append(d)
+        return "dbip"
+
+    monkeypatch.setattr(tasks, "refresh_geoip", fake_refresh)
+    yield calls
+    monkeypatch.undo()
+    get_settings.cache_clear()
+
+
+def test_refresh_geoip_job_fresh_files_skipped(monkeypatch, tmp_path, geoip_calls):
+    import cvenom.tasks as tasks
+    _geoip_dir(monkeypatch, tmp_path, age_days=1)
+    assert tasks.refresh_geoip_job(lock=FakeLock()) == {"ok": True, "skipped": "fresh"}
+    assert geoip_calls == []
+
+
+@pytest.mark.parametrize("age,files", [
+    (8, ("country.mmdb", "asn.mmdb")),
+    (None, ()),
+    (1, ("country.mmdb",)),  # ASN missing
+])
+def test_refresh_geoip_job_stale_or_missing_downloads(monkeypatch, tmp_path, geoip_calls, age, files):
+    import cvenom.tasks as tasks
+    _geoip_dir(monkeypatch, tmp_path, age_days=age, files=files)
+    assert tasks.refresh_geoip_job(lock=FakeLock())["ok"] is True
+    assert geoip_calls == [str(tmp_path)]
+
+
+def test_refresh_geoip_job_stale_asn_alone_downloads(monkeypatch, tmp_path, geoip_calls):
+    import os
+    import time
+
+    import cvenom.tasks as tasks
+    _geoip_dir(monkeypatch, tmp_path, age_days=1)
+    old = time.time() - 9 * 86400
+    os.utime(tmp_path / "asn.mmdb", (old, old))
+    tasks.refresh_geoip_job(lock=FakeLock())
+    assert len(geoip_calls) == 1
+
+
+def test_refresh_geoip_job_force_downloads_when_fresh(monkeypatch, tmp_path, geoip_calls):
+    import cvenom.tasks as tasks
+    _geoip_dir(monkeypatch, tmp_path, age_days=1)
+    out = tasks.refresh_geoip_job(lock=FakeLock(), force=True)
+    assert out == {"ok": True, "provider": "dbip"}
+    assert len(geoip_calls) == 1
+
+
+def test_worker_ready_handler_enqueues_refresh_once(monkeypatch):
+    from celery.signals import worker_ready
+
+    import cvenom.tasks as tasks
+
+    calls = []
+    monkeypatch.setattr(tasks.refresh_geoip_task, "delay", lambda: calls.append(1))
+    worker_ready.send(sender=None)
+    assert calls == [1]  # connected to the real signal, enqueues exactly once
+
+
+def test_worker_ready_handler_swallows_errors(monkeypatch, caplog):
+    import cvenom.tasks as tasks
+
+    def boom():
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(tasks.refresh_geoip_task, "delay", boom)
+    with caplog.at_level("WARNING", logger="cvenom.tasks"):
+        tasks.bootstrap_geoip()
+    assert "geoip bootstrap" in caplog.text

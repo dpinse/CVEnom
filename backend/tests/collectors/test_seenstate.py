@@ -7,7 +7,21 @@ from cvenom.collectors.seenstate import track_new
 
 log = logging.getLogger("test")
 
-TODAY = datetime.now(UTC).date()
+NOW = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
+TODAY = NOW.date()
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    """Freeze track_new's clock so it agrees with TODAY (no midnight-UTC flake)."""
+    from cvenom.collectors import seenstate
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW if tz is None else NOW.astimezone(tz)
+
+    monkeypatch.setattr(seenstate, "datetime", _FrozenDatetime)
 
 
 def _t(state, current, added_dates=None, max_age_days=14):

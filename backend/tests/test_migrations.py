@@ -9,6 +9,12 @@ from tests.conftest import TEST_DATABASE_URL  # noqa: F401  (rootdir import)
 
 SCRATCH = "cvenom_mig_test"
 EXPECTED = {"ix_cve_published_brin", "ix_story_published_brin", "ix_story_cve_link_cve_id"}
+GEO_EXPECTED = {
+    "ix_story_content_hash",
+    "ix_geo_event_observed_at_brin",
+    "ix_geo_event_country_kind",
+    "uq_geo_event_source_external_id",
+}
 
 
 @pytest.fixture
@@ -41,6 +47,35 @@ def test_migration_upgrade_and_downgrade(scratch_url):
     cfg = Config(str(backend / "alembic.ini"))
     cfg.set_main_option("script_location", str(backend / "migrations"))
     command.upgrade(cfg, "head")
-    assert EXPECTED <= _indexes(scratch_url)
+    assert (EXPECTED | GEO_EXPECTED) <= _indexes(scratch_url)
+    command.downgrade(cfg, "0001")
+    after = _indexes(scratch_url)
+    assert EXPECTED <= after
+    assert not (GEO_EXPECTED & after)
     command.downgrade(cfg, "base")
     assert not (EXPECTED & _indexes(scratch_url))
+
+
+def test_geo_migration_matches_model(scratch_url):
+    from cvenom.models import GeoEvent
+
+    backend = Path(__file__).resolve().parents[1]
+    cfg = Config(str(backend / "alembic.ini"))
+    cfg.set_main_option("script_location", str(backend / "migrations"))
+    command.upgrade(cfg, "head")
+    eng = create_engine(scratch_url)
+    with eng.connect() as c:
+        cols = {
+            r[0]: (r[1], r[2], r[3])
+            for r in c.execute(text(
+                "select column_name, data_type, is_nullable, column_default from information_schema.columns "
+                "where table_name='geo_event'"))
+        }
+    eng.dispose()
+    assert set(cols) == {c.name for c in GeoEvent.__table__.columns}
+    for c in GeoEvent.__table__.columns:
+        assert (cols[c.name][1] == "YES") == c.nullable, c.name
+    assert cols["asn"][0] == "bigint"
+    assert "now()" in cols["first_seen"][2]
+    assert cols["magnitude"][2].startswith("'1'")
+    assert cols["details"][2].startswith("'{}'")

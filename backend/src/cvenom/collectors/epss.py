@@ -47,9 +47,14 @@ class EpssCollector(Collector):
             page = await http_get_json(EPSS_URL, params={"limit": PAGE_SIZE, "offset": offset})
             if not pages:
                 score_date = _score_date([page])
-                if score_date is not None and score_date == self.state.get("score_date"):
-                    # EPSS publishes once a day: same score date, nothing new.
-                    log.info("epss: score date %s unchanged; skipping download", score_date)
+                if (
+                    score_date is not None
+                    and score_date == self.state.get("score_date")
+                    and self.state.get("cve_count") == self.state.get("last_cve_count")
+                ):
+                    # EPSS publishes once a day: same score date and no CVE rows
+                    # created since our last run, so nothing new to apply.
+                    log.info("epss: score date %s and cve count unchanged; skipping download", score_date)
                     return []
             pages.append(page)
             data = page.get("data") or []
@@ -84,4 +89,5 @@ class EpssCollector(Collector):
         score_date = _score_date(raw)
         if score_date is not None:
             self.state["score_date"] = score_date
+            self.state["last_cve_count"] = self.state.get("cve_count")
         return CollectorResult(cves=cves)
