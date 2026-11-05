@@ -16,6 +16,20 @@ def test_sanitize_keeps_plain_angle_brackets_and_ampersand_literal():
     assert "&lt;" not in out and "&amp;" not in out and "&gt;" not in out
 
 
+def test_sanitize_entity_encoded_markup_is_neutralized():
+    from cvenom.textutil import sanitize_text
+    out = sanitize_text("&lt;script&gt;alert(1)&lt;/script&gt;")
+    assert "<script" not in out
+    assert "alert(1)" not in out
+
+
+def test_sanitize_double_encoded_markup_is_neutralized():
+    from cvenom.textutil import sanitize_text
+    out = sanitize_text("&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;")
+    assert "<script" not in out
+    assert "alert(1)" not in out
+
+
 def test_content_hash_is_stable_and_order_sensitive():
     from cvenom.textutil import content_hash
     assert content_hash("t","s") == content_hash("t","s")

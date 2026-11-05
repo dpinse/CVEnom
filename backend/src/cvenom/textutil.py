@@ -14,6 +14,7 @@ _SEP = "\x1f"  # unit separator: keeps (title, summary) pairs unambiguous
 _SCRIPT_BLOCK = re.compile(
     r"<(script|style)\b[^>]*>.*?(?:</\1\s*>|$)", re.IGNORECASE | re.DOTALL
 )
+_MAX_PASSES = 5
 
 
 def _normalize(text: str) -> str:
@@ -33,12 +34,19 @@ def sanitize_text(raw: str | None) -> str:
     """
     if not raw:
         return ""
-    without_blocks = _SCRIPT_BLOCK.sub(" ", raw)
-    stripped = bleach.clean(without_blocks, tags=[], attributes={}, strip=True)
-    # bleach entity-encodes text ("&" -> "&amp;"); store true plain text so the
-    # frontend escapes exactly once on render.
-    decoded = html.unescape(stripped)
-    return _WS.sub(" ", decoded).strip()
+    text = raw
+    for _ in range(_MAX_PASSES):
+        # Each pass: drop script/style blocks, strip tags, then decode entities so
+        # plain text ("&" -> "&amp;" -> "&") is stored. Decoding can expose new
+        # markup (e.g. "&lt;script&gt;"), so repeat until the text stops changing.
+        without_blocks = _SCRIPT_BLOCK.sub(" ", text)
+        stripped = bleach.clean(without_blocks, tags=[], attributes={}, strip=True)
+        decoded = html.unescape(stripped)
+        if decoded == text:
+            return _WS.sub(" ", decoded).strip()
+        text = decoded
+    # Did not reach a fixed point: fail closed rather than store a partially cleaned value.
+    return ""
 
 
 def find_existing_story(session: Session, url: str, content_hash: str) -> Story | None:
