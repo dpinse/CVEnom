@@ -32,7 +32,8 @@ def test_beat_schedule_has_entry_per_collector_and_maintenance():
     assert purge["task"] == purge_geo_task.name
     assert isinstance(purge["schedule"], crontab)
     assert purge["schedule"] == crontab(minute=23)
-    assert set(beat_schedule) == collect | {"maintenance-geoip", "maintenance-purge-geo"}
+    assert set(beat_schedule) == collect | {"maintenance-geoip", "maintenance-purge-geo",
+                                            "alerts-dispatch", "maintenance-purge-sessions"}
 
 
 def test_maintenance_tasks_registered_on_celery_app():
@@ -600,3 +601,92 @@ def test_worker_process_init_handler_never_raises(monkeypatch):
 
     monkeypatch.setattr(tasks, "get_engine", boom)
     tasks.reset_db_engine_after_fork()
+
+
+def test_alerts_dispatch_and_purge_sessions_scheduled():
+    from celery.schedules import crontab
+    from cvenom.tasks import alerts_dispatch_task, beat_schedule, celery_app, purge_sessions_task
+    assert beat_schedule["alerts-dispatch"] == {"task": alerts_dispatch_task.name, "schedule": 60.0}
+    assert beat_schedule["maintenance-purge-sessions"]["schedule"] == crontab(minute=41, hour=3)
+    assert beat_schedule["maintenance-purge-sessions"]["task"] == purge_sessions_task.name
+    assert alerts_dispatch_task.name in celery_app.tasks and purge_sessions_task.name in celery_app.tasks
+
+
+def test_alerts_dispatch_job_runs_with_lock(db_session, factory):
+    import cvenom.tasks as tasks
+    lock = FakeLock()
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    out = tasks.alerts_dispatch_job(lock=lock, session_factory=factory, sinks={}, now=now)
+    assert out["ok"] is True and out["events"] == 0
+    assert lock.acquired == [("alerts-dispatch", 120)]
+    assert lock.released == ["alerts-dispatch"]
+
+
+def test_alerts_dispatch_job_lock_held(factory):
+    import cvenom.tasks as tasks
+    lock = FakeLock(held=True)
+    assert tasks.alerts_dispatch_job(lock=lock, session_factory=factory) == {"skipped": True}
+    assert lock.released == []
+
+
+def test_alerts_dispatch_job_never_raises():
+    import cvenom.tasks as tasks
+
+    @contextmanager
+    def bad():
+        raise RuntimeError("db down")
+        yield
+
+    lock = FakeLock()
+    assert tasks.alerts_dispatch_job(lock=lock, session_factory=bad, sinks={}) == {"ok": False}
+    assert lock.released == ["alerts-dispatch"]
+
+
+def test_alerts_dispatch_job_defaults_to_build_sinks(factory, monkeypatch):
+    import cvenom.tasks as tasks
+    called = []
+    monkeypatch.setattr(tasks, "build_sinks", lambda: called.append(1) or {})
+    tasks.alerts_dispatch_job(lock=FakeLock(), session_factory=factory)
+    assert called == [1]
+
+
+def test_purge_sessions_job_deletes_old_expired_and_revoked(db_session, factory):
+    import uuid
+    import cvenom.tasks as tasks
+    from sqlalchemy import select
+    from cvenom.models import User, UserSession, UserSessionUsedRefresh
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    u = User(email="p@x.io", password_hash="h", role="member")
+    db_session.add(u)
+    db_session.flush()
+
+    def mk(name, expires, revoked=None):
+        s = UserSession(id=uuid.uuid4(), user_id=u.id, refresh_hash=name * 64, expires_at=expires,
+                        revoked_at=revoked)
+        db_session.add(s)
+        return s
+
+    old = now - timedelta(days=8)
+    recent = now - timedelta(days=2)
+    future = now + timedelta(days=5)
+    s_old_exp = mk("a", old)
+    mk("b", future, revoked=old)          # old revoked
+    mk("c", recent)                       # recently expired: kept
+    mk("d", future, revoked=recent)       # recently revoked: kept
+    mk("e", future)                       # live: kept
+    db_session.flush()
+    db_session.add(UserSessionUsedRefresh(hash="z" * 64, session_id=s_old_exp.id))
+    db_session.flush()
+    lock = FakeLock()
+    out = tasks.purge_sessions_job(lock=lock, session_factory=factory, now=now)
+    assert out == {"ok": True, "deleted": 2}
+    db_session.expire_all()
+    assert {s.refresh_hash[0] for s in db_session.scalars(select(UserSession))} == {"c", "d", "e"}
+    assert db_session.scalars(select(UserSessionUsedRefresh)).all() == []
+    assert lock.acquired == [("maintenance-purge-sessions", 3600)]
+    assert lock.released == ["maintenance-purge-sessions"]
+
+
+def test_purge_sessions_job_lock_held(factory):
+    import cvenom.tasks as tasks
+    assert tasks.purge_sessions_job(lock=FakeLock(held=True), session_factory=factory) == {"skipped": True}

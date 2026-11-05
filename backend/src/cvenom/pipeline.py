@@ -223,7 +223,7 @@ def persist_events(session: Session, events: list[dict], *, source_default: str)
     """Write events as AlertEvent outbox rows in the caller's transaction (no commit).
 
     Malformed events are skipped with a WARNING, never raised. Events repeating a
-    (type, cve_id) pair within one call are written once. Returns the count added.
+    (type, cve_id) pair within one call are written once (events without a cve_id are never deduped). Returns the count added.
     """
     seen: set[tuple[str, str | None]] = set()
     added = 0
@@ -238,10 +238,14 @@ def persist_events(session: Session, events: list[dict], *, source_default: str)
         ):
             log.warning("skipping invalid alert event (type=%r)", etype if isinstance(etype, str) else None)
             continue
-        key = (etype, cve_id)
-        if key in seen:
+        if "\x00" in etype or "\x00" in source:
+            log.warning("skipping alert event with NUL in type/source")
             continue
-        seen.add(key)
+        if cve_id is not None:
+            key = (etype, cve_id)
+            if key in seen:
+                continue
+            seen.add(key)
         payload = {k: v for k, v in e.items() if k not in ("type", "cve_id", "source")}
         session.add(AlertEvent(type=etype, cve_id=cve_id, source=source, payload=_json_safe(payload)))
         added += 1

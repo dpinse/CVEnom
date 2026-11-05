@@ -206,3 +206,23 @@ def test_payload_json_safe(db_session):
     assert p["nested"] == {"d": "2026-01-03", "l": ["2026-01-04T00:00:00"]}
     assert p["nul"] == "ab"
     assert p["nan"] is None
+
+
+def test_nul_in_type_or_source_rejected(db_session, caplog):
+    with caplog.at_level("WARNING", logger="cvenom.pipeline"):
+        n = persist_events(db_session, [
+            {"type": "a\x00b", "cve_id": "CVE-2099-0001"},
+            {"type": "ok", "cve_id": "CVE-2099-0002", "source": "s\x00"},
+            {"type": "ok", "cve_id": "CVE-2099-0003"},
+        ], source_default="s")
+    assert n == 1
+    assert [r.cve_id for r in _rows(db_session)] == ["CVE-2099-0003"]
+    assert caplog.text.count("NUL") == 2
+
+
+def test_events_without_cve_id_not_deduped(db_session):
+    n = persist_events(db_session, [
+        {"type": "x", "n": 1}, {"type": "x", "n": 2},
+        {"type": "x", "cve_id": "CVE-2099-0001"}, {"type": "x", "cve_id": "CVE-2099-0001"},
+    ], source_default="s")
+    assert n == 3

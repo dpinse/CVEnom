@@ -15,13 +15,15 @@ import httpx
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_process_init, worker_ready
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select
 
 from cvenom.collectors import abusech, cfradar, dshield, epss, kev, news, nvd, osv, ransomware, vulncheck  # noqa: F401  (register)
 from cvenom.collectors.base import REGISTRY
 from cvenom.config import get_settings
 from cvenom.db import get_engine, session_scope
-from cvenom.models import CollectorRun, Cve
+from cvenom.alerts.dispatch import dispatch_once
+from cvenom.alerts.sinks import build_sinks
+from cvenom.models import CollectorRun, Cve, UserSession
 from cvenom.geoip import ASN_FILE, COUNTRY_FILE, refresh_geoip
 from cvenom.pipeline import ingest, persist_events, purge_old_geo_events
 
@@ -226,6 +228,60 @@ def purge_geo_task() -> dict:
     return purge_geo_job()
 
 
+ALERTS_DISPATCH_LOCK = "alerts-dispatch"
+ALERTS_DISPATCH_TTL = 120
+PURGE_SESSIONS_LOCK = "maintenance-purge-sessions"
+SESSION_RETENTION = timedelta(days=7)
+
+
+def alerts_dispatch_job(*, lock: CollectorLock | None = None, session_factory=session_scope,
+                        sinks=None, now: datetime | None = None) -> dict:
+    lock = lock if lock is not None else RedisLock()
+    if not lock.acquire(ALERTS_DISPATCH_LOCK, ALERTS_DISPATCH_TTL):
+        log.info("alerts dispatch already running; skipping")
+        return {"skipped": True}
+    try:
+        now = now if now is not None else datetime.now(timezone.utc)
+        sinks = sinks if sinks is not None else build_sinks()
+        return {"ok": True, **dispatch_once(session_factory, now, sinks)}
+    except Exception as exc:
+        log.error("alerts dispatch failed: %s", type(exc).__name__)
+        return {"ok": False}
+    finally:
+        try:
+            lock.release(ALERTS_DISPATCH_LOCK)
+        except Exception as exc:
+            log.warning("alerts dispatch lock release failed: %s", type(exc).__name__)
+
+
+def purge_sessions_job(*, lock: CollectorLock | None = None, session_factory=session_scope,
+                       now: datetime | None = None) -> dict:
+    lock = lock if lock is not None else RedisLock()
+    if not lock.acquire(PURGE_SESSIONS_LOCK, MAINTENANCE_LOCK_TTL):
+        log.info("session purge already running; skipping")
+        return {"skipped": True}
+    try:
+        now = now if now is not None else datetime.now(timezone.utc)
+        cutoff = now - SESSION_RETENTION
+        with session_factory() as session:
+            res = session.execute(delete(UserSession).where(
+                or_(UserSession.expires_at < cutoff, UserSession.revoked_at < cutoff)))
+            deleted = res.rowcount
+        return {"ok": True, "deleted": deleted}
+    finally:
+        lock.release(PURGE_SESSIONS_LOCK)
+
+
+@celery_app.task(name="cvenom.tasks.alerts_dispatch_task")
+def alerts_dispatch_task() -> dict:
+    return alerts_dispatch_job()
+
+
+@celery_app.task(name="cvenom.tasks.purge_sessions_task")
+def purge_sessions_task() -> dict:
+    return purge_sessions_job()
+
+
 beat_schedule = {
     f"collect-{n}": {
         "task": run_collector_task.name,
@@ -236,4 +292,6 @@ beat_schedule = {
 }
 beat_schedule["maintenance-geoip"] = {"task": refresh_geoip_task.name, "schedule": crontab(minute=17, hour="*/6")}
 beat_schedule["maintenance-purge-geo"] = {"task": purge_geo_task.name, "schedule": crontab(minute=23)}
+beat_schedule["alerts-dispatch"] = {"task": alerts_dispatch_task.name, "schedule": 60.0}
+beat_schedule["maintenance-purge-sessions"] = {"task": purge_sessions_task.name, "schedule": crontab(minute=41, hour=3)}
 celery_app.conf.beat_schedule = beat_schedule
