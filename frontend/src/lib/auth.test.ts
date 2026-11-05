@@ -1,4 +1,4 @@
-import { HttpResponse, http } from "msw";
+import { HttpResponse, delay, http } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { makeHub, makeLocks } from "../test/coord";
@@ -259,6 +259,26 @@ describe("cross-tab identity", () => {
     await a.auth.login("u2@x.co", "pw");
     await b.auth.login("u1@x.co", "pw");
     await vi.waitFor(() => expect(a.auth.getSnapshot().user?.id).toBe(1));
+  });
+
+  test("a /me that started before a logout does not set a user afterwards", async () => {
+    identityServer();
+    server.use(
+      http.get(`${B}/auth/me`, async ({ request }) => {
+        await delay(60);
+        const t = request.headers.get("authorization")?.slice(7) ?? "";
+        return HttpResponse.json(userFor(Number(JSON.parse(atob(t.split(".")[1])).sub)));
+      }),
+    );
+    const { tabs: [a], hub } = tabs();
+    a.client.adopt(jwt(2), 900);
+    const peer = hub.channel();
+    peer.postMessage({ type: "refreshed", access_token: jwt(1), expires_in: 900, sub: "1" }); // starts /me
+    await tick();
+    peer.postMessage({ type: "logout", sub: null });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(a.store.getToken()).toBeNull();
+    expect(a.auth.getSnapshot().user).toBeNull();
   });
 
   test("if /me fails after login the server session is logged out before local state clears", async () => {

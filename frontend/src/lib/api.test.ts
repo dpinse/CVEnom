@@ -378,6 +378,60 @@ describe("cross-tab (Web Locks + broadcast events)", () => {
     expect(b.store.getToken()).toBe("peer");
   });
 
+  test("a logout broadcast during an in-flight refresh that returns 200 leaves the tab logged out", async () => {
+    const s = useServer(["new"], async () => {
+      await delay(80);
+      return HttpResponse.json(tokenBody("new"));
+    });
+    const hub = makeHub();
+    const b = mk({ locks: null, channel: hub.channel() });
+    b.client.adopt("old", 900);
+    b.store.setUser({ id: 1, email: "a@b.co", role: "member" });
+    const p = caught(b.client.api("/cves"));
+    await vi.waitFor(() => expect(s.refreshCalls).toBe(1));
+    hub.channel().postMessage({ type: "logout", sub: "1" });
+    expect(await p).toBeInstanceOf(AuthError);
+    expect(b.store.getToken()).toBeNull();
+    expect(b.store.getUser()).toBeNull();
+  });
+
+  test("peer broadcast, then logout, then the in-flight refresh gets 401: lastPeer is not adopted", async () => {
+    const s = useServer([], async () => {
+      await delay(80);
+      return HttpResponse.json({ error: "invalid_token" }, { status: 401 });
+    });
+    const hub = makeHub();
+    const peer = hub.channel();
+    const b = mk({ locks: null, channel: hub.channel() });
+    b.client.adopt("old", 900);
+    peer.postMessage({ type: "refreshed", access_token: "peer", expires_in: 900, sub: null });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(b.store.getToken()).toBe("peer");
+    const p = caught(b.client.api("/cves"));
+    await vi.waitFor(() => expect(s.refreshCalls).toBe(1));
+    peer.postMessage({ type: "logout", sub: null });
+    expect(await p).toBeInstanceOf(AuthError);
+    expect(b.store.getToken()).toBeNull();
+  });
+
+  test("after a logout, a peer refreshed broadcast is not accepted by the discarded in-flight refresh", async () => {
+    const s = useServer([], async () => {
+      await delay(80);
+      return HttpResponse.json(tokenBody("new"));
+    });
+    const hub = makeHub();
+    const peer = hub.channel();
+    const b = mk({ locks: null, channel: hub.channel() });
+    b.client.adopt("old", 900);
+    const p = caught(b.client.api("/cves"));
+    await vi.waitFor(() => expect(s.refreshCalls).toBe(1));
+    peer.postMessage({ type: "logout", sub: null });
+    await new Promise((r) => setTimeout(r, 5));
+    peer.postMessage({ type: "refreshed", access_token: "peer", expires_in: 900, sub: null });
+    await p;
+    expect(b.store.getToken()).toBeNull();
+  });
+
   test("401 on refresh with no recent peer broadcast still logs out", async () => {
     useServer([], () => HttpResponse.json({ error: "invalid_token" }, { status: 401 }));
     const { client, store } = mk({ locks: null });

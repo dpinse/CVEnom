@@ -129,6 +129,10 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inflight: Promise<string> | null = null;
   let lastPeer: PeerToken | null = null;
+  /** Bumped by every clear() (logout, failed refresh, peer logout). In-flight work that began
+   *  under an older epoch must not apply its result. */
+  let epoch = 0;
+  let inflightEpoch = 0;
 
   // ---- token + proactive refresh ------------------------------------------
 
@@ -158,14 +162,21 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   function clear() {
     clearTimeout(timer);
     timer = undefined;
+    epoch++;
+    lastPeer = null;
     store.clear();
   }
 
   /** Reload the signed-in identity from the server (fire and forget). */
   function loadMe() {
+    const startEpoch = epoch;
+    const startSub = subOf(store.getToken() ?? "");
     api<Me>("/auth/me").then(
       (me) => {
-        if (store.getToken()) store.setUser(me);
+        // Drop a result that began before a logout or a switch to another user.
+        const t = store.getToken();
+        if (epoch !== startEpoch || !t || subOf(t) !== startSub) return;
+        store.setUser(me);
       },
       () => undefined,
     );
@@ -190,7 +201,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
         if (typeof expires_in !== "number" || !Number.isFinite(expires_in)) return;
         if (m.type === "refreshed") {
           // A guest tab must not be signed in by a peer's refresh (nor undo a logout).
-          if (!store.getToken() && !inflight) return;
+          if (!store.getToken() && !(inflight && inflightEpoch === epoch)) return;
           lastPeer = { token: access_token, expiresIn: expires_in, sub, at: Date.now() };
           adopt(access_token, expires_in);
           syncIdentity(sub);
@@ -258,6 +269,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   // ---- refresh (single flight in tab; Web Locks across tabs) ------------------
 
   async function doRefresh(): Promise<string> {
+    const startEpoch = epoch;
     let res: Response;
     try {
       res = await doFetch(`${base}/auth/refresh`, {
@@ -270,6 +282,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     }
     if (res.ok) {
       const body = await readBody(res);
+      if (epoch !== startEpoch) throw new AuthError(); // logged out meanwhile: discard
       const b = body as Partial<TokenResponse> | undefined;
       if (!b || typeof b.access_token !== "string" || typeof b.expires_in !== "number") {
         throw new ApiError(res.status, "bad_refresh_response");
@@ -286,6 +299,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     if (res.status === 401 || res.status === 403) {
       // A peer tab may have rotated the cookie a moment ago (the backend's grace window
       // rejects us): use the token it broadcast rather than logging everyone out.
+      if (epoch !== startEpoch) throw new AuthError(); // already logged out: never clear newer state
       const p = lastPeer;
       const u = store.getUser();
       if (p && Date.now() - p.at < PEER_TOKEN_WINDOW_MS && (!u || p.sub === null || String(u.id) === p.sub)) {
@@ -317,6 +331,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       }
     })();
     inflight = p;
+    inflightEpoch = epoch;
     return p;
   }
 
