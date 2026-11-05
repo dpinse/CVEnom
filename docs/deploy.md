@@ -22,6 +22,8 @@ docker compose -f deploy/docker-compose.prod.yml up -d
   ```
 
   Export `ADMIN_PASSWORD` in your shell first (or pipe it on stdin with `-T`).
+- DB and Redis passwords must be URL-safe (`openssl rand -hex 24`): compose builds `DATABASE_URL`
+  and `REDIS_URL` from them without escaping.
 - Sign in as the admin and invite further users from the admin API.
 
 Only `api` publishes a port, and only on `127.0.0.1:8000`. Postgres and Redis publish nothing.
@@ -29,21 +31,35 @@ All app containers run read-only, as uid 10001, with all capabilities dropped.
 
 ## Cloudflare and reverse proxies
 
-**Cloudflare Tunnel (recommended).** Run `cloudflared` on the same host and point it at
-`http://127.0.0.1:8000`. Set:
+Compose pins the `cvenom` network to `172.28.0.0/24` with gateway `172.28.0.1`. This matters
+because the proxy address the app must trust depends on how the proxy reaches it.
+
+**(a) Cloudflare Tunnel or any reverse proxy running on the host** and connecting to
+`127.0.0.1:8000`. Docker NATs the published port, so the container sees the bridge **gateway
+`172.28.0.1`** as its peer. Set both to it (these are the defaults in compose and `.env.example`):
 
 ```
-TRUSTED_PROXY_CIDRS='["<cloudflared source network>"]'
-TRUST_CF_CONNECTING_IP=true
-FORWARDED_ALLOW_IPS=<same source address(es), comma separated>
+TRUSTED_PROXY_CIDRS='["172.28.0.1/32"]'
+FORWARDED_ALLOW_IPS=172.28.0.1
 ```
 
-`TRUST_CF_CONNECTING_IP=true` is only safe when every request arrives through Cloudflare and
-`TRUSTED_PROXY_CIDRS` contains only that hop.
+Set `TRUST_CF_CONNECTING_IP=true` only for cloudflared (every request must come through Cloudflare).
+For a non-Cloudflare host proxy (nginx, Caddy): have it strip any client-supplied
+`CF-Connecting-IP`, set `X-Forwarded-For` itself, and leave `TRUST_CF_CONNECTING_IP=false`.
 
-**Any other reverse proxy (nginx, Caddy, Traefik).** Have it strip any client-supplied
-`CF-Connecting-IP`, set `X-Forwarded-For` itself, and set `TRUSTED_PROXY_CIDRS` and
-`FORWARDED_ALLOW_IPS` to the proxy's address. Leave `TRUST_CF_CONNECTING_IP=false`.
+**(b) A reverse proxy running as a container on the `cvenom` network.** The peer is that
+container's IP on `172.28.0.0/24`: give it a fixed `ipv4_address` and use `<ip>/32` (or the
+subnet) for both settings.
+
+**(c) `127.0.0.1` is wrong for the published-port topology.** The connection arrives from the
+bridge gateway, not loopback. Leaving the setting at `127.0.0.1` makes uvicorn ignore forwarded
+headers, so every visitor appears as one bridge IP and they all share a single rate-limit and
+login-throttle bucket.
+
+**(d) Verify.** Request `/api/health` through the tunnel or proxy, then confirm the client IP the
+app sees is the real visitor's, not `172.28.0.1`: temporarily add `--access-log` to the `api` line
+in `backend/docker-entrypoint.sh` (or run uvicorn once with it), rebuild, and check
+`docker compose -f deploy/docker-compose.prod.yml logs api`. Remove it afterwards.
 
 **Lock down the origin.** Do not rely on Cloudflare alone. Keep `127.0.0.1:8000` bound to loopback
 (or firewall the port to the proxy), and if the origin is reachable from the internet, require
@@ -84,6 +100,10 @@ Redis runs with `--maxmemory 256mb --maxmemory-policy volatile-ttl --appendonly 
 before rate-limit counters (60 s and 900 s), and Celery broker messages have no TTL so they are
 never evicted. Under memory pressure, caching degrades first and queued work stays safe.
 
+The Redis password is passed as the `--requirepass` argument, so it is visible in
+`docker inspect` and `ps`. That is acceptable when only the operator has Docker access; the upgrade
+path is a mounted `redis.conf` or a Docker secret.
+
 ## Free API keys
 
 | Setting | Source |
@@ -101,7 +121,10 @@ All are optional; sources run unauthenticated or are skipped when a key is blank
 ## Lock file
 
 `backend/requirements.lock` pins every runtime dependency with sha256 hashes, and the image
-installs it with `pip install --require-hashes`. It targets Linux and CPython 3.14. Regenerate from
+installs it with `pip install --require-hashes`. The build backend (setuptools, wheel) is pinned
+the same way in `backend/build-constraints.lock`, generated with
+`uv pip compile --generate-hashes --python-platform linux --python-version 3.14 --no-header` from a
+file listing `setuptools` and `wheel`; the app is then installed with `--no-build-isolation`. It targets Linux and CPython 3.14. Regenerate from
 `backend/` (requires [uv](https://docs.astral.sh/uv/)) after changing `[project] dependencies`:
 
 ```sh

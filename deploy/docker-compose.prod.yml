@@ -18,6 +18,8 @@ x-app: &app
   security_opt:
     - "no-new-privileges:true"
   user: "10001:10001"
+  networks:
+    - cvenom
 
 services:
   migrate:
@@ -32,6 +34,12 @@ services:
     <<: *app
     command: ["api"]
     restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://cvenom_app:${APP_DB_PASSWORD:?}@postgres:5432/cvenom
+      REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
+      GEOIP_DIR: /data/geoip
+      # Peer seen by the container for a host process hitting 127.0.0.1:8000 is the bridge gateway.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.28.0.1}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -73,6 +81,8 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    networks:
+      - cvenom
     environment:
       POSTGRES_USER: postgres
       POSTGRES_DB: cvenom
@@ -82,7 +92,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d cvenom"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d cvenom"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -90,6 +100,8 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
+    networks:
+      - cvenom
     # volatile-ttl evicts only keys with a TTL, shortest first: 30 s cache entries
     # go before rate-limit counters (60 s / 900 s). Celery broker messages carry
     # no TTL and are never evicted.
@@ -112,6 +124,13 @@ services:
   #   security_opt: ["no-new-privileges:true"]
   #   ports:
   #     - "127.0.0.1:8080:8080"
+
+networks:
+  cvenom:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+          gateway: 172.28.0.1
 
 volumes:
   pgdata:

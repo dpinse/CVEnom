@@ -169,3 +169,35 @@ def test_init_script_uses_psql_variables():
     assert "APP_DB_PASSWORD" not in sql
     assert ":'pw'" in sql
     assert "NOSUPERUSER" in text
+
+
+GATEWAY = "172.28.0.1"
+
+
+def test_network_pinned_and_attached(compose):
+    cfg = compose["networks"]["cvenom"]["ipam"]["config"][0]
+    assert cfg["subnet"] == "172.28.0.0/24" and cfg["gateway"] == GATEWAY
+    for name, svc in compose["services"].items():
+        assert "cvenom" in svc["networks"], name
+
+
+def test_forwarded_allow_ips_defaults_to_gateway(compose):
+    env = compose["services"]["api"]["environment"]
+    assert env["FORWARDED_ALLOW_IPS"] == "${FORWARDED_ALLOW_IPS:-" + GATEWAY + "}"
+
+
+def test_env_example_trusted_proxy_cidrs_has_gateway():
+    m = re.search(r"(?m)^TRUSTED_PROXY_CIDRS=(.*)$", ENV_EXAMPLE.read_text())
+    assert m and GATEWAY in m.group(1)
+
+
+def test_postgres_healthcheck_uses_tcp(compose):
+    assert "-h 127.0.0.1" in " ".join(compose["services"]["postgres"]["healthcheck"]["test"])
+
+
+def test_build_is_fully_hashed():
+    text = DOCKERFILE.read_text()
+    assert "--no-build-isolation" in text
+    assert "build-constraints.lock" in text
+    bc = (ROOT / "backend" / "build-constraints.lock").read_text()
+    assert "setuptools==" in bc and "--hash=sha256:" in bc

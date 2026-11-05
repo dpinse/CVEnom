@@ -10,9 +10,12 @@ WORKDIR /build
 COPY requirements.lock .
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 # The app itself (all of its dependencies are already installed and pinned).
+# Build backend is hash-pinned too, so the build uses no unhashed downloads.
+COPY build-constraints.lock .
+RUN pip install --no-cache-dir --require-hashes -r build-constraints.lock
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip install --no-cache-dir --no-deps .
+RUN pip install --no-cache-dir --no-deps --no-build-isolation .
 
 FROM python:3.14-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
