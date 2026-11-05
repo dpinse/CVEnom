@@ -9,6 +9,7 @@ import "./styles/base.css";
 import "./styles/shell.css";
 import "./styles/globe.css";
 import "./styles/velocity.css";
+import "./styles/lanes.css";
 import { initTheme } from "./lib/theme";
 
 initTheme();

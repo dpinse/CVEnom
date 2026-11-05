@@ -1,0 +1,42 @@
+import { useCallback, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
+import { safeHref } from "./text";
+
+export type Selection = { kind: "cve"; id: string } | { kind: "story"; url: string };
+
+export const CVE_ID_RE = /^CVE-\d{4}-\d{4,7}$/;
+
+/** Pure parser: validates `cve` and `story` params; anything invalid is ignored. */
+export function parseSelection(sp: URLSearchParams): Selection | null {
+  const cve = sp.get("cve");
+  if (cve !== null && CVE_ID_RE.test(cve)) return { kind: "cve", id: cve };
+  const story = sp.get("story");
+  if (story !== null) {
+    const url = safeHref(story);
+    if (url !== null) return { kind: "story", url };
+  }
+  return null;
+}
+
+/** Reads and writes the drawer selection through `?cve=` / `?story=`. */
+export function useSelection() {
+  const [sp, setSp] = useSearchParams();
+  const selection = useMemo(() => parseSelection(sp), [sp]);
+  const select = useCallback(
+    (s: Selection | null) => {
+      setSp((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("cve");
+        next.delete("story");
+        if (s?.kind === "cve" && CVE_ID_RE.test(s.id)) next.set("cve", s.id);
+        else if (s?.kind === "story") {
+          const url = safeHref(s.url);
+          if (url !== null) next.set("story", url);
+        }
+        return next;
+      });
+    },
+    [setSp],
+  );
+  return { selection, select };
+}
