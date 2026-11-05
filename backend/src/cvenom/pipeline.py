@@ -97,7 +97,7 @@ def _drop_known_kev_events(session: Session, events: list[dict]) -> list[dict]:
 def _sanitized(cve: NormalizedCve) -> NormalizedCve:
     return cve.model_copy(update={
         "summary": sanitize_text(cve.summary),
-        "affected": [sanitize_text(a) for a in cve.affected],
+        "affected": [clean for a in cve.affected if (clean := sanitize_text(a))],
     })
 
 

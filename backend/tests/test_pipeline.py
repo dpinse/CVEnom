@@ -368,3 +368,15 @@ def test_enrich_path_issues_o_chunks_selects_and_no_savepoints(db_session):
     assert len(stmts) <= 3 + len(existing) + 5  # chunk SELECTs + one UPDATE per known row
     assert db_session.query(Cve).count() == len(existing)  # nothing stub-created
     assert db_session.get(Cve, existing[1]).epss == 0.5
+
+
+
+@pytest.mark.parametrize("enrich", [False, True])
+def test_empty_affected_entries_filtered_after_sanitizing(db_session, enrich):
+    cid = "CVE-2026-5501"
+    if enrich:
+        _insert_cve(db_session, cid)
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id=cid, affected=["<script>alert(1)</script>", "", "   ", "<b></b>", "nginx"])]),
+        enrich_only=enrich)
+    assert db_session.get(Cve, cid).affected == ["nginx"]
