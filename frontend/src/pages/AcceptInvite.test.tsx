@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation, useNavigationType } from "react-router-dom";
 import { afterEach, describe, expect, test } from "vitest";
 import { at, fill, loginOk } from "../test/authpages";
 import { Where } from "../test/authpages";
@@ -13,13 +13,20 @@ setupMsw();
 afterEach(cleanup);
 
 const TOKEN = "s3cret-token-value";
+
+/** Where the router is, fragment included (the token must not stay in it). */
+function HashProbe() {
+  const l = useLocation();
+  const nav = useNavigationType();
+  return <p data-testid="href">{`${nav} ${l.pathname}${l.search}${l.hash}`}</p>;
+}
 const GOOD = "a long enough pass";
 
 function app(path: string) {
   return renderAt(
     <Routes>
-      <Route path="/invite/:token" element={<AcceptInvite mode="invite" />} />
-      <Route path="/reset/:token" element={<AcceptInvite mode="reset" />} />
+      <Route path="/invite" element={<><AcceptInvite mode="invite" /><HashProbe /></>} />
+      <Route path="/reset" element={<><AcceptInvite mode="reset" /><HashProbe /></>} />
       <Route path="/login" element={<><Login /><Where /></>} />
       <Route path="*" element={<Where />} />
     </Routes>,
@@ -38,7 +45,7 @@ const accept = (status: number, body: Record<string, unknown>, onBody?: (b: unkn
 describe("AcceptInvite form", () => {
   test("new-password autocomplete, labels, show toggle", () => {
     guest();
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     const pw = screen.getByLabelText("New password");
     const cf = screen.getByLabelText("Confirm password");
     expect(pw).toHaveAttribute("autocomplete", "new-password");
@@ -56,7 +63,7 @@ describe("AcceptInvite form", () => {
     guest();
     let called = false;
     accept(201, {}, () => (called = true));
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     fill("New password", "short");
     fill("Confirm password", "short");
     submit();
@@ -66,7 +73,7 @@ describe("AcceptInvite form", () => {
 
   test("mismatch and whitespace-only are blocked", async () => {
     guest();
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     fill("New password", GOOD);
     fill("Confirm password", GOOD + "x");
     submit();
@@ -89,7 +96,7 @@ describe("AcceptInvite form", () => {
         return HttpResponse.json({ access_token: "tok", token_type: "bearer", expires_in: 900 });
       }),
     );
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     fill("New password", GOOD);
     fill("Confirm password", GOOD);
     submit();
@@ -104,7 +111,7 @@ describe("AcceptInvite form", () => {
     guest();
     accept(201, { id: 5, email: "new@example.com", role: "member" });
     server.use(http.post("http://localhost/api/auth/login", () => HttpResponse.json({ error: "invalid_credentials" }, { status: 401 })));
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     fill("New password", GOOD);
     fill("Confirm password", GOOD);
     submit();
@@ -127,7 +134,7 @@ describe("AcceptInvite form", () => {
         return new HttpResponse(null, { status: 204 });
       }),
     );
-    app(`/reset/${TOKEN}`);
+    app(`/reset#${TOKEN}`);
     expect(screen.getByRole("heading", { name: /reset password/i })).toBeInTheDocument();
     fill("New password", GOOD);
     fill("Confirm password", GOOD);
@@ -141,7 +148,7 @@ describe("AcceptInvite form", () => {
   test("400 shows the invalid link message", async () => {
     guest();
     accept(400, { error: "invalid_invite" });
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     fill("New password", GOOD);
     fill("Confirm password", GOOD);
     submit();
@@ -151,7 +158,7 @@ describe("AcceptInvite form", () => {
   test("422 weak_password shows the policy message; 429 the retry time", async () => {
     guest();
     accept(422, { error: "weak_password" });
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     fill("New password", GOOD);
     fill("Confirm password", GOOD);
     submit();
@@ -164,7 +171,7 @@ describe("AcceptInvite form", () => {
   test("the token never reaches web storage, and the page has no external links", async () => {
     guest();
     accept(400, { error: "invalid_invite" });
-    const { container } = app(`/invite/${TOKEN}`);
+    const { container } = app(`/invite#${TOKEN}`);
     fill("New password", GOOD);
     fill("Confirm password", GOOD);
     submit();
@@ -177,7 +184,7 @@ describe("AcceptInvite form", () => {
 
   test("the referrer meta is removed when leaving the page", () => {
     guest();
-    const { unmount } = app(`/invite/${TOKEN}`);
+    const { unmount } = app(`/invite#${TOKEN}`);
     unmount();
     expect(document.querySelector('meta[name="referrer"]')).toBeNull();
   });
@@ -204,7 +211,7 @@ describe("AcceptInvite hardening", () => {
     guest();
     accept(201, { id: 5, email: "new@example.com", role: "member" });
     loginOk();
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     await go();
     await waitFor(() => expect(at()).toBe("/"));
     expect(screen.getByTestId("navtype")).toHaveTextContent("REPLACE");
@@ -213,7 +220,7 @@ describe("AcceptInvite hardening", () => {
     guest();
     accept(201, { id: 5, email: "new@example.com", role: "member" });
     logoutCounter();
-    app(`/reset/${TOKEN}`);
+    app(`/reset#${TOKEN}`);
     await go();
     await waitFor(() => expect(at()).toBe("/login"));
     expect(screen.getByTestId("navtype")).toHaveTextContent("REPLACE");
@@ -222,7 +229,7 @@ describe("AcceptInvite hardening", () => {
   test("a non-weak_password 422 means the link is invalid", async () => {
     guest();
     accept(422, { error: "validation_error" });
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     await go();
     expect(await screen.findByText("This link is invalid or expired")).toBeInTheDocument();
   });
@@ -231,7 +238,7 @@ describe("AcceptInvite hardening", () => {
     guest();
     let called = false;
     accept(201, {}, () => (called = true));
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     expect(screen.getByLabelText("New password")).toHaveAttribute("maxlength", "1024");
     expect(screen.getByLabelText("Confirm password")).toHaveAttribute("maxlength", "1024");
     const long = "a".repeat(300);
@@ -244,7 +251,7 @@ describe("AcceptInvite hardening", () => {
 
   test("shows the 12-character rule linked with aria-describedby", () => {
     guest();
-    app(`/invite/${TOKEN}`);
+    app(`/invite#${TOKEN}`);
     const pw = screen.getByLabelText("New password");
     const hint = screen.getByText(/At least 12 characters/);
     expect(pw.getAttribute("aria-describedby")).toBe(hint.id);
@@ -254,7 +261,7 @@ describe("AcceptInvite hardening", () => {
     guest();
     accept(201, { id: 2, email: "member@example.com", role: "member" });
     const outs = logoutCounter();
-    app(`/reset/${TOKEN}`);
+    app(`/reset#${TOKEN}`);
     await go();
     await waitFor(() => expect(at()).toBe("/login"));
     expect(outs()).toBe(1);
@@ -264,7 +271,7 @@ describe("AcceptInvite hardening", () => {
     signIn(member);
     accept(201, { id: 2, email: "MEMBER@Example.com", role: "member" });
     const outs = logoutCounter();
-    app(`/reset/${TOKEN}`);
+    app(`/reset#${TOKEN}`);
     await go();
     await waitFor(() => expect(at()).toBe("/login"));
     expect(outs()).toBe(1);
@@ -275,12 +282,46 @@ describe("AcceptInvite hardening", () => {
     signIn(admin);
     accept(201, { id: 2, email: "member@example.com", role: "member" });
     const outs = logoutCounter();
-    app(`/reset/${TOKEN}`);
+    app(`/reset#${TOKEN}`);
     await go();
     await waitFor(() => expect(at()).toBe("/"));
     expect(outs()).toBe(0);
     expect(authStore.getSnapshot().user).toEqual(admin);
     expect(screen.getByTestId("navtype")).toHaveTextContent("REPLACE");
     expect(screen.getByTestId("state").textContent).toContain("member@example.com");
+  });
+});
+
+describe("M2: the token travels in the URL fragment", () => {
+  test("the page reads the fragment, strips it from history (replace) and posts the token", async () => {
+    guest();
+    let body: unknown;
+    accept(400, { error: "invalid_invite" }, (b) => (body = b));
+    app(`/invite#${TOKEN}`);
+    await waitFor(() => expect(screen.getByTestId("href")).toHaveTextContent(/^REPLACE \/invite$/));
+    fill("New password", GOOD);
+    fill("Confirm password", GOOD);
+    submit();
+    await screen.findByText("This link is invalid or expired");
+    expect(body).toEqual({ token: TOKEN, password: GOOD });
+  });
+
+  test.each(["/invite", "/invite#", "/reset", "/reset#"])("%s (no token) shows the invalid-link state and never posts", async (path) => {
+    guest();
+    let called = false;
+    accept(201, {}, () => (called = true));
+    app(path);
+    expect(await screen.findByText("This link is invalid or expired")).toBeInTheDocument();
+    fill("New password", GOOD);
+    fill("Confirm password", GOOD);
+    submit();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(called).toBe(false);
+  });
+
+  test("the old /invite/<token> path form is not a route", async () => {
+    guest();
+    app(`/invite/${TOKEN}`);
+    expect(screen.queryByRole("heading", { name: /accept invite/i })).toBeNull();
   });
 });

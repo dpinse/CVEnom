@@ -99,7 +99,7 @@ export default function AdminUsers() {
           title: "Password reset link",
           subject: u.email,
           label: "Reset link (send it to the user)",
-          value: `${location.origin}/reset/${res.token}`,
+          value: `${location.origin}/reset#${encodeURIComponent(res.token)}`, // fragment: never sent to the server
           expiresAt: res.expires_at,
         },
       ]);

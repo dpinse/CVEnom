@@ -45,7 +45,7 @@ export default function AdminInvites() {
           title: "Invite link",
           subject: body.email,
           label: "Invite link (send it to the invitee)",
-          value: `${location.origin}/invite/${res.token}`,
+          value: `${location.origin}/invite#${encodeURIComponent(res.token)}`, // fragment: never sent to the server
           expiresAt: res.expires_at,
         },
       ]);

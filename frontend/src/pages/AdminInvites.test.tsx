@@ -93,8 +93,10 @@ describe("AdminInvites", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create invite" }));
 
     const panel = await screen.findByRole("region", { name: /Invite link/ });
-    const link = `${location.origin}/invite/${TOKEN}`;
+    // M2: the token rides in the fragment, which browsers never send to nginx/Cloudflare logs
+    const link = `${location.origin}/invite#${TOKEN}`;
     expect(within(panel).getByDisplayValue(link)).toHaveAttribute("readonly");
+    expect(within(panel).queryByDisplayValue(new RegExp(`/invite/${TOKEN}`))).toBeNull();
     expect(within(panel).getByText("This won't be shown again")).toBeInTheDocument();
     expect(within(panel).getByText(/Expires/)).toBeInTheDocument();
     expect(calls[0].body).toEqual({ email: "new@example.com", role: "admin" });

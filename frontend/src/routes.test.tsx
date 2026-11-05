@@ -74,10 +74,10 @@ describe("guards", () => {
   test("invite and reset routes render the AcceptInvite page", async () => {
     handlers();
     guest();
-    at("/reset/abc");
+    at("/reset#abc");
     expect(await screen.findByRole("heading", { name: "Reset password" })).toBeInTheDocument();
     cleanup();
-    at("/invite/abc");
+    at("/invite#abc");
     expect(await screen.findByRole("heading", { name: "Accept invite" })).toBeInTheDocument();
   });
   test("unknown routes show a 404", async () => {

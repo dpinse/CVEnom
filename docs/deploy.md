@@ -29,7 +29,9 @@ command aborts.
   `.env`: that file is handed to every app container.
 - DB and Redis passwords must be URL-safe (`openssl rand -hex 24`): compose builds `DATABASE_URL`
   and `REDIS_URL` from them without escaping.
-- Sign in as the admin and invite further users from the admin API.
+- Sign in as the admin and invite further users from the admin UI (Admin → Invites). Invite and
+  password-reset links carry their token in the URL fragment (`/invite#<token>`, `/reset#<token>`),
+  which browsers never send to the server, so it stays out of nginx and Cloudflare access logs.
 
 Only `frontend` (nginx) publishes a port, and only on `127.0.0.1:8080`. The api, Postgres and Redis
 publish nothing: the api is reachable only through nginx. The `frontend` container runs
@@ -131,6 +133,21 @@ IPs or skip its rate limits.
 connect to the container, otherwise forwarded headers are ignored (the image default is
 `127.0.0.1`; compose sets `172.28.0.1,172.28.0.10`).
 
+**TLS is required in front of nginx.** nginx itself speaks plain http on `127.0.0.1:8080`; the
+browser must reach it over https (Cloudflare, cloudflared or your reverse proxy terminates TLS).
+Served over plain http on any other host name or IP:
+
+- the CSP's `upgrade-insecure-requests` makes the browser fetch every script, stylesheet and font
+  over https, which nothing answers, so the page comes up blank;
+- the refresh cookie is `Secure`, so the browser drops it: sign-in lasts only until the next reload
+  or the access token's expiry.
+
+For local evaluation use `http://localhost:8080` (or `http://127.0.0.1:8080`). Current Chromium and
+Firefox treat loopback as a secure context: they do not upgrade its requests, and they keep a
+`Secure` cookie set by `http://localhost`. `frontend/e2e/csp.spec.ts` loads the production headers,
+`upgrade-insecure-requests` included, over `http://127.0.0.1` in both browsers. A LAN address or
+host name over http is not exempt.
+
 ## Content Security Policy and security headers
 
 nginx sends these on every response (`always`, including errors); proxied `/api` responses keep
@@ -161,8 +178,13 @@ worker is a same-origin module worker; React and MapLibre set styles through the
   deliberately no nginx route for them; keep `API_DOCS=false`.
 - **Response headers.** The api sets CSP, HSTS, nosniff, Referrer-Policy and X-Frame-Options itself;
   nginx hides those five from `/api/` responses (`proxy_hide_header`) and sends its own, so each
-  appears exactly once. nginx's values equal or exceed the api's for JSON. Any other api header
-  (`Cache-Control`, ...) passes through untouched.
+  appears exactly once. HSTS, nosniff, Referrer-Policy and X-Frame-Options match or exceed the
+  api's. The CSP does not: the SPA policy replaces the api's stricter `default-src 'none';
+  frame-ancestors 'none'` on `/api/` responses. That is acceptable because those responses are JSON
+  served with `nosniff` (a browser will not run or render them as a document), and framing is still
+  refused by `frame-ancestors 'none'` and `X-Frame-Options: DENY`. A per-URI CSP (the api's policy
+  on `/api/`) is a possible future hardening. Any other api header (`Cache-Control`, ...) passes
+  through untouched.
 - **X-Forwarded-Proto.** nginx passes the gateway's `X-Forwarded-Proto` through only when the peer is
   the trusted gateway and the value is exactly `http` or `https` (cloudflared connects over plain
   http, so `$scheme` alone would always say `http`); otherwise it sends `$scheme`.
@@ -230,10 +252,6 @@ path is a mounted `redis.conf` or a Docker secret.
 
 ## API keys
 
-Blank = that source is skipped, or runs unauthenticated where it supports that. The ransomware.live,
-Cloudflare Radar and abuse.ch ThreatFox collectors are **off** while their key is blank; DShield and
-Feodo need no key.
-
 | Setting | Source |
 | --- | --- |
 | `NVD_API_KEY` | https://nvd.nist.gov/developers/request-an-api-key |
@@ -243,6 +261,10 @@ Feodo need no key.
 | `CF_RADAR_TOKEN` | Cloudflare dashboard, API Tokens (Radar read) |
 | `ABUSECH_AUTH_KEY` | https://auth.abuse.ch/ |
 | `RANSOMWARE_LIVE_API_KEY` | ransomware.live Pro key (paid). The collector is OFF while this is blank. Polls hourly per their fair-use policy. |
+
+All keys are optional. A blank key means that source is skipped, or runs unauthenticated where it
+supports that: the ransomware.live, Cloudflare Radar and abuse.ch ThreatFox collectors are **off**
+while their key is blank, and DShield and Feodo need no key.
 
 ### ransomware.live fair use
 
@@ -257,8 +279,6 @@ Feodo need no key.
   count includes hidden sources see "Some sources are visible to signed-in users only."
 - Story and per-CVE counts (`recent_story_count`) and lane placement include ransomware.live
   stories for everyone: they are aggregate statistics, not records.
-
-All keys are optional; a source without its key is skipped (or runs unauthenticated where it supports that).
 
 ## Lock file
 

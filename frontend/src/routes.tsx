@@ -22,8 +22,9 @@ export function AppRoutes() {
           <Route path="search" element={<Search />} />
         </Route>
         <Route path="login" element={<Login />} />
-        <Route path="invite/:token" element={<AcceptInvite mode="invite" />} />
-        <Route path="reset/:token" element={<AcceptInvite mode="reset" />} />
+        {/* The secret is in the fragment (#<token>), never the path: see AcceptInvite. */}
+        <Route path="invite" element={<AcceptInvite mode="invite" />} />
+        <Route path="reset" element={<AcceptInvite mode="reset" />} />
         <Route element={<RequireUser />}>
           <Route path="account/sessions" element={<Sessions />} />
           <Route path="account/password" element={<ChangePassword />} />

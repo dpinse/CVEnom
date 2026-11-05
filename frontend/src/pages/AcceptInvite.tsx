@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ApiError, api } from "../lib/api";
 import { getAuth } from "../lib/auth";
 import { MAX_PASSWORD_INPUT, MIN_PASSWORD, POLICY_MESSAGE, passwordProblems } from "../lib/password";
@@ -11,22 +11,41 @@ interface Accepted {
   role: string;
 }
 
+const INVALID = "This link is invalid or expired";
+
+/** The token from a `#<token>` fragment ("" when absent or malformed). */
+function tokenFrom(hash: string): string {
+  try {
+    return decodeURIComponent(hash.replace(/^#/, ""));
+  } catch {
+    return "";
+  }
+}
+
 /**
- * `/invite/:token` creates an account; `/reset/:token` sets a new password (same endpoint).
- * The route URL holds a secret, so this page has no external links or resources, asks browsers
- * not to send a Referer, and replaces its history entry on success. The token lives only in the
- * route param and the POST body: never in storage, never logged.
+ * `/invite#<token>` creates an account; `/reset#<token>` sets a new password (same endpoint).
+ * The token is in the URL fragment, which browsers never send to the server, so it stays out of
+ * nginx and Cloudflare access logs. The page reads it once into memory and at once replaces the
+ * history entry without it. It then lives only in component state and the POST body: never in
+ * storage or a request URL. The page has no external links or resources, asks browsers not to
+ * send a Referer, and replaces its history entry again on success.
  */
 export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
-  const { token = "" } = useParams();
+  const loc = useLocation();
+  const [token] = useState(() => tokenFrom(loc.hash));
   const navigate = useNavigate();
   const [pw, setPw] = useState("");
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);
   const [pending, setPending] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
+  const [errors, setErrors] = useState<string[]>(() => (token ? [] : [INVALID]));
   const [tick, setTick] = useState(0);
   const busy = useRef(false);
+
+  // Strip the fragment from the address bar and history as soon as it has been read.
+  useEffect(() => {
+    if (loc.hash) navigate({ pathname: loc.pathname, search: loc.search }, { replace: true });
+  }, [loc.hash, loc.pathname, loc.search, navigate]);
 
   // Belt and braces with the server's Referrer-Policy header: no Referer from this route.
   useEffect(() => {
@@ -45,6 +64,7 @@ export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy.current) return;
+    if (!token) return fail([INVALID]);
     const problems = passwordProblems(pw, confirm);
     if (problems.length > 0) return fail(problems);
     busy.current = true;
@@ -73,9 +93,9 @@ export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
       setPw("");
       setConfirm("");
     } catch (err) {
-      if (err instanceof ApiError && err.status === 400) fail(["This link is invalid or expired"]);
+      if (err instanceof ApiError && err.status === 400) fail([INVALID]);
       else if (err instanceof ApiError && err.status === 422) {
-        fail([err.code === "weak_password" ? POLICY_MESSAGE : "This link is invalid or expired"]);
+        fail([err.code === "weak_password" ? POLICY_MESSAGE : INVALID]);
       }
       else fail([commonError(err)]);
     } finally {

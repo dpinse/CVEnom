@@ -191,8 +191,9 @@ describe("AdminUsers", () => {
     expect(within(bob).getByText(/Any earlier unused reset link for this user stops working/)).toBeInTheDocument();
     fireEvent.click(within(bob).getByRole("button", { name: "Confirm" }));
     const panel = await screen.findByRole("region", { name: /Password reset link/ });
-    const link = `${location.origin}/reset/${TOKEN}`;
+    const link = `${location.origin}/reset#${TOKEN}`;
     expect(within(panel).getByDisplayValue(link)).toBeInTheDocument();
+    expect(within(panel).queryByDisplayValue(new RegExp(`/reset/${TOKEN}`))).toBeNull();
     expect(within(panel).getByText("This won't be shown again")).toBeInTheDocument();
     expect(within(panel).getByText(/Expires/)).toBeInTheDocument();
     expect(cacheDump(qc)).not.toContain(TOKEN);
