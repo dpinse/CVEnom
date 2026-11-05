@@ -115,3 +115,23 @@ describe("Sessions", () => {
     expect(screen.queryByText(/could not/i)).not.toBeInTheDocument();
   });
 });
+
+describe("Sessions focus and labels", () => {
+  test("Revoke buttons name their device; confirm takes focus; cancel returns it", async () => {
+    signIn(member);
+    rows = [mk({ id: "a" }), mk({ id: "b", user_agent: "Firefox on Windows" })];
+    api();
+    open();
+    const revoke = await screen.findByRole("button", {
+      name: "Revoke session: Firefox on Windows, last used 5 minutes ago",
+    });
+    fireEvent.click(revoke);
+    const confirm = screen.getByRole("button", { name: "Confirm revoke" });
+    expect(document.activeElement).toBe(confirm);
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    const back = screen.getByRole("button", {
+      name: "Revoke session: Firefox on Windows, last used 5 minutes ago",
+    });
+    expect(document.activeElement).toBe(back);
+  });
+});

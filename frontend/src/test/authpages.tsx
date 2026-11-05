@@ -1,15 +1,17 @@
 import { fireEvent, screen } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { Route, Routes, useLocation } from "react-router-dom";
+import { Route, Routes, useLocation, useNavigationType } from "react-router-dom";
 import type { ReactElement } from "react";
 import { member, renderAt, server } from "./shell";
 
 /** Shows where the router currently is (path + search) and any notice state. */
 export function Where() {
   const l = useLocation();
+  const navType = useNavigationType();
   return (
     <div>
       <p data-testid="at">{l.pathname + l.search}</p>
+      <p data-testid="navtype">{navType}</p>
       <p data-testid="state">{JSON.stringify(l.state)}</p>
     </div>
   );

@@ -1,5 +1,7 @@
 export const MIN_PASSWORD = 12;
 export const MAX_PASSWORD = 256;
+/** Input maxLength: matches the backend body limit so pasted passwords are never silently truncated. */
+export const MAX_PASSWORD_INPUT = 1024;
 /** Mirrors the server policy; shown for a 422 weak_password. */
 export const POLICY_MESSAGE = `Password must be ${MIN_PASSWORD} to ${MAX_PASSWORD} characters and not only whitespace`;
 

@@ -163,3 +163,12 @@ describe("user area before bootstrap", () => {
     expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
   });
 });
+
+describe("Sign in link never carries a secret route", () => {
+  test.each(["/invite/s3cret-token", "/reset/s3cret-token"])("%s links to a bare /login", (path) => {
+    handlers();
+    guest();
+    bar(path);
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
+  });
+});

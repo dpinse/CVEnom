@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { ApiError, api } from "../lib/api";
 import { getAuth } from "../lib/auth";
 import { qk } from "../lib/queries";
 import { relTime } from "../lib/relTime";
-import { Text } from "../lib/text";
+import { Text, decodeEntities } from "../lib/text";
 import type { SessionInfo } from "../lib/types";
 import { useNow } from "../lib/useNow";
 import { commonError } from "../components/formParts";
@@ -16,12 +17,28 @@ export default function Sessions() {
   const now = useNow();
   const [confirming, setConfirming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const list = useQuery({ queryKey: qk.sessions(), queryFn: () => api<SessionInfo[]>("/auth/sessions") });
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const revokeRefs = useRef(new Map<string, HTMLButtonElement>());
+  const list = useQuery({
+    queryKey: qk.sessions(),
+    queryFn: () => api<SessionInfo[]>("/auth/sessions"),
+  });
+
+  // Focus follows the confirm flow: into "Confirm revoke" when it opens, back to the row's Revoke on cancel.
+  useEffect(() => {
+    if (confirming !== null) confirmRef.current?.focus();
+  }, [confirming]);
+  const cancelConfirm = (id: string) => {
+    flushSync(() => setConfirming(null));
+    revokeRefs.current.get(id)?.focus();
+  };
 
   const revoke = useMutation({
     mutationFn: async (s: SessionInfo) => {
       try {
-        await api(`/auth/sessions/${encodeURIComponent(s.id)}`, { method: "DELETE" });
+        await api(`/auth/sessions/${encodeURIComponent(s.id)}`, {
+          method: "DELETE",
+        });
       } catch (e) {
         if (!(e instanceof ApiError && e.status === 404)) throw e; // 404: already gone
       }
@@ -46,7 +63,9 @@ export default function Sessions() {
   return (
     <section className="page gutter">
       <h1>Sessions</h1>
-      <p className="form-hint">Devices signed in to your account. Revoke any you do not recognize.</p>
+      <p className="form-hint">
+        Devices signed in to your account. Revoke any you do not recognize.
+      </p>
       <div className="form-errors" aria-live="assertive">
         {error && <p>{error}</p>}
       </div>
@@ -70,7 +89,11 @@ export default function Sessions() {
               {list.data.map((s) => (
                 <tr key={s.id}>
                   <td>
-                    {s.user_agent ? <Text value={s.user_agent} /> : "Unknown device"}{" "}
+                    {s.user_agent ? (
+                      <Text value={s.user_agent} />
+                    ) : (
+                      "Unknown device"
+                    )}{" "}
                     {s.current && <span className="badge">This device</span>}
                   </td>
                   <td>{s.ip ? <Text value={s.ip} /> : "—"}</td>
@@ -79,16 +102,39 @@ export default function Sessions() {
                   <td>
                     {confirming === s.id ? (
                       <span className="confirm">
-                        <span>{s.current ? "Sign out of this device?" : "Revoke this session?"}</span>{" "}
-                        <button type="button" className="btn danger" disabled={revoke.isPending} onClick={() => revoke.mutate(s)}>
+                        <span>
+                          {s.current
+                            ? "Sign out of this device?"
+                            : "Revoke this session?"}
+                        </span>{" "}
+                        <button
+                          ref={confirmRef}
+                          type="button"
+                          className="btn danger"
+                          disabled={revoke.isPending}
+                          onClick={() => revoke.mutate(s)}
+                        >
                           Confirm revoke
                         </button>{" "}
-                        <button type="button" className="btn" onClick={() => setConfirming(null)}>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => cancelConfirm(s.id)}
+                        >
                           Cancel
                         </button>
                       </span>
                     ) : (
-                      <button type="button" className="btn" onClick={() => setConfirming(s.id)}>
+                      <button
+                        type="button"
+                        className="btn"
+                        ref={(el) => {
+                          if (el) revokeRefs.current.set(s.id, el);
+                          else revokeRefs.current.delete(s.id);
+                        }}
+                        aria-label={`Revoke session: ${s.user_agent ? decodeEntities(s.user_agent) : "Unknown device"}, last used ${relTime(s.last_used_at, now) || "unknown"}`}
+                        onClick={() => setConfirming(s.id)}
+                      >
                         Revoke
                       </button>
                     )}

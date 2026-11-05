@@ -39,3 +39,14 @@ describe("safeNext (open-redirect guard)", () => {
     expect(loginPath("/")).toBe("/login");
   });
 });
+
+describe("safeNext dot segments", () => {
+  // These contain no "//", whitespace or encoded slash: only the ".." segment check rejects them.
+  test.each(["/a/../b", "/..", "/a/..", "/a/%2e%2e/b".replace("%2e%2e", "..")])("rejects %j", (p) => {
+    expect(safeNext(p)).toBe("/");
+  });
+  test("keeps dots that are not a whole segment", () => {
+    expect(safeNext("/a..b")).toBe("/a..b");
+    expect(safeNext("/search?q=..")).toBe("/search?q=..");
+  });
+});

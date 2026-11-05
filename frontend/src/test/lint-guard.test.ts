@@ -8,7 +8,8 @@ async function lint(code: string) {
   return res.messages.filter((m) => m.severity === 2);
 }
 
-describe("ESLint XSS guards", () => {
+// The first ESLint run cold-starts slowly under parallel load.
+describe("ESLint XSS guards", { timeout: 15000 }, () => {
   it("flags dangerouslySetInnerHTML", async () => {
     const msgs = await lint('export const A = () => <div dangerouslySetInnerHTML={{ __html: "x" }} />;\n');
     expect(msgs.map((m) => m.ruleId)).toContain("react/no-danger");

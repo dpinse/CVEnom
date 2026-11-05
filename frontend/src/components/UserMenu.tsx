@@ -41,8 +41,9 @@ export function UserMenu() {
   // Render nothing until bootstrap settles: no "Sign in" flash for a returning user.
   if (!ready) return null;
   if (!user) {
-    // Already on the sign-in page: do not nest `next` inside itself.
-    const to = loc.pathname === "/login" ? "/login" : loginPath(loc.pathname + loc.search);
+    // On the sign-in page do not nest `next`; on invite/reset pages never copy the secret token into a link.
+    const bare = loc.pathname === "/login" || loc.pathname.startsWith("/invite/") || loc.pathname.startsWith("/reset/");
+    const to = bare ? "/login" : loginPath(loc.pathname + loc.search);
     return (
       <Link className="btn signin" to={to}>
         Sign in

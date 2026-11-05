@@ -8,6 +8,7 @@ import { AuthCard, ErrorSummary, Field, commonError } from "../components/formPa
 import { Loading } from "../components/guards";
 
 const NOTICES: Record<string, string> = {
+  "session-expired": "Your session expired — please sign in again",
   "account-created": "Account created — please sign in",
   "password-reset": "Password reset — please sign in",
 };

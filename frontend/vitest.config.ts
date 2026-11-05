@@ -9,7 +9,6 @@ export default defineConfig((env) =>
         environment: "jsdom",
         setupFiles: ["src/test/setup.ts"],
         include: ["src/**/*.test.{ts,tsx}"],
-        testTimeout: 15000, // the ESLint-backed guard test cold-starts slowly under parallel load
       },
     }),
   ),

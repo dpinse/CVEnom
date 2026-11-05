@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { at, fill, loginOk } from "../test/authpages";
 import { Where } from "../test/authpages";
 import { authStore } from "../lib/api";
-import { guest, renderAt, server, setupMsw } from "../test/shell";
+import { admin, guest, member, renderAt, server, setupMsw, signIn } from "../test/shell";
 import AcceptInvite from "./AcceptInvite";
 import Login from "./Login";
 
@@ -43,7 +43,7 @@ describe("AcceptInvite form", () => {
     const cf = screen.getByLabelText("Confirm password");
     expect(pw).toHaveAttribute("autocomplete", "new-password");
     expect(cf).toHaveAttribute("autocomplete", "new-password");
-    expect(pw).toHaveAttribute("maxlength", "256");
+    expect(pw).toHaveAttribute("maxlength", "1024");
     const toggle = screen.getByRole("button", { name: /show password/i });
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(toggle);
@@ -180,5 +180,107 @@ describe("AcceptInvite form", () => {
     const { unmount } = app(`/invite/${TOKEN}`);
     unmount();
     expect(document.querySelector('meta[name="referrer"]')).toBeNull();
+  });
+});
+
+describe("AcceptInvite hardening", () => {
+  const logoutCounter = () => {
+    let n = 0;
+    server.use(
+      http.post("http://localhost/api/auth/logout", () => {
+        n++;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    return () => n;
+  };
+  const go = async () => {
+    fill("New password", GOOD);
+    fill("Confirm password", GOOD);
+    submit();
+  };
+
+  test("success REPLACES the history entry (invite and reset)", async () => {
+    guest();
+    accept(201, { id: 5, email: "new@example.com", role: "member" });
+    loginOk();
+    app(`/invite/${TOKEN}`);
+    await go();
+    await waitFor(() => expect(at()).toBe("/"));
+    expect(screen.getByTestId("navtype")).toHaveTextContent("REPLACE");
+    cleanup();
+    authStore.clear();
+    guest();
+    accept(201, { id: 5, email: "new@example.com", role: "member" });
+    logoutCounter();
+    app(`/reset/${TOKEN}`);
+    await go();
+    await waitFor(() => expect(at()).toBe("/login"));
+    expect(screen.getByTestId("navtype")).toHaveTextContent("REPLACE");
+  });
+
+  test("a non-weak_password 422 means the link is invalid", async () => {
+    guest();
+    accept(422, { error: "validation_error" });
+    app(`/invite/${TOKEN}`);
+    await go();
+    expect(await screen.findByText("This link is invalid or expired")).toBeInTheDocument();
+  });
+
+  test("a 300-char password is reported over-256 and never submitted; inputs allow 1024", async () => {
+    guest();
+    let called = false;
+    accept(201, {}, () => (called = true));
+    app(`/invite/${TOKEN}`);
+    expect(screen.getByLabelText("New password")).toHaveAttribute("maxlength", "1024");
+    expect(screen.getByLabelText("Confirm password")).toHaveAttribute("maxlength", "1024");
+    const long = "a".repeat(300);
+    fill("New password", long);
+    fill("Confirm password", long);
+    submit();
+    expect(await screen.findByText(/at most 256/)).toBeInTheDocument();
+    expect(called).toBe(false);
+  });
+
+  test("shows the 12-character rule linked with aria-describedby", () => {
+    guest();
+    app(`/invite/${TOKEN}`);
+    const pw = screen.getByLabelText("New password");
+    const hint = screen.getByText(/At least 12 characters/);
+    expect(pw.getAttribute("aria-describedby")).toBe(hint.id);
+  });
+
+  test("reset with no user signed in logs out and goes to /login", async () => {
+    guest();
+    accept(201, { id: 2, email: "member@example.com", role: "member" });
+    const outs = logoutCounter();
+    app(`/reset/${TOKEN}`);
+    await go();
+    await waitFor(() => expect(at()).toBe("/login"));
+    expect(outs()).toBe(1);
+  });
+
+  test("reset for the same signed-in user (case-insensitive) logs out", async () => {
+    signIn(member);
+    accept(201, { id: 2, email: "MEMBER@Example.com", role: "member" });
+    const outs = logoutCounter();
+    app(`/reset/${TOKEN}`);
+    await go();
+    await waitFor(() => expect(at()).toBe("/login"));
+    expect(outs()).toBe(1);
+    expect(await screen.findByText("Password reset — please sign in")).toBeInTheDocument();
+  });
+
+  test("reset for a DIFFERENT signed-in user does not log them out", async () => {
+    signIn(admin);
+    accept(201, { id: 2, email: "member@example.com", role: "member" });
+    const outs = logoutCounter();
+    app(`/reset/${TOKEN}`);
+    await go();
+    await waitFor(() => expect(at()).toBe("/"));
+    expect(outs()).toBe(0);
+    expect(authStore.getSnapshot().user).toEqual(admin);
+    expect(screen.getByTestId("navtype")).toHaveTextContent("REPLACE");
+    expect(screen.getByTestId("state").textContent).toContain("member@example.com");
   });
 });

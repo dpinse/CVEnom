@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ApiError, api } from "../lib/api";
 import { getAuth } from "../lib/auth";
-import { MAX_PASSWORD, POLICY_MESSAGE, passwordProblems } from "../lib/password";
+import { MAX_PASSWORD_INPUT, MIN_PASSWORD, POLICY_MESSAGE, passwordProblems } from "../lib/password";
 import { AuthCard, ErrorSummary, Field, ShowToggle, commonError } from "../components/formParts";
 
 interface Accepted {
@@ -54,8 +54,14 @@ export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
       const made = await api<Accepted>("/auth/invites/accept", { method: "POST", body: { token, password: pw } });
       if (mode === "reset") {
         // Every session was revoked server-side: clear this tab, then sign in again.
-        await getAuth().logout();
-        navigate("/login", { replace: true, state: { notice: "password-reset" } });
+        const signedIn = getAuth().getSnapshot().user;
+        if (signedIn && signedIn.email.toLowerCase() !== made.email.toLowerCase()) {
+          // A different user (e.g. an admin) opened the link: leave their session alone.
+          navigate("/", { replace: true, state: { notice: "reset-other", email: made.email } });
+        } else {
+          await getAuth().logout();
+          navigate("/login", { replace: true, state: { notice: "password-reset" } });
+        }
       } else {
         try {
           await getAuth().login(made.email, pw);
@@ -68,7 +74,9 @@ export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
       setConfirm("");
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) fail(["This link is invalid or expired"]);
-      else if (err instanceof ApiError && err.status === 422) fail([POLICY_MESSAGE]);
+      else if (err instanceof ApiError && err.status === 422) {
+        fail([err.code === "weak_password" ? POLICY_MESSAGE : "This link is invalid or expired"]);
+      }
       else fail([commonError(err)]);
     } finally {
       busy.current = false;
@@ -81,8 +89,8 @@ export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
     <AuthCard title={mode === "reset" ? "Reset password" : "Accept invite"}>
       <form className="authform" onSubmit={(e) => void onSubmit(e)}>
         <ErrorSummary errors={errors} tick={tick} />
-        <Field label="New password" type={type} value={pw} onChange={setPw} autoComplete="new-password" maxLength={MAX_PASSWORD} />
-        <Field label="Confirm password" type={type} value={confirm} onChange={setConfirm} autoComplete="new-password" maxLength={MAX_PASSWORD} />
+        <Field label="New password" hint={`At least ${MIN_PASSWORD} characters.`} type={type} value={pw} onChange={setPw} autoComplete="new-password" maxLength={MAX_PASSWORD_INPUT} />
+        <Field label="Confirm password" type={type} value={confirm} onChange={setConfirm} autoComplete="new-password" maxLength={MAX_PASSWORD_INPUT} />
         <ShowToggle shown={show} onToggle={() => setShow((s) => !s)} />
         <button type="submit" className="btn primary" disabled={pending}>
           {mode === "reset" ? "Set new password" : "Create account"}
