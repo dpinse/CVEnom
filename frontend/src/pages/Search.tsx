@@ -1,5 +1,3 @@
-/* Explicit table roles are deliberate: the mobile stylesheet sets display:block, which drops native table semantics in some browsers. */
-/* eslint-disable jsx-a11y/no-redundant-roles, jsx-a11y/no-interactive-element-to-noninteractive-role */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ApiError, RateLimited } from "../lib/api";
@@ -62,6 +60,7 @@ function ResultRow({ item, now, onSelect }: { item: CveItem; now: Date; onSelect
   const sev = severityOf(item.cvss);
   return (
     <tr className="srow" role="row" data-sev={sev} data-testid="search-row" onClick={() => onSelect(item.cve_id)}>
+      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
       <td role="cell" className="c-id" data-label="CVE">
         <button
           type="button"
@@ -74,12 +73,15 @@ function ResultRow({ item, now, onSelect }: { item: CveItem; now: Date; onSelect
           {item.cve_id}
         </button>
       </td>
+      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
       <td role="cell" data-label="CVSS">
         {item.cvss !== null && <span className={`chip num ${sev}`}>{item.cvss.toFixed(1)}</span>}
       </td>
+      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
       <td role="cell" data-label="EPSS">
         {item.epss_percentile !== null && <span className="chip num">p{Math.round(item.epss_percentile * 100)}</span>}
       </td>
+      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
       <td role="cell" data-label="KEV">
         {item.kev && (
           <span className="chip kev" title={item.kev_source ?? undefined}>
@@ -87,9 +89,11 @@ function ResultRow({ item, now, onSelect }: { item: CveItem; now: Date; onSelect
           </span>
         )}
       </td>
+      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
       <td role="cell" className="c-pub" data-label="Published">
         {relTime(item.published, now)}
       </td>
+      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
       <td role="cell" className="c-sum" data-label="Summary">
         <Text className="sum" value={item.summary} />
       </td>
@@ -307,6 +311,7 @@ export default function Search() {
       {items.length > 0 && (
         <div className="stable-wrap" aria-busy={isPlaceholderData}>
           <table className="stable" role="table">
+            {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- mobile display:block table semantics */}
             <thead role="rowgroup">
               <tr role="row">
                 <th scope="col" role="columnheader">CVE</th>
@@ -317,6 +322,7 @@ export default function Search() {
                 <th scope="col" role="columnheader">Summary</th>
               </tr>
             </thead>
+            {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- mobile display:block table semantics */}
             <tbody role="rowgroup">
               {items.map((it) => (
                 <ResultRow key={it.cve_id} item={it} now={now} onSelect={(id) => select({ kind: "cve", id })} />

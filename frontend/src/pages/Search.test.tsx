@@ -2,7 +2,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { item, renderAt, server, setupMsw } from "../test/shell";
 import type { CveListOut } from "../lib/types";
 import Search, { DEBOUNCE_MS, parseFilters } from "./Search";
@@ -155,6 +155,26 @@ describe("Search page", () => {
     fireEvent.click(screen.getByText("Next"));
     await screen.findByText("Showing 51–100 of 120");
     expect(document.activeElement?.className).toBe("scount");
+  });
+
+  test.each([
+    [false, "smooth"],
+    [true, "auto"],
+  ])("paging scrolls the results into view (reduced motion %s -> %s)", async (reduce, behavior) => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: reduce && q.includes("prefers-reduced-motion"), media: q }));
+    try {
+      api((sp) => list(many(50), 120, Number(sp.get("page") ?? 1)));
+      renderAt(ui, "/search");
+      await screen.findByText("Showing 1–50 of 120");
+      fireEvent.click(screen.getByText("Next"));
+      await screen.findByText("Showing 51–100 of 120");
+      expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ behavior }));
+    } finally {
+      vi.stubGlobal("matchMedia", undefined);
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
   });
 
   test("a 201-char q is blocked at the input and truncated from the URL", async () => {
