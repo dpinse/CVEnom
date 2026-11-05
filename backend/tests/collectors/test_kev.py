@@ -74,23 +74,9 @@ def test_normalize_skips_malformed_entries():
     assert {c.cve_id for c in res.cves} == {"CVE-2026-1001", "CVE-2026-1003"}
 
 
-def test_diff_emits_only_new_entries():
-    k = KevCollector()
-    first = k.diff(seen=set(), current={"CVE-2026-109618", "CVE-2026-109619"})
-    assert {e["cve_id"] for e in first} == {"CVE-2026-109618", "CVE-2026-109619"}
-    second = k.diff(
-        seen={"CVE-2026-109618", "CVE-2026-109619"},
-        current={"CVE-2026-109618", "CVE-2026-109619"},
-    )
-    assert second == []
-
-
-def test_diff_event_shape_sorted():
-    ev = KevCollector().diff(set(), {"CVE-2026-2", "CVE-2026-1"})
-    assert ev == [
-        {"type": "kev_added", "cve_id": "CVE-2026-1", "source": "cisa"},
-        {"type": "kev_added", "cve_id": "CVE-2026-2", "source": "cisa"},
-    ]
+def test_dead_diff_method_removed():
+    # Seen-set diffing lives in seenstate.track_new (covered in test_seenstate.py).
+    assert not hasattr(KevCollector, "diff")
 
 
 def test_first_run_emits_no_events_and_populates_state():

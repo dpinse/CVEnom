@@ -25,12 +25,6 @@ class KevCollector(Collector):
     async def fetch(self) -> dict:
         return await http_get_json(KEV_URL)
 
-    def diff(self, seen: set[str], current: set[str]) -> list[dict]:
-        return [
-            {"type": "kev_added", "cve_id": cve_id, "source": "cisa"}
-            for cve_id in sorted(current - seen)
-        ]
-
     def normalize(self, raw: dict) -> CollectorResult:
         cves: list[NormalizedCve] = []
         for rec in raw.get("vulnerabilities") or []:
