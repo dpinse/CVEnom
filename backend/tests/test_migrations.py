@@ -204,3 +204,35 @@ def test_invite_purpose_migration(scratch_url):
     eng.dispose()
     assert "purpose" not in cols and "created_at" not in cols
     assert left == ["old@example.com"]  # reset invites are dropped on downgrade
+
+
+def test_kev_alerted_at_migration_backfill_and_model(scratch_url):
+    from cvenom.models import Cve
+
+    cfg = _cfg()
+    command.upgrade(cfg, "0004")
+    eng = create_engine(scratch_url)
+    with eng.begin() as c:
+        for cid in ("CVE-2026-0001", "CVE-2026-0002"):
+            c.execute(text("insert into cve (cve_id, kev) values (:i, true)"), {"i": cid})
+        c.execute(text(
+            "insert into alert_event (type, cve_id, source) values "
+            "('kev_added','CVE-2026-0001','cisa'), ('kev_added','CVE-2026-0001','vulncheck'), "
+            "('cvss_min','CVE-2026-0002','nvd')"))
+    command.upgrade(cfg, "0005")
+    with eng.connect() as c:
+        rows = dict(c.execute(text("select cve_id, kev_alerted_at is not null from cve")).all())
+        col = c.execute(text(
+            "select data_type, is_nullable, column_default from information_schema.columns "
+            "where table_name='cve' and column_name='kev_alerted_at'")).one()
+        cols = {r[0] for r in c.execute(text(
+            "select column_name from information_schema.columns where table_name='cve'"))}
+    assert rows == {"CVE-2026-0001": True, "CVE-2026-0002": False}  # only kev_added backfills
+    assert tuple(col) == ("timestamp with time zone", "YES", None)
+    assert cols == {c.name for c in Cve.__table__.columns}
+    command.downgrade(cfg, "0004")
+    with eng.connect() as c:
+        cols = {r[0] for r in c.execute(text(
+            "select column_name from information_schema.columns where table_name='cve'"))}
+    eng.dispose()
+    assert "kev_alerted_at" not in cols
