@@ -142,6 +142,7 @@ def _upsert_geo_events(session: Session, events: list[NormalizedGeoEvent]) -> No
 
 def purge_old_geo_events(session: Session, now: datetime, *, days: int) -> int:
     """Delete geo events observed before ``now - days``; returns the row count. No commit."""
+    now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
     cutoff = now - timedelta(days=days)
     return session.execute(delete(GeoEvent).where(GeoEvent.observed_at < cutoff)).rowcount
 

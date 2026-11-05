@@ -26,16 +26,18 @@ def rows(session):
 
 
 def test_upsert_idempotent_keeps_first_seen(db_session):
-    run(db_session, ev(magnitude=1.0, label="a"))
-    first = rows(db_session)[0]
-    first_seen = first.first_seen
+    old = NOW - timedelta(days=5)
+    # now() is the outer-transaction start, so seed an explicitly old first_seen.
+    db_session.add(GeoEvent(source="s", external_id="e1", kind="scan", observed_at=NOW,
+                            first_seen=old, magnitude=1.0, label="a", details={}))
+    db_session.flush()
     db_session.expunge_all()
     run(db_session, ev(magnitude=5.0, label="b", observed_at=NOW + timedelta(hours=1)))
     db_session.expunge_all()
     got = rows(db_session)
     assert len(got) == 1
     assert got[0].magnitude == 5.0 and got[0].label == "b"
-    assert got[0].first_seen == first_seen
+    assert got[0].first_seen == old
     assert got[0].observed_at == NOW + timedelta(hours=1)
 
 
@@ -71,3 +73,18 @@ def test_purge_only_old(db_session):
     )
     assert purge_old_geo_events(db_session, NOW, days=30) == 1
     assert {r.external_id for r in rows(db_session)} == {"edge", "new"}
+
+
+def test_purge_naive_now_treated_as_utc(db_session):
+    run(db_session, ev("old", observed_at=NOW - timedelta(days=31)), ev("new"))
+    assert purge_old_geo_events(db_session, NOW.replace(tzinfo=None), days=30) == 1
+    assert {r.external_id for r in rows(db_session)} == {"new"}
+
+
+def test_batch_over_chunk_size_with_duplicate_across_chunks(db_session):
+    events = [ev(f"e{i}", magnitude=1.0) for i in range(600)]
+    events.append(ev("e0", magnitude=7.0))  # key first seen in chunk 1, repeated at the end
+    run(db_session, *events)
+    got = rows(db_session)
+    assert len(got) == 600
+    assert next(r for r in got if r.external_id == "e0").magnitude == 7.0

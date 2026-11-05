@@ -66,12 +66,16 @@ def test_geo_migration_matches_model(scratch_url):
     eng = create_engine(scratch_url)
     with eng.connect() as c:
         cols = {
-            r[0]: (r[1], r[2])
+            r[0]: (r[1], r[2], r[3])
             for r in c.execute(text(
-                "select column_name, data_type, is_nullable from information_schema.columns "
+                "select column_name, data_type, is_nullable, column_default from information_schema.columns "
                 "where table_name='geo_event'"))
         }
     eng.dispose()
     assert set(cols) == {c.name for c in GeoEvent.__table__.columns}
     for c in GeoEvent.__table__.columns:
         assert (cols[c.name][1] == "YES") == c.nullable, c.name
+    assert cols["asn"][0] == "bigint"
+    assert "now()" in cols["first_seen"][2]
+    assert cols["magnitude"][2].startswith("'1'")
+    assert cols["details"][2].startswith("'{}'")
