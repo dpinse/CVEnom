@@ -36,16 +36,31 @@ def _parse_ts(value: str | None) -> datetime | None:
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
 
-def _cvss(metrics: dict[str, Any]) -> float | None:
+def _metric(metrics: dict[str, Any]) -> dict[str, Any] | None:
+    """The chosen cvssData: V3.1 then V3.0, Primary preferred."""
     for key in ("cvssMetricV31", "cvssMetricV30"):
         entries = metrics.get(key) or []
         if not entries:
             continue
         chosen = next((e for e in entries if e.get("type") == "Primary"), entries[0])
-        score = (chosen.get("cvssData") or {}).get("baseScore")
-        if score is not None:
-            return float(score)
+        data = chosen.get("cvssData") or {}
+        if data.get("baseScore") is not None:
+            return data
     return None
+
+
+def _cwes(weaknesses: list[dict[str, Any]]) -> list[str] | None:
+    vals = [
+        d.get("value")
+        for w in weaknesses or []
+        for d in (w.get("description") or [])
+    ]
+    return vals or None
+
+
+def _refs(references: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    out = [{"url": r.get("url"), "tags": r.get("tags") or []} for r in references or []]
+    return out or None
 
 
 def _summary(descriptions: list[dict[str, Any]]) -> str | None:
@@ -118,11 +133,18 @@ class NvdCollector(Collector):
                     if not cve_id:
                         log.warning("nvd: skipping record without id")
                         continue
+                    m = _metric(cve.get("metrics") or {})
+                    score = m.get("baseScore") if m else None
                     cves.append(
                         NormalizedCve(
                             cve_id=cve_id,
                             published=_parse_ts(cve.get("published")),
-                            cvss=_cvss(cve.get("metrics") or {}),
+                            last_modified=_parse_ts(cve.get("lastModified")),
+                            cvss=float(score) if score is not None else None,
+                            cvss_vector=m.get("vectorString") if m else None,
+                            cvss_severity=m.get("baseSeverity") if m else None,
+                            cwes=_cwes(cve.get("weaknesses") or []),
+                            references=_refs(cve.get("references") or []),
                             summary=_summary(cve.get("descriptions") or []),
                         )
                     )

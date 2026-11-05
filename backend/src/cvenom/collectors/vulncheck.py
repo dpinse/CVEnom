@@ -27,6 +27,17 @@ def _parse_date(value: object) -> date | None:
         return None
 
 
+def _str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _first(rec: dict, *keys: str) -> object:
+    for k in keys:
+        if rec.get(k) is not None:
+            return rec[k]
+    return None
+
+
 @register
 class VulnCheckCollector(Collector):
     name = "vulncheck_kev"
@@ -89,6 +100,16 @@ class VulnCheckCollector(Collector):
                 vendor, product = rec.get("vendorProject"), rec.get("product")
                 affected = [f"{vendor} {product}"] if vendor and product else []
                 added = _parse_date(rec.get("date_added"))
+                ransom = rec.get("knownRansomwareCampaignUse")
+                detail = {
+                    "kev_name": _str(rec.get("vulnerabilityName")),
+                    "kev_action": _str(_first(rec, "required_action", "requiredAction")),
+                    "kev_due": _parse_date(_first(rec, "dueDate", "due_date")),
+                    "kev_ransomware": {"Known": True, "Unknown": False}.get(ransom)
+                    if isinstance(ransom, str)
+                    else None,
+                    "kev_notes": _str(rec.get("notes")),
+                }
                 for cve_id in ids:
                     try:
                         if not isinstance(cve_id, str) or not cve_id:
@@ -100,6 +121,7 @@ class VulnCheckCollector(Collector):
                                 kev_source="vulncheck",
                                 kev_added=added,
                                 affected=affected,
+                                **detail,
                             )
                         )
                     except (TypeError, ValueError):  # incl. ValidationError

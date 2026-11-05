@@ -170,3 +170,53 @@ def test_new_entry_older_than_max_age_is_silent(monkeypatch):
     res = k.normalize(_feed(_entry("CVE-2026-1001"), _entry("CVE-2026-1002", added=D1.isoformat())))
     assert res.events == []  # D1 is 3 days ago > 1-day max age
     assert "CVE-2026-1002" in k.state["seen"]
+
+
+# --- detail fields (radar refinements, spec D) ---
+
+
+def test_kev_maps_detail_fields():
+    e = _entry("CVE-2026-1001")
+    e["knownRansomwareCampaignUse"] = "Known"
+    e["notes"] = "See vendor advisory."
+    c = KevCollector().normalize(_feed(e)).cves[0]
+    assert c.kev_name == "Widget flaw"
+    assert c.kev_action == "Apply updates."
+    assert c.kev_due == date(2026, 11, 22)
+    assert c.kev_ransomware is True
+    assert c.kev_notes == "See vendor advisory."
+    e["knownRansomwareCampaignUse"] = "Unknown"
+    assert KevCollector().normalize(_feed(e)).cves[0].kev_ransomware is False
+    e["knownRansomwareCampaignUse"] = "weird"
+    assert KevCollector().normalize(_feed(e)).cves[0].kev_ransomware is None
+    e2 = _entry("CVE-2026-1002")
+    e2["notes"] = 5
+    e2["requiredAction"] = None
+    c2 = KevCollector().normalize(_feed(e2)).cves[0]
+    assert c2.kev_notes is None and c2.kev_action is None
+
+
+def test_kev_bad_due_date_keeps_record():
+    e = _entry("CVE-2026-1001")
+    e["dueDate"] = "not-a-date"
+    res = KevCollector().normalize(_feed(e))
+    assert len(res.cves) == 1
+    assert res.cves[0].kev_due is None
+    e["dueDate"] = 12
+    assert KevCollector().normalize(_feed(e)).cves[0].kev_due is None
+
+
+def test_kev_rerun_backfills_existing_row(db_session):
+    from sqlalchemy import insert
+
+    from cvenom.models import Cve
+    from cvenom.pipeline import ingest
+
+    db_session.execute(insert(Cve).values(
+        cve_id="CVE-2026-1001", kev=True, poc_badge=False, affected=[], summary="", kev_name=None,
+    ))
+    ingest(db_session, KevCollector().normalize(_feed(_entry("CVE-2026-1001"))))
+    row = db_session.get(Cve, "CVE-2026-1001")
+    db_session.refresh(row)
+    assert row.kev_name == "Widget flaw"
+    assert row.kev_action == "Apply updates."

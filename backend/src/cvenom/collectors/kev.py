@@ -17,6 +17,23 @@ KEV_URL = (
 )
 
 
+def _str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _date(value: object) -> date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _ransomware(value: object) -> bool | None:
+    return {"Known": True, "Unknown": False}.get(value) if isinstance(value, str) else None
+
+
 @register
 class KevCollector(Collector):
     name = "cisa_kev"
@@ -40,6 +57,11 @@ class KevCollector(Collector):
                         kev_added=date.fromisoformat(rec["dateAdded"]),
                         kev_source="cisa",
                         affected=[f"{rec['vendorProject']} {rec['product']}"],
+                        kev_name=_str(rec.get("vulnerabilityName")),
+                        kev_action=_str(rec.get("requiredAction")),
+                        kev_due=_date(rec.get("dueDate")),
+                        kev_ransomware=_ransomware(rec.get("knownRansomwareCampaignUse")),
+                        kev_notes=_str(rec.get("notes")),
                     )
                 )
             except (KeyError, TypeError, ValueError):  # incl. ValidationError

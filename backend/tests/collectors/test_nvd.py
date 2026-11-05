@@ -178,3 +178,49 @@ def test_invalid_cve_id_skipped(page, settings):
     page["vulnerabilities"][0]["cve"]["id"] = "CVE-1<img src=x>"
     res = NvdCollector().normalize([page])
     assert {c.cve_id for c in res.cves} == {"CVE-2026-1002", "CVE-2026-1003"}
+
+
+# --- detail fields (radar refinements, spec D) ---
+
+
+def _metric(vec, sev, score, typ):
+    return {"type": typ, "cvssData": {"baseScore": score, "vectorString": vec, "baseSeverity": sev}}
+
+
+def test_nvd_maps_vector_severity_cwes_refs_last_modified(settings):
+    rec = {"vulnerabilities": [{"cve": {
+        "id": "CVE-2026-2001",
+        "published": "2026-11-01T00:00:00.000",
+        "lastModified": "2026-11-03T12:30:00.000",
+        "descriptions": [{"lang": "en", "value": "x"}],
+        "metrics": {"cvssMetricV31": [
+            _metric("CVSS:3.1/SECONDARY", "LOW", 2.0, "Secondary"),
+            _metric("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "CRITICAL", 9.8, "Primary"),
+        ]},
+        "weaknesses": [
+            {"description": [{"lang": "en", "value": "CWE-79"}]},
+            {"description": [{"lang": "en", "value": "NVD-CWE-noinfo"}]},
+        ],
+        "references": (
+            [{"url": f"https://example.com/{i}", "tags": ["Vendor Advisory"]} for i in range(24)]
+            + [{"url": "http://abc.onion/x", "tags": []}]
+        ),
+    }}]}
+    c = NvdCollector().normalize([rec]).cves[0]
+    assert c.cvss == 9.8
+    assert c.cvss_vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    assert c.cvss_severity == "CRITICAL"
+    assert c.cwes == ["CWE-79"]
+    assert len(c.references) == 20
+    assert not any("onion" in r.url for r in c.references)
+    assert c.references[0].tags == ["Vendor Advisory"]
+    assert c.last_modified == datetime(2026, 11, 3, 12, 30, tzinfo=UTC)
+
+
+def test_nvd_record_without_metrics_or_weaknesses(settings):
+    rec = {"vulnerabilities": [{"cve": {"id": "CVE-2026-2002", "descriptions": []}}]}
+    res = NvdCollector().normalize([rec])
+    assert len(res.cves) == 1
+    c = res.cves[0]
+    assert c.cvss is None and c.cvss_vector is None and c.cvss_severity is None
+    assert c.cwes is None and c.references is None and c.last_modified is None

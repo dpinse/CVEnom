@@ -225,3 +225,27 @@ async def test_complete_pagination_does_not_warn(token, caplog):
     with caplog.at_level(logging.WARNING, logger="cvenom.collectors.vulncheck"):
         await VulnCheckCollector().fetch()
     assert not caplog.records
+
+
+def test_vulncheck_maps_aliases_and_tolerates_absence(token):
+    full = _rec("CVE-2026-1001")
+    full.update({
+        "vulnerabilityName": "Widget flaw",
+        "required_action": "Patch it.",
+        "dueDate": "2026-11-22",
+        "knownRansomwareCampaignUse": "Known",
+        "notes": "n",
+    })
+    alias = _rec("CVE-2026-1002")
+    alias.update({"requiredAction": "Do X.", "due_date": "2026-12-01T00:00:00Z"})
+    bare = _rec("CVE-2026-1003")
+    res = VulnCheckCollector().normalize([_page([full, alias, bare])])
+    by_id = {c.cve_id: c for c in res.cves}
+    a = by_id["CVE-2026-1001"]
+    assert (a.kev_name, a.kev_action, a.kev_due) == ("Widget flaw", "Patch it.", date(2026, 11, 22))
+    assert a.kev_ransomware is True and a.kev_notes == "n"
+    b = by_id["CVE-2026-1002"]
+    assert b.kev_action == "Do X." and b.kev_due == date(2026, 12, 1)
+    c = by_id["CVE-2026-1003"]
+    assert c.kev_name is None and c.kev_action is None and c.kev_due is None
+    assert c.kev_ransomware is None and c.kev_notes is None
