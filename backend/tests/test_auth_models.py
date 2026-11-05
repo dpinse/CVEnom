@@ -90,3 +90,23 @@ def test_session_signing_key_invite_roundtrip(db_session):
     db_session.add_all([s, inv, SigningKey(kid="k1", private_enc="enc", public_pem="pem")])
     db_session.flush()
     assert isinstance(s.id, uuid.UUID) and s.created_at is not None and s.revoked_at is None
+
+
+def test_email_normalizer_none_safe():
+    assert User(email=None).email is None
+    assert Invite(email=None).email is None
+
+
+@pytest.mark.parametrize("table", ["app_user", "invite"])
+def test_raw_mixed_case_email_rejected(db_session, table):
+    from sqlalchemy import text
+
+    if table == "app_user":
+        sql = "INSERT INTO app_user (email, password_hash, role) VALUES ('Mixed@Case.com', 'h', 'member')"
+    else:
+        sql = (
+            "INSERT INTO invite (email, role, token_hash, expires_at) "
+            "VALUES ('Mixed@Case.com', 'member', 'abc', now())"
+        )
+    with pytest.raises(IntegrityError):
+        db_session.execute(text(sql))

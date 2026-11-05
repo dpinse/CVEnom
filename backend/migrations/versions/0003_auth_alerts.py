@@ -32,6 +32,7 @@ def upgrade() -> None:
         _created_at(),
         sa.UniqueConstraint("email", name="app_user_email_key"),
         sa.CheckConstraint("role in ('admin','member')", name="ck_app_user_role"),
+        sa.CheckConstraint("email = lower(email)", name="ck_app_user_email_lower"),
     )
     op.create_table(
         "invite",
@@ -44,6 +45,7 @@ def upgrade() -> None:
         sa.Column("created_by", sa.Integer(), sa.ForeignKey("app_user.id", ondelete="SET NULL")),
         sa.UniqueConstraint("token_hash", name="invite_token_hash_key"),
         sa.CheckConstraint("role in ('admin','member')", name="ck_invite_role"),
+        sa.CheckConstraint("email = lower(email)", name="ck_invite_email_lower"),
     )
     op.create_table(
         "user_session",

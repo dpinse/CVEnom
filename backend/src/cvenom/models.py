@@ -130,11 +130,12 @@ class User(Base):
 
     __table_args__ = (
         CheckConstraint("role in ('admin','member')", name="ck_app_user_role"),
+        CheckConstraint("email = lower(email)", name="ck_app_user_email_lower"),
     )
 
     @validates("email")
     def _normalize_email(self, key, value):
-        return value.strip().lower()
+        return value.strip().lower() if isinstance(value, str) else value
 
 
 class Invite(Base):
@@ -152,11 +153,12 @@ class Invite(Base):
 
     __table_args__ = (
         CheckConstraint("role in ('admin','member')", name="ck_invite_role"),
+        CheckConstraint("email = lower(email)", name="ck_invite_email_lower"),
     )
 
     @validates("email")
     def _normalize_email(self, key, value):
-        return value.strip().lower()
+        return value.strip().lower() if isinstance(value, str) else value
 
 
 class UserSession(Base):

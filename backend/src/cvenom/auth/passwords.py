@@ -1,0 +1,37 @@
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+
+MIN_LENGTH = 12
+MAX_LENGTH = 256
+
+_hasher = PasswordHasher()  # argon2id defaults
+
+
+class WeakPassword(ValueError):
+    pass
+
+
+def validate_password(pw: str) -> None:
+    """Length in characters only (NIST 800-63B): no composition rules."""
+    if not isinstance(pw, str) or not (MIN_LENGTH <= len(pw) <= MAX_LENGTH):
+        raise WeakPassword(
+            f"password must be between {MIN_LENGTH} and {MAX_LENGTH} characters"
+        )
+    if not pw.strip():
+        raise WeakPassword("password must not be only whitespace")
+
+
+def hash_password(pw: str) -> str:
+    validate_password(pw)
+    return _hasher.hash(pw)
+
+
+def verify_password(hashed: str, pw: str) -> bool:
+    try:
+        return _hasher.verify(hashed, pw)
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
+        return False
+
+
+def needs_rehash(hashed: str) -> bool:
+    return _hasher.check_needs_rehash(hashed)
