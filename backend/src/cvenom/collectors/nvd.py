@@ -105,13 +105,18 @@ class NvdCollector(Collector):
     def normalize(self, raw: list[dict]) -> CollectorResult:
         cves: list[NormalizedCve] = []
         for page in raw:
-            for item in page.get("vulnerabilities", []):
-                cve = item.get("cve") or {}
-                cve_id = cve.get("id")
-                if not cve_id:
-                    log.warning("nvd: skipping record without id")
-                    continue
+            items = page.get("vulnerabilities") if isinstance(page, dict) else None
+            for item in items if isinstance(items, list) else []:
+                # ALL per-record field access stays inside the try: one poison
+                # record must never fail the run (a failed run does not advance
+                # the window, so it would fail on the same data forever).
+                cve_id = None
                 try:
+                    cve = item.get("cve") or {}
+                    cve_id = cve.get("id")
+                    if not cve_id:
+                        log.warning("nvd: skipping record without id")
+                        continue
                     cves.append(
                         NormalizedCve(
                             cve_id=cve_id,
@@ -121,5 +126,5 @@ class NvdCollector(Collector):
                         )
                     )
                 except Exception:
-                    log.exception("nvd: skipping malformed record %s", cve_id)
+                    log.warning("nvd: skipping malformed record %r", cve_id, exc_info=True)
         return CollectorResult(cves=cves)

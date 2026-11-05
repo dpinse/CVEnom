@@ -161,3 +161,23 @@ async def test_first_run_without_score_date_fetches_and_stores_it():
     res = await c.run()
     assert [x.cve_id for x in res.cves] == ["CVE-2026-0001"]
     assert c.state["score_date"] == "2026-11-05"
+
+
+# --- poison records must not fail the run (#8) ---
+
+
+@pytest.mark.parametrize("poison", ["garbage", None, 5, ["CVE-2026-0009"], {"cve": 7, "epss": "0.1", "percentile": "0.1"}])
+def test_non_dict_or_malformed_record_skipped_others_kept(poison):
+    raw = [_page([_rec("CVE-2026-1001"), poison, _rec("CVE-2026-1002")], 3)]
+    ids = [c.cve_id for c in EpssCollector().normalize(raw).cves]
+    assert ids == ["CVE-2026-1001", "CVE-2026-1002"]
+
+
+def test_non_dict_page_skipped():
+    raw = ["garbage", None, _page([_rec("CVE-2026-1001")], 1)]
+    assert [c.cve_id for c in EpssCollector().normalize(raw).cves] == ["CVE-2026-1001"]
+
+
+def test_invalid_cve_id_skipped():
+    raw = [_page([_rec("CVE-1<img src=x>"), _rec("CVE-2026-1001")], 2)]
+    assert [c.cve_id for c in EpssCollector().normalize(raw).cves] == ["CVE-2026-1001"]

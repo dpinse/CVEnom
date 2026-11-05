@@ -63,12 +63,15 @@ class EpssCollector(Collector):
     def normalize(self, raw: list[dict]) -> CollectorResult:
         cves: list[NormalizedCve] = []
         for page in raw:
-            for rec in page.get("data") or []:
-                cve_id = rec.get("cve")
-                if not cve_id:
-                    log.warning("epss: skipping record without cve id")
-                    continue
+            data = page.get("data") if isinstance(page, dict) else None
+            for rec in data if isinstance(data, list) else []:
+                # ALL per-record field access stays inside the try (poison record).
+                cve_id = None
                 try:
+                    cve_id = rec.get("cve")
+                    if not cve_id:
+                        log.warning("epss: skipping record without cve id")
+                        continue
                     cves.append(
                         NormalizedCve(
                             cve_id=cve_id,
@@ -76,8 +79,8 @@ class EpssCollector(Collector):
                             epss_percentile=float(rec["percentile"]),
                         )
                     )
-                except (KeyError, TypeError, ValueError):  # incl. ValidationError
-                    log.warning("epss: skipping malformed record %s", cve_id)
+                except (AttributeError, KeyError, TypeError, ValueError):  # incl. ValidationError
+                    log.warning("epss: skipping malformed record %r", cve_id)
         score_date = _score_date(raw)
         if score_date is not None:
             self.state["score_date"] = score_date

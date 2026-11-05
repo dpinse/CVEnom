@@ -155,3 +155,25 @@ async def test_fetch_honors_self_since(page, settings):
     start = datetime.strptime(p["lastModStartDate"], FMT)
     end = datetime.strptime(p["lastModEndDate"], FMT)
     assert timedelta(days=1, hours=23) < end - start < timedelta(days=2, minutes=1)
+
+
+# --- poison records must not fail the run (#8) ---
+
+
+@pytest.mark.parametrize("poison", ["garbage", None, 5, ["x"], {"cve": "not-a-dict"}, {"cve": {"id": 7}}])
+def test_non_dict_or_malformed_record_skipped_others_kept(page, settings, poison, caplog):
+    page["vulnerabilities"].insert(1, poison)
+    with caplog.at_level("WARNING"):
+        res = NvdCollector().normalize([page])
+    assert {c.cve_id for c in res.cves} == {"CVE-2026-1001", "CVE-2026-1002", "CVE-2026-1003"}
+
+
+def test_non_dict_page_skipped(page, settings):
+    res = NvdCollector().normalize(["garbage", None, page])
+    assert len(res.cves) == 3
+
+
+def test_invalid_cve_id_skipped(page, settings):
+    page["vulnerabilities"][0]["cve"]["id"] = "CVE-1<img src=x>"
+    res = NvdCollector().normalize([page])
+    assert {c.cve_id for c in res.cves} == {"CVE-2026-1002", "CVE-2026-1003"}
