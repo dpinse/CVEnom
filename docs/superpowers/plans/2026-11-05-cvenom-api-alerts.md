@@ -575,6 +575,65 @@ def test_validate_url_rejects_dns_that_resolves_private(monkeypatch):
 
 ---
 
+---
+
+### Task 15 (follow-up from final review): User management and alert operations API
+
+This task was added by a controller ruling after the whole-branch final review (findings I5 and M-i). It runs before Plan 4, which depends on it. As shipped so far, a small team cannot offboard a member without writing SQL, and an admin cannot see delivery status or send a test alert.
+
+**Files:**
+- Modify: `backend/src/cvenom/api/routes_auth.py` (or create `routes_users.py`), `backend/src/cvenom/api/routes_alerts.py`, `backend/src/cvenom/auth/users.py`
+- Test: `backend/tests/api/test_users_api.py`, `backend/tests/api/test_alerts_ops.py`
+
+**Interfaces.** Every route uses `SessionDep`, and a `rate_limit("api")` dependency runs before the auth dependency. Error responses are flat `{"error": ...}`, and errors are raised, never returned after a write. Request bodies set `extra="forbid"`.
+
+- **User administration (admin only):**
+  - `GET /api/auth/users` returns `[{id, email, role, is_active, created_at, active_sessions}]`.
+  - `PATCH /api/auth/users/{id}` with body `{role?: "admin"|"member", is_active?: bool}`:
+    - Deactivating a user revokes all of their sessions (`revoked_at=now`).
+    - An admin cannot deactivate or demote themselves. Return 409 `cannot_modify_self`.
+    - The last active admin cannot be demoted or deactivated. Return 409 `last_admin`.
+    - An unknown id returns 404.
+  - `POST /api/auth/users/{id}/sessions/revoke` revokes all of that user's sessions and returns 204.
+- **Own password (any authed user):**
+  - `POST /api/auth/password` with body `{current_password, new_password}`:
+    - The current password is verified with the same constant-time path. A wrong one returns the generic 401 `invalid_credentials`.
+    - The new password goes through the password policy. A weak one returns 422 `weak_password`.
+    - On success it rehashes and revokes all OTHER sessions; the current session stays. Returns 204.
+    - It is also rate limited by `enforce_login_limits` keyed on the user's email.
+- **Admin password reset:**
+  - `POST /api/auth/users/{id}/reset` creates a single-use reset invite for that user's email, using the existing invite token mechanism with a new `purpose` column (`invite|reset`) in migration 0004. It returns `{token, expires_at}` once.
+  - Accepting a reset token sets the new password, revokes all of that user's sessions, and does not create a new user.
+- **Invites (admin):**
+  - `GET /api/auth/invites` lists pending, unexpired invites as `[{id, email, role, purpose, expires_at, created_at}]`. Tokens and hashes are never included.
+  - `DELETE /api/auth/invites/{id}` revokes an invite (marks it used or deletes it) and returns 204.
+- **Delivery status:**
+  - `GET /api/alerts/deliveries?status=&rule_id=&page=&page_size=` requires any authed user.
+  - It returns `{items:[{id, rule_id, recipient_id, channel, cve_id, status, attempts, last_error, created_at, sent_at, next_attempt_at}], page, page_size, total}`, newest first, with page_size ≤ 100.
+  - `last_error` is already scrubbed and truncated.
+- **Test send:**
+  - `POST /api/alerts/rules/{id}/test` is admin only.
+  - It sends a synthetic alert immediately, synchronously, through the real sinks, for each recipient of that rule. Run it in the threadpool with an overall 45 s cap.
+  - The synthetic CVE is `CVE-0000-0000` with summary "CVEnom test alert". Nothing is written to `alert_delivery`.
+  - It returns `[{recipient_id, channel, ok, error}]`. The `error` value is the same scrubbed or type-name-only string the dispatcher would store.
+  - It is limited to 5 per minute per admin, under the separate rate-limit scope `alert-test`.
+
+**Tests:**
+- A member gets 403 on every admin route.
+- Deactivating a user revokes their sessions, so their access token gets 401 on the next request.
+- `cannot_modify_self` and `last_admin` both return 409.
+- A password change revokes the other sessions and keeps the current one.
+- A wrong current password returns 401 with the generic body.
+- A weak new password returns 422.
+- A reset token is single use, sets the new password, and revokes sessions. It cannot be used to create a new account.
+- The invite list never contains tokens or hashes.
+- The deliveries list is paginated and filtered.
+- Test-send against fake sinks returns per-recipient results and writes no `alert_delivery` rows.
+- The test-send rate limit applies.
+- Migration 0004 upgrade/downgrade passes, and the model and migration agree.
+
+**Commit:** `feat: user management, password change/reset, invite admin, delivery status and test-send`
+
 ## Self-Review
 
 - **Spec coverage:**
