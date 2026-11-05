@@ -1,0 +1,382 @@
+from datetime import datetime, timedelta, timezone
+
+import psycopg.errors
+import pytest
+from sqlalchemy import insert
+from sqlalchemy.exc import IntegrityError
+
+from cvenom import pipeline
+from cvenom.collectors.base import CollectorResult
+from cvenom.models import Cve, Story, StoryCveLink
+from cvenom.pipeline import ingest, lane_views
+from cvenom.schemas import NormalizedCve, NormalizedStory
+from cvenom.scoring import Lane
+
+NOW = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
+
+
+def _story(url, title, published=NOW, summary="s"):
+    return NormalizedStory(url=url, source="THN", title=title, summary=summary, published=published)
+
+
+def _insert_cve(session, cve_id, **kw):
+    values = dict(cve_id=cve_id, kev=False, poc_badge=False, affected=[], summary="")
+    values.update(kw)
+    session.execute(insert(Cve).values(**values))
+
+
+def test_ingest_is_idempotent_and_links_stories(db_session):
+    pub = datetime(2026, 10, 21, tzinfo=timezone.utc)
+    r = CollectorResult(
+        cves=[NormalizedCve(cve_id="CVE-2026-109618", published=pub, cvss=9.2, kev=True)],
+        stories=[NormalizedStory(url="https://x/a", source="THN", title="PHP2Shell CVE-2026-109618", summary="rce", published=pub)])
+    ingest(db_session, r); ingest(db_session, r)  # twice
+    assert db_session.query(Story).count() == 1
+    assert db_session.query(StoryCveLink).count() == 1
+
+
+def test_lane_views_place_kev_in_exploited(db_session):
+    now = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-109618", published=now, cvss=9.2, kev=True)]))
+    views = lane_views(db_session, now)
+    assert any(v.cve_id == "CVE-2026-109618" for v in views[Lane.EXPLOITED])
+
+
+def test_ingest_returns_events_unchanged(db_session):
+    events = [{"type": "kev_added", "cve_id": "CVE-2026-1111"}]
+    assert ingest(db_session, CollectorResult(events=events)) == events
+
+
+def test_race_real_pk_conflict_rolls_back_savepoint_and_retry_merges(db_session, monkeypatch):
+    """First attempt hits a genuine PK conflict inside the savepoint; the retry merges."""
+    real = pipeline.upsert_cve
+    _insert_cve(db_session, "CVE-2026-5001", cvss=7.0, kev=True, affected=["old"], summary="theirs")
+    n = {"calls": 0}
+
+    def racing(session, data):
+        n["calls"] += 1
+        if n["calls"] == 1:
+            # Identity map misses the row another collector inserted -> real IntegrityError.
+            session.add(Cve(cve_id=data.cve_id, kev=False, poc_badge=False, affected=[], summary=""))
+            session.flush()
+        return real(session, data)
+
+    monkeypatch.setattr(pipeline, "upsert_cve", racing)
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id="CVE-2026-5001", epss_percentile=0.97, affected=["new"], summary="mine")]))
+    assert n["calls"] == 2  # retry path ran
+    row = db_session.get(Cve, "CVE-2026-5001")
+    assert row.kev is True and row.cvss == 7.0  # their data kept
+    assert row.epss_percentile == 0.97 and row.summary == "mine"  # ours merged
+    assert row.affected == ["old", "new"]
+
+
+def test_race_persistent_integrity_error_propagates(db_session, monkeypatch):
+    def always(session, data):
+        raise IntegrityError("INSERT", {}, psycopg.errors.UniqueViolation("dup"))
+
+    monkeypatch.setattr(pipeline, "upsert_cve", always)
+    with pytest.raises(IntegrityError):
+        ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-5002")]))
+
+
+def test_enrich_only_updates_existing_and_skips_unknown(db_session):
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-6000", cvss=8.0)]))
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id="CVE-2026-6000", epss_percentile=0.99),
+        NormalizedCve(cve_id="CVE-2026-6001", epss_percentile=0.99),
+    ]), enrich_only=True)
+    assert db_session.get(Cve, "CVE-2026-6000").epss_percentile == 0.99
+    assert db_session.get(Cve, "CVE-2026-6001") is None
+
+
+def test_sanitizes_story_and_cve_text(db_session):
+    ingest(db_session, CollectorResult(
+        cves=[NormalizedCve(cve_id="CVE-2026-7000", summary="bad <script>alert(1)</script>text")],
+        stories=[_story("https://x/s", "Hi <script>alert(2)</script>CVE-2026-7000", summary="<b>bold</b> <img src=x onerror=y>")]))
+    cve_summary = db_session.get(Cve, "CVE-2026-7000").summary
+    assert "<" not in cve_summary and "alert" not in cve_summary
+    s = db_session.query(Story).one()
+    assert "<" not in s.title and "alert" not in s.title
+    assert "<" not in s.summary
+    assert db_session.query(StoryCveLink).count() == 1  # extraction saw the raw text
+
+
+def test_extraction_on_raw_hash_on_sanitized(db_session):
+    from cvenom.textutil import content_hash, sanitize_text
+    t, s = "x <i>CVE-2026-7100</i>", "<p>y</p>"
+    ingest(db_session, CollectorResult(stories=[_story("https://x/h", t, summary=s)]))
+    row = db_session.query(Story).one()
+    assert row.content_hash == content_hash(sanitize_text(t), sanitize_text(s))
+    assert db_session.query(StoryCveLink).filter_by(cve_id="CVE-2026-7100").count() == 1
+
+
+def test_story_dedup_by_content_hash_with_new_url(db_session):
+    ingest(db_session, CollectorResult(stories=[_story("https://x/1", "Same title")]))
+    ingest(db_session, CollectorResult(stories=[_story("https://x/2", "Same title")]))
+    assert db_session.query(Story).count() == 1
+
+
+def test_quiet_foil_only_in_fresh_and_old_cve_in_no_lane(db_session):
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id="CVE-2026-8000", published=NOW - timedelta(hours=1), cvss=9.5),
+        NormalizedCve(cve_id="CVE-2026-8001", published=NOW - timedelta(days=400), cvss=9.8, epss_percentile=0.1),
+    ]))
+    views = lane_views(db_session, NOW)
+    assert [v.cve_id for v in views[Lane.FRESH]] == ["CVE-2026-8000"]
+    for lane in (Lane.EXPLOITED, Lane.LIKELY, Lane.LOUD):
+        assert views[lane] == []
+    assert all(v.cve_id != "CVE-2026-8001" for vs in views.values() for v in vs)
+
+
+def test_all_lane_keys_present_when_empty(db_session):
+    assert set(lane_views(db_session, NOW)) == set(Lane)
+
+
+def test_loud_window_and_recent_story_count(db_session):
+    ingest(db_session, CollectorResult(
+        cves=[NormalizedCve(cve_id="CVE-2026-9000"), NormalizedCve(cve_id="CVE-2026-9001")],
+        stories=[
+            _story("https://x/old", "old CVE-2026-9000", published=NOW - timedelta(hours=200)),
+            _story("https://x/n1", "new1 CVE-2026-9001", published=NOW - timedelta(hours=1)),
+            _story("https://x/n2", "new2 CVE-2026-9001", published=NOW - timedelta(hours=2)),
+            _story("https://x/o2", "older CVE-2026-9001", published=NOW - timedelta(hours=300)),
+        ]))
+    loud = lane_views(db_session, NOW)[Lane.LOUD]
+    assert [v.cve_id for v in loud] == ["CVE-2026-9001"]
+    assert loud[0].recent_story_count == 2
+
+
+def test_lane_ordering_by_heat_rank_and_multi_lane(db_session):
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id="CVE-2026-9100", kev=True, cvss=5.0),
+        NormalizedCve(cve_id="CVE-2026-9101", kev=True, cvss=9.0, epss_percentile=0.99),
+        NormalizedCve(cve_id="CVE-2026-9102", kev=True, cvss=7.0),
+    ]))
+    views = lane_views(db_session, NOW)
+    assert [v.cve_id for v in views[Lane.EXPLOITED]] == ["CVE-2026-9101", "CVE-2026-9102", "CVE-2026-9100"]
+    assert [v.cve_id for v in views[Lane.LIKELY]] == ["CVE-2026-9101"]
+
+
+def test_non_unique_integrity_error_is_not_retried(db_session, monkeypatch):
+    n = {"c": 0}
+
+    def fk(session, data):
+        n["c"] += 1
+        raise IntegrityError("INSERT", {}, psycopg.errors.ForeignKeyViolation("fk"))
+
+    monkeypatch.setattr(pipeline, "upsert_cve", fk)
+    with pytest.raises(IntegrityError):
+        ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-5100")]))
+    assert n["c"] == 1
+
+
+def test_story_race_real_unique_conflict_retries_and_skips(db_session, monkeypatch):
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-5200", kev=True)]))
+    db_session.execute(insert(Story).values(
+        url="https://x/race", content_hash="other", source="X", title="theirs", summary="", published=NOW))
+    real = pipeline.find_existing_story
+    n = {"c": 0}
+
+    def miss_first(session, url, digest):
+        n["c"] += 1
+        return None if n["c"] == 1 else real(session, url, digest)
+
+    monkeypatch.setattr(pipeline, "find_existing_story", miss_first)
+    ingest(db_session, CollectorResult(
+        cves=[NormalizedCve(cve_id="CVE-2026-5201")],
+        stories=[_story("https://x/race", "mine CVE-2026-5200")]))
+    assert n["c"] == 2  # unique violation on url -> savepoint rollback -> retry saw winner
+    assert db_session.query(Story).count() == 1
+    assert db_session.query(Story).one().title == "theirs"
+    assert db_session.get(Cve, "CVE-2026-5201") is not None  # batch not poisoned
+    assert db_session.get(Cve, "CVE-2026-5200").kev is True
+
+
+def test_stub_cve_race_inside_link_story_retries(db_session, monkeypatch):
+    real = pipeline.link_story
+    _insert_cve(db_session, "CVE-2026-5300", cvss=6.0)
+    n = {"c": 0}
+
+    def racing(session, story, ids):
+        n["c"] += 1
+        if n["c"] == 1:
+            session.add(Cve(cve_id="CVE-2026-5300", kev=False, poc_badge=False, affected=[], summary=""))
+            session.flush()  # real PK conflict
+        return real(session, story, ids)
+
+    monkeypatch.setattr(pipeline, "link_story", racing)
+    ingest(db_session, CollectorResult(stories=[_story("https://x/stub", "t CVE-2026-5300")]))
+    assert n["c"] == 2
+    assert db_session.query(Story).count() == 1
+    assert db_session.query(StoryCveLink).filter_by(cve_id="CVE-2026-5300").count() == 1
+    assert db_session.get(Cve, "CVE-2026-5300").cvss == 6.0
+
+
+def test_enrich_only_skips_stories(db_session):
+    ingest(db_session, CollectorResult(
+        stories=[_story("https://x/e", "t CVE-2026-5400")]), enrich_only=True)
+    assert db_session.query(Story).count() == 0
+    assert db_session.get(Cve, "CVE-2026-5400") is None
+
+
+def test_affected_entries_sanitized(db_session):
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id="CVE-2026-5500", affected=["php <script>alert(1)</script>8.1", "nginx"])]))
+    aff = db_session.get(Cve, "CVE-2026-5500").affected
+    assert all("<" not in a and "alert" not in a for a in aff)
+    assert "nginx" in aff
+
+
+def test_lane_tie_order_is_by_cve_id_and_naive_now_is_utc(db_session):
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id="CVE-2026-9202", kev=True),
+        NormalizedCve(cve_id="CVE-2026-9200", kev=True),
+        NormalizedCve(cve_id="CVE-2026-9201", kev=True),
+    ]))
+    for now in (NOW, NOW.replace(tzinfo=None)):
+        ids = [v.cve_id for v in lane_views(db_session, now)[Lane.EXPLOITED]]
+        assert ids == ["CVE-2026-9200", "CVE-2026-9201", "CVE-2026-9202"]
+
+
+def test_exact_boundaries_consistent_between_sql_and_scoring(db_session):
+    from cvenom.config import get_settings
+    cfg = get_settings()
+    ingest(db_session, CollectorResult(
+        cves=[
+            NormalizedCve(cve_id="CVE-2026-9300", cvss=cfg.fresh_cvss_floor, published=NOW),
+            NormalizedCve(cve_id="CVE-2026-9301", cvss=9.9,
+                          published=NOW - timedelta(hours=cfg.fresh_window_hours)),
+            NormalizedCve(cve_id="CVE-2026-9302", epss_percentile=cfg.epss_percentile_threshold),
+            NormalizedCve(cve_id="CVE-2026-9303"),
+        ],
+        stories=[_story("https://x/b", "edge CVE-2026-9303",
+                        published=NOW - timedelta(hours=cfg.loud_window_hours))]))
+    views = lane_views(db_session, NOW)
+    fresh = {v.cve_id for v in views[Lane.FRESH]}
+    assert {"CVE-2026-9300", "CVE-2026-9301"} <= fresh
+    assert [v.cve_id for v in views[Lane.LIKELY]] == ["CVE-2026-9302"]
+    loud = views[Lane.LOUD]
+    assert [v.cve_id for v in loud] == ["CVE-2026-9303"] and loud[0].recent_story_count == 1
+
+
+# --- KEV overlap across CISA and VulnCheck (#1) ---
+
+from datetime import date as _date
+
+
+def _kev_result(cve_id, source, added):
+    return CollectorResult(
+        cves=[NormalizedCve(cve_id=cve_id, kev=True, kev_source=source, kev_added=added)],
+        events=[{"type": "kev_added", "cve_id": cve_id, "source": source}],
+    )
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        (("cisa", _date(2026, 11, 3)), ("vulncheck", _date(2026, 11, 1))),
+        (("vulncheck", _date(2026, 11, 1)), ("cisa", _date(2026, 11, 3))),
+    ],
+    ids=["cisa_then_vulncheck", "vulncheck_then_cisa"],
+)
+def test_kev_overlap_one_event_stable_source_earliest_date(db_session, first, second):
+    cid = "CVE-2026-7001"
+    events = []
+    # Two full hourly cycles of both feeds: no flip-flopping, no duplicate events.
+    for _ in range(2):
+        events += ingest(db_session, _kev_result(cid, *first))
+        events += ingest(db_session, _kev_result(cid, *second))
+    assert [e["cve_id"] for e in events] == [cid]
+    assert events[0]["source"] == first[0]
+    row = db_session.get(Cve, cid)
+    assert row.kev_source == "cisa"
+    assert row.kev_added == _date(2026, 11, 1)
+
+
+def test_reingest_already_kev_cve_emits_nothing(db_session):
+    _insert_cve(db_session, "CVE-2026-7002", kev=True, kev_source="cisa")
+    res = _kev_result("CVE-2026-7002", "cisa", _date(2026, 11, 3))
+    assert ingest(db_session, res) == []
+
+
+def test_kev_event_for_new_cve_passes_and_other_events_untouched(db_session):
+    _insert_cve(db_session, "CVE-2026-7003", kev=False)  # known, but not yet KEV
+    res = CollectorResult(
+        cves=[NormalizedCve(cve_id="CVE-2026-7003", kev=True, kev_source="cisa")],
+        events=[
+            {"type": "kev_added", "cve_id": "CVE-2026-7003", "source": "cisa"},
+            {"type": "other", "cve_id": "CVE-2026-7003"},
+        ],
+    )
+    assert ingest(db_session, res) == res.events
+    # Second time around the CVE is KEV in the DB: kev_added dropped, other kept.
+    assert ingest(db_session, res) == [{"type": "other", "cve_id": "CVE-2026-7003"}]
+
+
+def test_osv_later_run_without_fix_does_not_downgrade_patch(db_session):
+    from cvenom.collectors.osv import OsvCollector
+
+    fixed = {
+        "id": "GHSA-8080-8080-8080",
+        "aliases": ["CVE-2026-8080"],
+        "affected": [{"package": {"ecosystem": "PyPI", "name": "p"},
+                      "ranges": [{"events": [{"introduced": "0"}, {"fixed": "1.1"}]}]}],
+    }
+    unfixed = {
+        "id": "GO-2026-8080",
+        "aliases": ["CVE-2026-8080"],
+        "affected": [{"package": {"ecosystem": "Go", "name": "q"},
+                      "ranges": [{"events": [{"introduced": "0"}]}]}],
+    }
+    _insert_cve(db_session, "CVE-2026-8080")
+    ingest(db_session, OsvCollector().normalize([fixed]), enrich_only=True)
+    ingest(db_session, OsvCollector().normalize([unfixed]), enrich_only=True)
+    row = db_session.get(Cve, "CVE-2026-8080")
+    assert row.patch_available is True
+    assert sorted(row.affected) == ["Go:q", "PyPI:p"]
+
+
+# --- enrich_only cost (#6) ---
+
+
+def test_enrich_path_issues_o_chunks_selects_and_no_savepoints(db_session):
+    from sqlalchemy import event
+
+    existing = [f"CVE-2026-{i:05d}" for i in range(0, 2500, 50)]  # 50 known
+    for cid in existing:
+        _insert_cve(db_session, cid)
+    db_session.flush()
+    res = CollectorResult(
+        cves=[NormalizedCve(cve_id=f"CVE-2026-{i:05d}", epss=0.5, epss_percentile=0.5) for i in range(2500)]
+    )
+    stmts: list[str] = []
+
+    def count(conn, cursor, statement, params, context, executemany):
+        stmts.append(statement.lstrip().split(None, 1)[0].upper())
+
+    bind = db_session.connection()
+    event.listen(bind, "before_cursor_execute", count)
+    try:
+        ingest(db_session, res, enrich_only=True)
+    finally:
+        event.remove(bind, "before_cursor_execute", count)
+
+    selects = stmts.count("SELECT")
+    assert selects <= 3, stmts[:20]  # ceil(2500 / 1000) chunked IN lookups
+    assert "SAVEPOINT" not in stmts
+    assert len(stmts) <= 3 + len(existing) + 5  # chunk SELECTs + one UPDATE per known row
+    assert db_session.query(Cve).count() == len(existing)  # nothing stub-created
+    assert db_session.get(Cve, existing[1]).epss == 0.5
+
+
+
+@pytest.mark.parametrize("enrich", [False, True])
+def test_empty_affected_entries_filtered_after_sanitizing(db_session, enrich):
+    cid = "CVE-2026-5501"
+    if enrich:
+        _insert_cve(db_session, cid)
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id=cid, affected=["<script>alert(1)</script>", "", "   ", "<b></b>", "nginx"])]),
+        enrich_only=enrich)
+    assert db_session.get(Cve, cid).affected == ["nginx"]
