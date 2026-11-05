@@ -14,7 +14,8 @@ import { useNow } from "../lib/useNow";
 type Pending =
   | { user: UserAdmin; action: "role"; role: Role }
   | { user: UserAdmin; action: "active"; active: boolean }
-  | { user: UserAdmin; action: "revoke" };
+  | { user: UserAdmin; action: "revoke" }
+  | { user: UserAdmin; action: "reset" };
 
 function confirmText(p: Pending) {
   const who = <Text value={p.user.email} as="strong" />;
@@ -27,6 +28,8 @@ function confirmText(p: Pending) {
       ) : (
         <>Deactivate {who}? Signs them out everywhere.</>
       );
+    case "reset":
+      return <>Create a password reset link for {who}? Any earlier unused reset link for this user stops working.</>;
     case "revoke":
       return <>Revoke all sessions for {who}? Signs them out everywhere.</>;
   }
@@ -41,7 +44,7 @@ export default function AdminUsers() {
   const [error, setError] = useState<string | null>(null);
   const confirmBtn = useRef<HTMLButtonElement>(null);
   const roleSelects = useRef(new Map<number, HTMLSelectElement>());
-  const resetBtns = useRef(new Map<number, HTMLButtonElement>());
+  const lastReset = useRef<number | null>(null);
 
   const users = useQuery({ queryKey: qk.users(), queryFn: ({ signal }) => api<UserAdmin[]>("/auth/users", { signal }) });
 
@@ -114,7 +117,11 @@ export default function AdminUsers() {
     if (!pending) return;
     if (pending.action === "role") patch.mutate({ user: pending.user, body: { role: pending.role } });
     else if (pending.action === "active") patch.mutate({ user: pending.user, body: { is_active: pending.active } });
-    else revoke.mutate(pending.user);
+    else if (pending.action === "reset") {
+      lastReset.current = pending.user.id;
+      setPending(null);
+      reset.mutate(pending.user);
+    } else revoke.mutate(pending.user);
   };
   const cancel = () => {
     const id = pending?.user.id;
@@ -128,8 +135,7 @@ export default function AdminUsers() {
   };
   const doneSecret = (key: number) => {
     setSecrets((l) => l.filter((s) => s.key !== key));
-    const last = [...resetBtns.current.values()][0];
-    last?.focus();
+    if (lastReset.current !== null) backToRow(lastReset.current);
   };
 
   return (
@@ -220,15 +226,12 @@ export default function AdminUsers() {
                             Revoke sessions
                           </button>
                           <button
-                            ref={(el) => {
-                              if (el) resetBtns.current.set(u.id, el);
-                              else resetBtns.current.delete(u.id);
-                            }}
                             type="button"
                             className="btn"
-                            disabled={self || reset.isPending}
+                            disabled={self || !u.is_active || reset.isPending}
+                            title={!u.is_active ? "Reactivate first" : undefined}
                             aria-label={`Reset password for ${name}`}
-                            onClick={() => reset.mutate(u)}
+                            onClick={() => setPending({ user: u, action: "reset" })}
                           >
                             Reset password
                           </button>

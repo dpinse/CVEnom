@@ -48,7 +48,7 @@ function TestSend({ rule }: { rule: AlertRule }) {
   return (
     <div className="admin-section" style={{ margin: 0 }}>
       <div className="admin-row">
-        <button type="button" className="btn" disabled={test.isPending} aria-describedby={hint} onClick={() => test.mutate()}>
+        <button type="button" className="btn" disabled={test.isPending || rule.recipients.length === 0} aria-describedby={hint} onClick={() => test.mutate()}>
           {test.isPending && <span className="spinner" aria-hidden="true" />}
           {test.isPending ? "Sending test…" : "Send test"}
         </button>
@@ -57,6 +57,7 @@ function TestSend({ rule }: { rule: AlertRule }) {
         </small>
       </div>
       <div aria-live="polite">
+        {rule.recipients.length === 0 && <p className="form-hint">This rule has no recipients</p>}
         {test.isError && <p className="form-errors">{testError(test.error)}</p>}
         {test.data && (
           <ul className="test-results" aria-label={`Test results for ${decodeEntities(rule.name)}`}>

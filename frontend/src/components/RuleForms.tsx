@@ -89,7 +89,8 @@ export function RecipientFields({
             type="password"
             value={draft.secret}
             onChange={(v) => onChange({ ...draft, secret: v })}
-            autoComplete="off"
+            autoComplete="new-password"
+            name={`webhook-secret-${n}`}
             maxLength={256}
             required={false}
             hint="Leave blank to generate. 16 to 256 characters. Shown once after you save."
@@ -239,9 +240,9 @@ export function RuleEditForm({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [name, setName] = useState(decodeEntities(rule.name));
+  const [name, setName] = useState(rule.name);
   const [threshold, setThreshold] = useState(rule.threshold === null ? "" : String(rule.threshold));
-  const [keyword, setKeyword] = useState(decodeEntities(rule.keyword ?? ""));
+  const [keyword, setKeyword] = useState(rule.keyword ?? "");
   const [enabled, setEnabled] = useState(rule.enabled);
   const [errors, setErrors] = useState<string[]>([]);
   const [tick, setTick] = useState(0);
@@ -250,6 +251,7 @@ export function RuleEditForm({
   const [adding, setAdding] = useState(false);
   const [recErrors, setRecErrors] = useState<string[]>([]);
   const [recTick, setRecTick] = useState(0);
+  const [removing, setRemoving] = useState<number | null>(null);
   const inflight = useRef(false);
   const addRef = useRef<HTMLButtonElement>(null);
 
@@ -273,9 +275,11 @@ export function RuleEditForm({
     setErrors([]);
     try {
       // Only the four editable fields; `kind` is immutable and never sent.
-      const patch: RulePatch = { name: name.trim(), enabled };
-      if (rule.kind === "cvss_min" || rule.kind === "epss_min") patch.threshold = cond.threshold;
-      if (rule.kind === "keyword") patch.keyword = cond.keyword;
+      // name/keyword/threshold are sent only when the user changed them (raw values are never rewritten).
+      const patch: RulePatch = { enabled };
+      if (name !== rule.name) patch.name = name.trim();
+      if ((rule.kind === "cvss_min" || rule.kind === "epss_min") && threshold !== String(rule.threshold ?? "")) patch.threshold = cond.threshold;
+      if (rule.kind === "keyword" && keyword !== (rule.keyword ?? "")) patch.keyword = cond.keyword;
       await api(`/alerts/rules/${rule.id}`, { method: "PATCH", body: patch });
       await refresh();
       onClose();
@@ -318,6 +322,7 @@ export function RuleEditForm({
     setRecErrors([]);
     try {
       await api(`/alerts/rules/${rule.id}/recipients/${r.id}`, { method: "DELETE" });
+      setRemoving(null);
       await refresh();
       addRef.current?.focus();
     } catch (err) {
@@ -372,14 +377,26 @@ export function RuleEditForm({
             <li key={r.id}>
               <span className="badge">{r.channel}</span>
               <Text value={r.channel === "email" ? r.email : (r.url_masked ?? "(webhook)")} />
-              <button
-                type="button"
-                className="btn"
-                aria-label={`Remove recipient ${decodeEntities(r.channel === "email" ? r.email : (r.url_masked ?? "webhook"))}`}
-                onClick={() => void removeRecipient(r)}
-              >
-                Remove
-              </button>
+              {removing === r.id ? (
+                <span className="confirm">
+                  <span>Remove this recipient? A webhook&apos;s secret is lost permanently.</span>
+                  <button type="button" className="btn danger" ref={(el) => el?.focus()} onClick={() => void removeRecipient(r)}>
+                    Confirm remove
+                  </button>
+                  <button type="button" className="btn" onClick={() => setRemoving(null)}>
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn"
+                  aria-label={`Remove recipient ${decodeEntities(r.channel === "email" ? r.email : (r.url_masked ?? "webhook"))}`}
+                  onClick={() => setRemoving(r.id)}
+                >
+                  Remove
+                </button>
+              )}
             </li>
           ))}
         </ul>

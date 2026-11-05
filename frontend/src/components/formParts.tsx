@@ -38,6 +38,7 @@ export function Field({
   maxLength,
   required = true,
   hint,
+  name,
 }: {
   label: string;
   type: string;
@@ -48,6 +49,8 @@ export function Field({
   required?: boolean;
   /** Helper text under the input, linked with aria-describedby. */
   hint?: string;
+  /** Distinct name/id so password managers do not treat the field as a login credential. */
+  name?: string;
 }) {
   const hintId = useId();
   return (
@@ -64,6 +67,9 @@ export function Field({
           spellCheck={false}
           autoCapitalize="none"
           aria-describedby={hint ? hintId : undefined}
+          name={name}
+          id={name}
+          {...(name ? { "data-lpignore": "true", "data-1p-ignore": "true", "data-bwignore": "true" } : {})}
         />
       </label>
       {hint && (

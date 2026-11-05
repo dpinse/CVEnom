@@ -187,6 +187,9 @@ describe("AdminUsers", () => {
     const qc = open();
     const bob = await rowOf("bob@example.com");
     fireEvent.click(within(bob).getByRole("button", { name: /Reset password/ }));
+    expect(calls).toEqual([]);
+    expect(within(bob).getByText(/Any earlier unused reset link for this user stops working/)).toBeInTheDocument();
+    fireEvent.click(within(bob).getByRole("button", { name: "Confirm" }));
     const panel = await screen.findByRole("region", { name: /Password reset link/ });
     const link = `${location.origin}/reset/${TOKEN}`;
     expect(within(panel).getByDisplayValue(link)).toBeInTheDocument();
@@ -203,7 +206,15 @@ describe("AdminUsers", () => {
     setItem.mockRestore();
 
     const dan = await rowOf("dan@example.com");
-    fireEvent.click(within(dan).getByRole("button", { name: /Reset password/ }));
+    const danReset = within(dan).getByRole("button", { name: /Reset password/ });
+    expect(danReset).toBeDisabled();
+    expect(danReset).toHaveAttribute("title", "Reactivate first");
+    // a stale list can still hit the server error
+    users = users.map((u) => (u.id === 4 ? { ...u, is_active: true } : u));
+    await qc.invalidateQueries();
+    const dan2 = await rowOf("dan@example.com");
+    fireEvent.click(within(dan2).getByRole("button", { name: /Reset password/ }));
+    fireEvent.click(within(dan2).getByRole("button", { name: "Confirm" }));
     expect(await screen.findByText("Reactivate the user before resetting their password")).toBeInTheDocument();
   });
 });

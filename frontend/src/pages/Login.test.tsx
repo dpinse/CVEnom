@@ -43,7 +43,7 @@ describe("Login form", () => {
       });
       const alert = screen.getByText("Email or password is incorrect");
       texts.push(alert.textContent ?? "");
-      expect(document.activeElement).toBe(alert.closest("[aria-live]"));
+      await waitFor(() => expect(document.activeElement).toBe(alert.closest("[aria-live]")));
     }
     expect(texts[0]).toBe(texts[1]);
     expect(screen.getByText("Email or password is incorrect").closest("[aria-live]")).toHaveAttribute("aria-live", "assertive");

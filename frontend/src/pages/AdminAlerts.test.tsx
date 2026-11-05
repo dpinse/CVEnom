@@ -352,6 +352,8 @@ describe("edit rule", () => {
     const group = screen.getByRole("group", { name: /Edit rule/ });
     expect(within(group).getByText("https://hooks.example.com/…")).toBeInTheDocument();
     fireEvent.click(within(group).getByRole("button", { name: "Remove recipient ops@example.com" }));
+    expect(bodies.some((b) => b.method === "DELETE")).toBe(false);
+    fireEvent.click(within(group).getByRole("button", { name: "Confirm remove" }));
     await waitFor(() => expect(bodies.some((b) => b.method === "DELETE")).toBe(true));
 
     setField(/Recipient 3 type/, "webhook");
@@ -396,6 +398,57 @@ describe("edit rule", () => {
     submitCreate();
     expect(await screen.findByText("That webhook address isn't allowed (must be a public https endpoint)")).toBeInTheDocument();
     expect(screen.getByRole("form", { name: "New alert rule" })).toBeInTheDocument();
+  });
+});
+
+describe("hardening", () => {
+  test("editing with only Enabled toggled leaves an entity-looking name untouched", async () => {
+    rules = [mkRule({ name: "R&amp;D", kind: "keyword", threshold: null, keyword: "a&amp;b" })];
+    mock();
+    server.use(http.patch(`${U}/rules/1`, async ({ request }) => (await record(request), HttpResponse.json(rules[0]))));
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: /^Edit/ }));
+    expect(screen.getByLabelText("Name")).toHaveValue("R&amp;D");
+    fireEvent.click(within(screen.getByRole("group", { name: /Edit rule/ })).getByLabelText("Enabled"));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0].body).toEqual({ enabled: false });
+  });
+
+  test("webhook secret input resists password managers", async () => {
+    mock();
+    open();
+    await openCreate();
+    setField("Recipient 1 type", "webhook");
+    const input = screen.getByLabelText(/webhook secret/i);
+    expect(input).toHaveAttribute("autocomplete", "new-password");
+    expect(input.getAttribute("name")).toBe("webhook-secret-1");
+  });
+
+  test("a rule with no recipients says so and cannot be test-sent", async () => {
+    rules = [mkRule({ recipients: [] })];
+    mock();
+    open();
+    expect(await screen.findByText("This rule has no recipients")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send test" })).toBeDisabled();
+  });
+
+  test("deliveries refetch every 30 seconds", async () => {
+    deliveries = [mkDelivery()];
+    deliveryTotal = 1;
+    mock();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      open();
+      await screen.findByRole("table");
+      const n = deliveryQueries.length;
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(deliveryQueries.length).toBe(n);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(deliveryQueries.length).toBeGreaterThan(n));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
