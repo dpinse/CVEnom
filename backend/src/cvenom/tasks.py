@@ -22,6 +22,7 @@ from cvenom.collectors import abusech, cfradar, dshield, epss, kev, news, nvd, o
 from cvenom.collectors.base import REGISTRY
 from cvenom.config import get_settings
 from cvenom.db import get_engine, session_scope
+from cvenom import live
 from cvenom.alerts.dispatch import dispatch_once
 from cvenom.alerts.sinks import build_sinks
 from cvenom.models import CollectorRun, Cve, UserSession
@@ -94,10 +95,12 @@ class RedisLock:
         self.client.eval(_RELEASE_LUA, 1, LOCK_PREFIX + name, self._token)
 
 
-def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLock | None = None) -> dict:
+def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLock | None = None,
+                  publisher=None) -> dict:
     cls = REGISTRY[name]
     lock = lock if lock is not None else RedisLock()
-    summary = {"collector": name, "ok": False, "cves": 0, "stories": 0, "events": [], "events_persisted": 0, "skipped": False}
+    summary = {"collector": name, "ok": False, "cves": 0, "stories": 0, "events": [], "events_persisted": 0, "skipped": False,
+               "published": False}
     # The Redis lock is the cheap skip; the row lock (FOR UPDATE) below is the
     # correctness guarantee. TTL is 2x cadence so a slow run rarely outlives it.
     if not lock.acquire(name, 2 * cls.cadence_seconds):
@@ -133,6 +136,13 @@ def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLo
             row.state = collector.state
         summary.update(ok=True, cves=len(result.cves), stories=len(result.stories), events=events,
                        events_persisted=persisted)
+        what = live.what_changed(result)
+        if what:  # after commit; best effort, never changes the result
+            try:
+                (publisher or (lambda w: live.publish(_default_redis_client(), w)))(what)
+                summary["published"] = True
+            except Exception as exc:
+                log.warning("live publish failed: %s", type(exc).__name__)
         return summary
     finally:
         lock.release(name)

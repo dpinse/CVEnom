@@ -21,6 +21,7 @@ from .routes_alerts import router as alerts_router
 from .routes_auth import router as auth_router
 from .routes_read import CACHE_PATHS
 from .routes_read import router as read_router
+from .routes_ws import router as ws_router
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +110,7 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(alerts_router)
     app.include_router(read_router)
+    app.include_router(ws_router)
 
     @app.get("/api/health")
     def health() -> dict:

@@ -7,7 +7,7 @@ import json
 import logging
 from functools import lru_cache
 
-from starlette.requests import ClientDisconnect, Request
+from starlette.requests import ClientDisconnect, HTTPConnection
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 log = logging.getLogger(__name__)
@@ -188,7 +188,7 @@ def _networks(cidrs: tuple[str, ...]):
     return tuple(ipaddress.ip_network(c, strict=False) for c in cidrs)
 
 
-def client_ip(request: Request) -> str:
+def client_ip(request: HTTPConnection) -> str:
     """Resolve the real client IP. Forwarding headers are honoured only when
     the socket peer is inside settings.trusted_proxy_cidrs. The X-Forwarded-For
     walk goes right to left and stops (returning the peer) at any invalid hop."""

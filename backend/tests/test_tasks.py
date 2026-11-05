@@ -718,3 +718,36 @@ def test_alerts_dispatch_job_failure_logs_type_and_frames_not_message(caplog):
                                         sinks=None, now=datetime(2026, 6, 1))  # naive now -> ValueError
     assert out == {"ok": False}
     assert "ValueError" in caplog.text and "File" in caplog.text
+
+
+def test_run_collector_publishes_after_commit(db_session, factory, fake_registry):
+    from cvenom.tasks import run_collector
+    fake_registry(make_fake())
+    seen = []
+
+    def pub(what):
+        # runs after the session block exited: the row is already written
+        seen.append((what, db_session.get(Cve, "CVE-2099-0001") is not None))
+
+    out = run_collector("fake_t", session_factory=factory, lock=FakeLock(), publisher=pub)
+    assert out["published"] is True and seen == [(["lanes"], True)]
+
+
+def test_run_collector_publish_failure_does_not_fail_run(db_session, factory, fake_registry, caplog):
+    from cvenom.tasks import run_collector
+    fake_registry(make_fake())
+
+    def pub(what):
+        raise ConnectionError("redis://user:secret@host")
+
+    out = run_collector("fake_t", session_factory=factory, lock=FakeLock(), publisher=pub)
+    assert out["ok"] is True and out["published"] is False and out["cves"] == 1
+    assert "secret" not in caplog.text and "ConnectionError" in caplog.text
+
+
+def test_run_collector_no_publish_on_failure_or_skip(db_session, factory, fake_registry):
+    from cvenom.tasks import run_collector
+    fake_registry(make_fake(fail=True))
+    calls = []
+    out = run_collector("fake_t", session_factory=factory, lock=FakeLock(), publisher=calls.append)
+    assert out["ok"] is False and out["published"] is False and calls == []
