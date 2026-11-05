@@ -17,6 +17,7 @@ from cvenom.db import session_scope
 from .cache import ResponseCacheMiddleware
 from .middleware import BodyLimitMiddleware, ErrorCatchMiddleware, SecurityHeadersMiddleware
 from .ratelimit import get_redis
+from .routes_auth import router as auth_router
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +100,8 @@ def create_app(
             allow_headers=["Authorization", "Content-Type", "X-CVEnom-CSRF"],
         )
     app.add_middleware(SecurityHeadersMiddleware)
+
+    app.include_router(auth_router)
 
     @app.get("/api/health")
     def health() -> dict:

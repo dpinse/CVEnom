@@ -15,6 +15,7 @@ dependencies = [
     "redis>=5.2",
     "httpx>=0.28",
     "pydantic>=2.10",
+    "email-validator>=2.2",
     "pydantic-settings>=2.7",
     "bleach>=6.2",
     "fastapi>=0.115",
