@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # KEV/VulnCheck: alert only for entries whose own add date is this recent.
     kev_alert_max_age_days: int = 14
     geo_retention_days: int = 30
+    geoip_dir: str = "data/geoip"
+    maxmind_account_id: str | None = None
+    maxmind_license_key: str | None = None
 
 
 @lru_cache
