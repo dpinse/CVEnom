@@ -211,17 +211,27 @@ class WebhookSink:
             raise SinkError("webhook target rejected") from None
         now = datetime.now(timezone.utc)
         body = _build_body(cve, rule, now)
+        status: list[int] = []  # set by _post as soon as the response headers arrive
         try:
             asyncio.run(asyncio.wait_for(
-                self._post(url, target, secret, body, int(now.timestamp())), OVERALL_TIMEOUT_S))
+                self._post(url, target, secret, body, int(now.timestamp()), status),
+                OVERALL_TIMEOUT_S))
         except SinkError:
             raise
         except Exception as exc:
+            # The receiver already answered: a body that breaks or stalls (incl. the
+            # overall timeout) must not turn a 2xx into a retry (= duplicate alert).
+            if status:
+                if 200 <= status[0] < 300:
+                    return
+                raise SinkError(f"webhook returned {status[0]}") from None
             # Never include str(exc): httpx messages embed the URL.
             raise SinkError(f"webhook transport error: {type(exc).__name__}") from None
+        if not 200 <= status[0] < 300:
+            raise SinkError(f"webhook returned {status[0]}")
 
     async def _post(self, url: str, target: ValidatedTarget, secret: str, body: bytes,
-                    ts: int) -> None:
+                    ts: int, status: list[int]) -> None:
         parts = urlsplit(url)
         ip = target.ips[0]
         ip_host = f"[{ip}]" if ":" in ip else ip
@@ -241,11 +251,9 @@ class WebhookSink:
                                      transport=self._transport, trust_env=False) as client:
             async with client.stream("POST", pinned, content=body, headers=headers,
                                      extensions={"sni_hostname": target.host}) as resp:
-                status = resp.status_code
+                status.append(resp.status_code)
                 read = 0
-                async for chunk in resp.aiter_raw():
+                async for chunk in resp.aiter_raw():  # drain (capped) so the conn closes cleanly
                     read += len(chunk)
                     if read >= MAX_RESPONSE_BYTES:
                         break
-        if not 200 <= status < 300:
-            raise SinkError(f"webhook returned {status}")

@@ -365,3 +365,93 @@ def test_webhook_absent_credentials_are_a_hard_error():
     with pytest.raises(SinkError) as ei:
         sink_with(Capture()).send(None, make_cve(), make_rule(), AlertRecipient(channel="webhook"))
     assert not isinstance(ei.value, SinkNotConfigured)
+
+
+# ------------------------------- M-a: 2xx then a broken/stalled body is success
+
+
+class _BrokenBody(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"partial"
+        raise httpx.ReadError("connection reset mid-body")
+
+
+class _StalledBody(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"partial"
+        import asyncio
+
+        await asyncio.sleep(3600)
+        yield b"never"
+
+
+def test_webhook_2xx_with_broken_body_counts_as_success(monkeypatch):
+    dns(monkeypatch, PUBLIC_IP)
+    sink_with(lambda req: httpx.Response(200, stream=_BrokenBody())).send(
+        None, make_cve(), make_rule(), hook_recipient())
+
+
+def test_webhook_2xx_with_stalled_body_counts_as_success(monkeypatch):
+    dns(monkeypatch, PUBLIC_IP)
+    monkeypatch.setattr(webhook, "OVERALL_TIMEOUT_S", 0.2)
+    sink_with(lambda req: httpx.Response(200, stream=_StalledBody())).send(
+        None, make_cve(), make_rule(), hook_recipient())
+
+
+def test_webhook_non_2xx_with_broken_body_reports_status(monkeypatch):
+    dns(monkeypatch, PUBLIC_IP)
+    with pytest.raises(SinkError, match="^webhook returned 500$"):
+        sink_with(lambda req: httpx.Response(500, stream=_BrokenBody())).send(
+            None, make_cve(), make_rule(), hook_recipient())
+
+
+def test_webhook_timeout_before_headers_is_failure(monkeypatch):
+    dns(monkeypatch, PUBLIC_IP)
+    monkeypatch.setattr(webhook, "OVERALL_TIMEOUT_S", 0.2)
+
+    class SlowTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            import asyncio
+
+            await asyncio.sleep(3600)
+
+    with pytest.raises(SinkError, match="^webhook transport error: TimeoutError$"):
+        WebhookSink(transport=SlowTransport()).send(None, make_cve(), make_rule(), hook_recipient())
+
+
+# ------------------------------------------- M-b: email timeout and recipients
+
+
+def test_email_overall_timeout(monkeypatch):
+    import asyncio
+
+    from cvenom.alerts import email as email_mod
+
+    async def slow(self, *a, **k):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(email_mod, "SEND_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(EmailSink, "_send", slow)
+    with pytest.raises(SinkError) as ei:
+        EmailSink(smtp_settings()).send(None, make_cve(), make_rule(), mail_recipient())
+    assert str(ei.value) == "smtp error: TimeoutError"
+
+
+def test_email_default_overall_timeout_is_30s():
+    from cvenom.alerts import email as email_mod
+
+    assert email_mod.SEND_TIMEOUT_S == 30
+
+
+@pytest.mark.parametrize("addr", ["a@b.com, x@y.com", "a@b.com; x@y.com", "", "not-an-address"])
+def test_email_multi_or_invalid_recipient_rejected(smtp, addr):
+    with pytest.raises(SinkError) as ei:
+        EmailSink(smtp_settings()).send(None, make_cve(), make_rule(), mail_recipient(addr or " "))
+    assert str(ei.value) == "smtp error: invalid recipient"
+    assert not isinstance(ei.value, SinkNotConfigured)
+    assert smtp == []
+
+
+def test_email_recipients_passed_explicitly(smtp):
+    EmailSink(smtp_settings()).send(None, make_cve(), make_rule(), mail_recipient())
+    assert smtp[0][1]["recipients"] == ["dest@example.com"]

@@ -6,6 +6,7 @@ import asyncio
 import re
 from email.message import EmailMessage
 from email.policy import SMTP
+from email.utils import getaddresses
 
 import aiosmtplib
 
@@ -14,6 +15,7 @@ from cvenom.config import get_settings
 from cvenom.models import AlertDelivery, AlertRecipient, AlertRule, Cve
 
 SUBJECT_MAX = 200
+SEND_TIMEOUT_S = 30  # overall bound (connect + TLS + auth + DATA)
 _HEADER_BAD = re.compile(r"[\x00-\x1f\x7f\x85  ]")
 
 
@@ -30,18 +32,28 @@ class EmailSink:
 
     def send(self, delivery: AlertDelivery, cve: Cve, rule: AlertRule,
              recipient: AlertRecipient) -> None:
-        asyncio.run(self._send(cve, rule, recipient))
+        try:
+            asyncio.run(asyncio.wait_for(self._send(cve, rule, recipient), SEND_TIMEOUT_S))
+        except SinkError:
+            raise
+        except Exception as exc:
+            raise SinkError(f"smtp error: {type(exc).__name__}") from None
 
     async def _send(self, cve: Cve, rule: AlertRule, recipient: AlertRecipient) -> None:
         st = self._cfg()
         if not st.smtp_host or not st.smtp_from_addr or not recipient.email:
             raise SinkNotConfigured("smtp not configured")
+        # Exactly one plain address: never let a stored value fan out to others.
+        addr = recipient.email.strip()
+        parsed = getaddresses([recipient.email])
+        if len(parsed) != 1 or parsed[0][1] != addr or "@" not in addr:
+            raise SinkError("smtp error: invalid recipient")
         try:
             msg = EmailMessage(policy=SMTP)
             subject = _HEADER_BAD.sub("", f"[CVEnom] {cve.cve_id} exploited in the wild")
             msg["Subject"] = subject[:SUBJECT_MAX]
             msg["From"] = st.smtp_from_addr
-            msg["To"] = recipient.email
+            msg["To"] = addr
             kev_added = cve.kev_added.isoformat() if cve.kev_added else "n/a"
             msg.set_content(
                 "\n".join([
@@ -67,7 +79,7 @@ class EmailSink:
                 kwargs["username"] = st.smtp_username
             if st.smtp_password is not None:
                 kwargs["password"] = st.smtp_password.get_secret_value()
-            await aiosmtplib.send(msg, **kwargs)
+            await aiosmtplib.send(msg, recipients=[addr], **kwargs)
         except Exception as exc:
             # Never include str(exc): SMTP errors can echo usernames and server banners.
             raise SinkError(f"smtp error: {type(exc).__name__}") from None

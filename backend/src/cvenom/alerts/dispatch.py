@@ -30,15 +30,24 @@ ERROR_MAX = 300
 DEDUPE_CONSTRAINT = "uq_alert_delivery_rule_recipient_cve"
 
 
+def _at_least(value: float | None, threshold: float | None) -> bool:
+    """Threshold filter for KEV-gated rules: a known score must meet the
+    threshold, but an UNKNOWN score (not scored yet) matches, so an exploited
+    CVE is alerted on rather than silently dropped."""
+    if threshold is None:
+        return False  # misconfigured rule
+    return value is None or value >= threshold
+
+
 def _matches(rule: AlertRule, cve: Cve) -> bool:
+    # Rules only ever see kev_added events (anti-firehose); kinds narrow them.
     kind = rule.kind
     if kind == "kev_added":
         return True
     if kind == "cvss_min":
-        return cve.cvss is not None and rule.threshold is not None and cve.cvss >= rule.threshold
+        return _at_least(cve.cvss, rule.threshold)
     if kind == "epss_min":
-        return (cve.epss_percentile is not None and rule.threshold is not None
-                and cve.epss_percentile >= rule.threshold)
+        return _at_least(cve.epss_percentile, rule.threshold)
     if kind == "keyword":
         if not rule.keyword:
             return False

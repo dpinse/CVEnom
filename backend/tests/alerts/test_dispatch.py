@@ -125,10 +125,10 @@ def test_disabled_rule_produces_nothing(db_session, factory):
 @pytest.mark.parametrize("kind,field,threshold,value,expected", [
     ("cvss_min", "cvss", 7.0, 7.0, 1),
     ("cvss_min", "cvss", 7.0, 6.9, 0),
-    ("cvss_min", "cvss", 7.0, None, 0),
+    ("cvss_min", "cvss", 7.0, None, 1),  # I4: unknown score fires
     ("epss_min", "epss_percentile", 0.9, 0.95, 1),
     ("epss_min", "epss_percentile", 0.9, 0.5, 0),
-    ("epss_min", "epss_percentile", 0.9, None, 0),
+    ("epss_min", "epss_percentile", 0.9, None, 1),  # I4: unknown score fires
 ])
 def test_threshold_rules(db_session, factory, kind, field, threshold, value, expected):
     _cve(db_session, **{field: value})
@@ -136,6 +136,24 @@ def test_threshold_rules(db_session, factory, kind, field, threshold, value, exp
     _event(db_session)
     out = dispatch_once(factory, NOW, {"email": FakeSink()})
     assert out["deliveries_created"] == expected
+
+
+@pytest.mark.parametrize("kind,field,threshold,known_low", [
+    ("cvss_min", "cvss", 9.0, 5.0),
+    ("epss_min", "epss_percentile", 0.9, 0.5),
+])
+def test_unknown_score_fires_known_low_score_does_not(db_session, factory, kind, field,
+                                                     threshold, known_low):
+    """KEV-gated rules: an exploited CVE not yet scored must alert, not vanish."""
+    _cve(db_session, "CVE-2099-0001", **{field: None})
+    _cve(db_session, "CVE-2099-0002", **{field: known_low})
+    _rule(db_session, kind=kind, threshold=threshold)
+    _event(db_session, "CVE-2099-0001")
+    _event(db_session, "CVE-2099-0002")
+    sink = FakeSink()
+    dispatch_once(factory, NOW, {"email": sink})
+    assert [d.cve_id for d in _deliveries(db_session)] == ["CVE-2099-0001"]
+    assert [c[1] for c in sink.calls] == ["CVE-2099-0001"]
 
 
 def test_keyword_matches_entity_escaped_summary(db_session, factory):
