@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { join } from "node:path";
-import type { Page } from "@playwright/test";
+import type { APIResponse, Page } from "@playwright/test";
 import { canvasCentreStdDev, CVE_ID, expect, loaded, STDDEV_MIN, test } from "./harness";
+import { cspFor } from "./nginxHeaders.ts";
 
 /**
  * The production dist/ served by e2e/csp-server.mjs with exactly the response headers parsed from nginx.conf.
@@ -10,7 +12,40 @@ import { canvasCentreStdDev, CVE_ID, expect, loaded, STDDEV_MIN, test } from "./
 test.use({ baseURL: "http://127.0.0.1:4174" });
 
 const CONF = readFileSync(join(import.meta.dirname, "../nginx.conf"), "utf8");
-const CSP = /add_header Content-Security-Policy "([^"]+)" always;/.exec(CONF)![1];
+/** The SPA policy and the /api/ policy, both read from nginx.conf's `map $uri $csp`. */
+const CSP = cspFor(CONF, "/");
+const API_CSP = cspFor(CONF, "/api/");
+
+/** Every Content-Security-Policy header line on a response (a duplicate would be two entries). */
+const cspHeaders = (res: APIResponse) =>
+  res
+    .headersArray()
+    .filter((h) => h.name.toLowerCase() === "content-security-policy")
+    .map((h) => h.value);
+
+/** Raw WebSocket handshake against the CSP server; resolves with the 101 response's raw headers. */
+function wsHandshakeHeaders(): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      host: "127.0.0.1",
+      port: 4174,
+      path: "/api/ws/live",
+      headers: {
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Version": "13",
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+      },
+    });
+    req.on("upgrade", (res, socket) => {
+      socket.destroy();
+      resolve(res.rawHeaders);
+    });
+    req.on("response", (res) => reject(new Error(`no upgrade: HTTP ${res.statusCode}`)));
+    req.on("error", reject);
+    req.end();
+  });
+}
 
 type Violation = { directive: string; blocked: string; sample: string };
 type Win = Window & { __cspViolations: Violation[]; __RealWebSocket: typeof WebSocket };
@@ -40,6 +75,39 @@ test("the server really applies the nginx.conf headers", async ({ request }) => 
   expect(h["permissions-policy"]).toContain("camera=()");
   expect(h["cache-control"]).toBe("no-store");
   expect(CSP).not.toMatch(/unsafe-inline|unsafe-eval|blob:/);
+});
+
+test("per-URI CSP: the SPA shell, its fallback and /assets/* get the SPA policy, exactly once", async ({ request }) => {
+  const shell = await request.get("/");
+  expect(cspHeaders(shell)).toEqual([CSP]);
+  expect(cspHeaders(await request.get("/some/spa/route"))).toEqual([CSP]);
+  const asset = /<script[^>]+src="(\/assets\/[^"]+\.js)"/.exec(await shell.text())?.[1];
+  expect(asset).toBeTruthy();
+  const res = await request.get(asset!);
+  expect(res.status()).toBe(200);
+  expect(cspHeaders(res)).toEqual([CSP]);
+  expect(cspHeaders(await request.get("/assets/missing-0000.js"))).toEqual([CSP]); // the 404 too
+  expect(CSP).toContain("script-src 'self'");
+});
+
+test("per-URI CSP: /api/ responses (here nginx's own 502) get the api's strict policy, exactly once", async ({ request }) => {
+  expect(API_CSP).not.toBe(CSP);
+  expect(API_CSP).toMatch(/^default-src 'none';/);
+  expect(API_CSP).toContain("frame-ancestors 'none'");
+  const res = await request.get("/api/health");
+  expect(res.status()).toBe(502);
+  expect(cspHeaders(res)).toEqual([API_CSP]);
+  expect(res.headers()["x-content-type-options"]).toBe("nosniff");
+  expect(res.headers()["cache-control"]).toBeUndefined(); // the api's own Cache-Control passes through
+  // A path outside /api/ that merely contains it keeps the SPA policy.
+  expect(cspHeaders(await request.get("/apix/health"))).toEqual([CSP]);
+});
+
+test("per-URI CSP: the /api/ws/live WebSocket handshake gets the api's strict policy, exactly once", async () => {
+  const raw = await wsHandshakeHeaders();
+  const csp = raw.filter((_, i) => i % 2 === 1 && raw[i - 1].toLowerCase() === "content-security-policy");
+  expect(csp).toEqual([API_CSP]);
+  expect(API_CSP).not.toBe(CSP);
 });
 
 test("dashboard under the production CSP: zero violations, the globe draws, no console errors", async ({ page, guards }) => {

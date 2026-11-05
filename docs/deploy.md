@@ -151,12 +151,16 @@ host name over http is not exempt.
 ## Content Security Policy and security headers
 
 nginx sends these on every response (`always`, including errors); proxied `/api` responses keep
-the API's other headers (such as `Cache-Control`):
+the API's other headers (such as `Cache-Control`). The CSP depends on the path:
 
 ```
+# the SPA (everything outside /api/)
 Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;
   font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none';
   base-uri 'none'; form-action 'self'; upgrade-insecure-requests
+# /api/ (JSON, the /api/ws/live handshake, and nginx's own 502/504 pages for /api/)
+Content-Security-Policy: default-src 'none'; frame-ancestors 'none'
+# both
 Strict-Transport-Security: max-age=63072000; includeSubDomains
 X-Content-Type-Options: nosniff    Referrer-Policy: no-referrer    X-Frame-Options: DENY
 Cross-Origin-Opener-Policy: same-origin    Cross-Origin-Resource-Policy: same-origin
@@ -166,8 +170,11 @@ Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
 There is no `unsafe-inline`, `unsafe-eval`, `blob:` or remote origin. `connect-src 'self'` covers
 the same-origin `wss://` live socket in current Chromium and Firefox (checked by
 `frontend/e2e/csp.spec.ts`, which serves `dist/` with exactly the headers parsed from
-`nginx.conf`). Fonts are real files (never `data:` URIs) because of `font-src 'self'`; the map
-worker is a same-origin module worker; React and MapLibre set styles through the CSSOM, which
+`nginx.conf`, the per-path CSP map included). The policy is picked by a single `map $uri $csp`
+and one server-level `add_header`; `$uri` is the normalised path nginx also matches locations
+against, so a request gets the `/api/` policy exactly when one of the `/api/` locations serves
+it. Fonts are real files (never `data:` URIs) because of `font-src 'self'`; the map worker is a
+same-origin module worker; React and MapLibre set styles through the CSSOM, which
 `style-src 'self'` allows. `index.html` carries no inline script or style.
 
 - **API docs.** FastAPI mounts `/docs`, `/redoc` and `/openapi.json` at the root, outside `/api/`,
@@ -178,13 +185,9 @@ worker is a same-origin module worker; React and MapLibre set styles through the
   deliberately no nginx route for them; keep `API_DOCS=false`.
 - **Response headers.** The api sets CSP, HSTS, nosniff, Referrer-Policy and X-Frame-Options itself;
   nginx hides those five from `/api/` responses (`proxy_hide_header`) and sends its own, so each
-  appears exactly once. HSTS, nosniff, Referrer-Policy and X-Frame-Options match or exceed the
-  api's. The CSP does not: the SPA policy replaces the api's stricter `default-src 'none';
-  frame-ancestors 'none'` on `/api/` responses. That is acceptable because those responses are JSON
-  served with `nosniff` (a browser will not run or render them as a document), and framing is still
-  refused by `frame-ancestors 'none'` and `X-Frame-Options: DENY`. A per-URI CSP (the api's policy
-  on `/api/`) is a possible future hardening. Any other api header (`Cache-Control`, ...) passes
-  through untouched.
+  appears exactly once. All five match or exceed the api's; on `/api/` the CSP nginx sends is the
+  api's own `default-src 'none'; frame-ancestors 'none'`. Any other api header (`Cache-Control`,
+  ...) passes through untouched.
 - **X-Forwarded-Proto.** nginx passes the gateway's `X-Forwarded-Proto` through only when the peer is
   the trusted gateway and the value is exactly `http` or `https` (cloudflared connects over plain
   http, so `$scheme` alone would always say `http`); otherwise it sends `$scheme`.
