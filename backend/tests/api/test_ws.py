@@ -350,3 +350,38 @@ def test_what_changed_mapping():
     assert live.what_changed(CollectorResult(cves=[NormalizedCve(cve_id="CVE-2099-0001")])) == ["lanes"]
     assert live.what_changed(CollectorResult(stories=[object()])) == ["lanes", "stories"]
     assert live.what_changed(CollectorResult(geo_events=[object()])) == ["geo"]
+
+
+# ----------------------------------------------- M-c / M-l (final review)
+
+
+def test_total_released_when_setup_raises(db_session, server, monkeypatch):
+    def boom(_conn):
+        raise RuntimeError("client_ip failed")
+
+    monkeypatch.setattr(routes_ws, "client_ip", boom)
+    app = make_app(db_session, server)
+    with TestClient(app) as c:
+        with pytest.raises(Exception):
+            with c.websocket_connect("/api/ws/live") as ws:
+                ws.receive_text()
+    assert routes_ws._hub(app).total == 0
+
+
+def test_relayed_message_is_reserialized_and_filtered(db_session, server):
+    noisy = json.dumps({"type": "updated", "what": ["lanes", "evil", 7, "geo"],
+                        "x": "<script>", "at": "2026-01-01T00:00:00+00:00"})
+    with TestClient(make_app(db_session, server)) as c:
+        with c.websocket_connect("/api/ws/live") as ws:
+            with Pumper(server, noisy):
+                raw = ws.receive_text()
+    assert json.loads(raw) == {"type": "updated", "what": ["lanes", "geo"]}
+
+
+def test_relayed_message_with_no_known_what_is_dropped(db_session, server):
+    with TestClient(make_app(db_session, server)) as c:
+        with c.websocket_connect("/api/ws/live") as ws:
+            with Pumper(server, json.dumps({"type": "updated", "what": ["evil"]})):
+                with Pumper(server, json.dumps({"type": "updated", "what": "lanes"})):
+                    with Pumper(server, UPDATED):
+                        assert json.loads(ws.receive_text()) == {"type": "updated", "what": ["lanes"]}

@@ -2,9 +2,11 @@
 
 Install order (outer -> inner): SecurityHeaders, CORS, BodyLimit,
 ResponseCache, ErrorCatch, router. Only anonymous requests (no Authorization
-or Cookie header) are served from / stored in the cache, so the SecurityHeaders
-no-store rule for authed requests never conflicts. A Redis error bypasses the
-cache and never fails the request.
+header) are served from / stored in the cache, so the SecurityHeaders no-store
+rule for authed requests never conflicts. Cookies do not bypass the cache: read
+routes never use them, and Cloudflare's __cf_bm cookie would otherwise disable
+caching for every browser. A Redis error bypasses the cache and never fails the
+request.
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ class ResponseCacheMiddleware:
             return None
         allowed = self.paths[max(matches, key=len)]
         names = {k.lower() for k, _ in scope.get("headers", [])}
-        if b"authorization" in names or b"cookie" in names:
+        if b"authorization" in names:
             return None
         qs = scope.get("query_string", b"").decode("latin-1")
         pairs = parse_qsl(qs, keep_blank_values=True)

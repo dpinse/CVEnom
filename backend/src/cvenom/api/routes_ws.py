@@ -44,6 +44,7 @@ WS_AUTH_MAX_BYTES = 4096
 IP_KEY = "cvenom:ws:ip:"
 PING = '{"type":"ping"}'
 SUB_BACKOFF_MAX_S = 30.0
+LIVE_WHAT = frozenset({"lanes", "geo", "stories"})
 
 # KEYS[1]=bucket; ARGV: now, stale_before, max, ttl, member
 _CONNECT_LUA = """
@@ -79,6 +80,26 @@ def _bucket(ip: str) -> str:
     if addr.version == 6:
         return str(ipaddress.ip_network(f"{addr}/64", strict=False))
     return str(addr)
+
+
+def _relay_payload(data) -> str | None:
+    """Re-serialize a pub/sub message to the fixed client shape, or None to drop
+    it. Never forwards the raw string: only known `what` values reach clients."""
+    if isinstance(data, bytes):
+        data = data.decode("utf-8", "replace")
+    try:
+        parsed = json.loads(data)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict) or parsed.get("type") != "updated":
+        return None
+    what = parsed.get("what")
+    if not isinstance(what, list):
+        return None
+    kept = [w for w in what if isinstance(w, str) and w in LIVE_WHAT]
+    if not kept:
+        return None
+    return json.dumps({"type": "updated", "what": kept}, separators=(",", ":"))
 
 
 async def _safe_close(ws: WebSocket, code: int) -> None:
@@ -129,15 +150,9 @@ class Hub:
                     if msg is None:
                         await asyncio.sleep(0.05)
                         continue
-                    data = msg.get("data")
-                    if isinstance(data, bytes):
-                        data = data.decode("utf-8", "replace")
-                    try:
-                        parsed = json.loads(data)
-                    except (ValueError, TypeError):
-                        continue
-                    if isinstance(parsed, dict) and parsed.get("type") == "updated":
-                        self.fan_out(data)
+                    payload = _relay_payload(msg.get("data"))
+                    if payload is not None:
+                        self.fan_out(payload)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -249,11 +264,12 @@ async def live(ws: WebSocket) -> None:
         await _safe_close(ws, 4429)
         return
     hub.total += 1  # no await since the check: atomic under the event loop
-    redis = get_redis(app)
-    key = IP_KEY + _bucket(client_ip(ws))
     member: str | None = None
     queue: asyncio.Queue | None = None
     try:
+        # Inside the try: anything raising here must still release the slot.
+        redis = get_redis(app)
+        key = IP_KEY + _bucket(client_ip(ws))
         try:
             mid = uuid.uuid4().hex
             now = _now()

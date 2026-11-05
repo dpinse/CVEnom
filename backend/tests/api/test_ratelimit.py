@@ -298,12 +298,25 @@ async def test_authorization_header_never_cached(db_session, redis):
     assert r1.headers["cache-control"] == "no-store"
 
 
-async def test_cookie_never_cached(db_session, redis):
+async def test_unrelated_cookie_does_not_bypass_cache(db_session, redis):
+    # M-h: read routes never use cookies; Cloudflare's __cf_bm must not disable caching.
     app = make_app(db_session, redis, cache_paths=CP)
     async with client(app) as c:
-        await c.get("/pub/json", headers={"Cookie": "a=b"})
-        await c.get("/pub/json", headers={"Cookie": "a=b"})
-    assert app.state.calls["n"] == 2
+        r1 = await c.get("/pub/json", headers={"Cookie": "__cf_bm=abc"})
+        r2 = await c.get("/pub/json", headers={"Cookie": "a=b"})
+    assert app.state.calls["n"] == 1
+    assert r1.headers["x-cache"] == "MISS" and r2.headers["x-cache"] == "HIT"
+
+
+async def test_authorization_with_cookie_still_never_cached(db_session, redis):
+    app = make_app(db_session, redis, cache_paths=CP)
+    user = make_user(db_session)
+    tok, _ = token_for(db_session, user)
+    h = {"Authorization": f"Bearer {tok}", "Cookie": "__cf_bm=abc"}
+    async with client(app) as c:
+        await c.get("/pub/json", headers=h)
+        r = await c.get("/pub/json", headers=h)
+    assert app.state.calls["n"] == 2 and "x-cache" not in r.headers
     assert [k async for k in redis.scan_iter("cvenom:cache:*")] == []
 
 
