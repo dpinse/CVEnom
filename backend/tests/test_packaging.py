@@ -58,7 +58,8 @@ def test_only_api_publishes_loopback(compose):
 def test_no_literal_secrets_in_compose(compose):
     for key, value, path in _walk(compose):
         if SECRET_KEY_RE.search(key) and isinstance(value, str) and key not in NOT_SECRETS:
-            assert REF_RE.fullmatch(value), (path, value)
+            # "" blanks a value env_file would otherwise inject (see M-e).
+            assert value == "" or REF_RE.fullmatch(value), (path, value)
     text = COMPOSE.read_text()
     for var in ("POSTGRES_PASSWORD", "APP_DB_PASSWORD", "REDIS_PASSWORD"):
         for m in re.finditer(r"\$\{" + var + r"(.*?)\}", text):
@@ -140,7 +141,7 @@ def test_env_example_secrets_blank():
         if SECRET_KEY_RE.search(k) and k not in NOT_SECRETS:
             assert v.strip() == "", k
     for k in ("SECRETS_KEY", "POSTGRES_PASSWORD", "APP_DB_PASSWORD", "REDIS_PASSWORD",
-              "ADMIN_PASSWORD", "SMTP_PASSWORD", "TRUST_CF_CONNECTING_IP"):
+              "SMTP_PASSWORD", "TRUST_CF_CONNECTING_IP"):
         assert k in seen, k
     assert "openssl rand -base64 32" in ENV_EXAMPLE.read_text()
 
@@ -212,3 +213,34 @@ def test_prod_requires_secrets_key(compose, svc):
 
 def test_env_example_requires_secrets_key():
     assert re.search(r"(?m)^REQUIRE_SECRETS_KEY=true$", ENV_EXAMPLE.read_text())
+
+
+DEPLOY_MD = ROOT / "docs" / "deploy.md"
+BLANKED = ("POSTGRES_PASSWORD", "APP_DB_PASSWORD", "REDIS_PASSWORD")
+
+
+@pytest.mark.parametrize("svc", APP_SERVICES)
+def test_app_services_do_not_receive_infra_passwords(compose, svc):
+    # M-e: env_file passes the whole .env; the internet-facing app containers must not
+    # hold the Postgres superuser or Redis password (REDIS_URL already embeds the latter).
+    env = compose["services"][svc]["environment"]
+    for key in BLANKED:
+        assert env[key] == "", (svc, key)
+
+
+def test_env_example_has_no_admin_password():
+    assert not re.search(r"(?m)^\s*#?\s*ADMIN_PASSWORD=", ENV_EXAMPLE.read_text())
+
+
+def _compose_commands(text):
+    return [line for line in text.splitlines() if "docker compose" in line]
+
+
+@pytest.mark.parametrize("path", [DEPLOY_MD, COMPOSE])
+def test_every_compose_command_passes_root_env_file(path):
+    # The project directory is deploy/, so without --env-file the root .env is not
+    # used for ${VAR:?} interpolation and the first-run command fails.
+    cmds = _compose_commands(path.read_text())
+    assert cmds, path
+    for line in cmds:
+        assert "docker compose --env-file ./.env -f deploy/docker-compose.prod.yml" in line, line

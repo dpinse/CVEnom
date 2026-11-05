@@ -9,8 +9,12 @@ be safe without it.
 cp .env.example .env
 # fill in the blanks: POSTGRES_PASSWORD, APP_DB_PASSWORD, REDIS_PASSWORD (openssl rand -hex 24),
 # SECRETS_KEY (openssl rand -base64 32), plus any API keys you have
-docker compose -f deploy/docker-compose.prod.yml up -d
+docker compose --env-file ./.env -f deploy/docker-compose.prod.yml up -d
 ```
+
+Always pass `--env-file ./.env` (run from the repo root). Compose treats `deploy/` as the project
+directory, so without it the root `.env` is not used to fill the `${VAR:?}` references and the
+command aborts.
 
 - `migrate` runs automatically (`alembic upgrade head`) and `api` starts only after it succeeds.
 - Postgres creates the non-superuser role `cvenom_app` (owner of the `cvenom` database) on first
@@ -18,16 +22,21 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 - Create the first admin (the password is read from `ADMIN_PASSWORD` or stdin, never argv):
 
   ```sh
-  docker compose -f deploy/docker-compose.prod.yml run --rm -e ADMIN_PASSWORD api create-admin --email you@example.com
+  docker compose --env-file ./.env -f deploy/docker-compose.prod.yml run --rm -e ADMIN_PASSWORD api create-admin --email you@example.com
   ```
 
-  Export `ADMIN_PASSWORD` in your shell first (or pipe it on stdin with `-T`).
+  Export `ADMIN_PASSWORD` in your shell first (or pipe it on stdin with `-T`). Do not put it in
+  `.env`: that file is handed to every app container.
 - DB and Redis passwords must be URL-safe (`openssl rand -hex 24`): compose builds `DATABASE_URL`
   and `REDIS_URL` from them without escaping.
 - Sign in as the admin and invite further users from the admin API.
 
 Only `api` publishes a port, and only on `127.0.0.1:8000`. Postgres and Redis publish nothing.
-All app containers run read-only, as uid 10001, with all capabilities dropped.
+All app containers run read-only, as uid 10001, with all capabilities dropped. They receive `.env`
+through `env_file`, but compose blanks `POSTGRES_PASSWORD`, `APP_DB_PASSWORD` and `REDIS_PASSWORD`
+in their environment: the app only needs those inside `DATABASE_URL` / `REDIS_URL`.
+`REQUIRE_SECRETS_KEY=true` makes the API refuse to start when `SECRETS_KEY` is missing or invalid
+(the worker logs the error and keeps running).
 
 ## Cloudflare and reverse proxies
 
@@ -43,23 +52,47 @@ TRUSTED_PROXY_CIDRS='["172.28.0.1/32"]'
 FORWARDED_ALLOW_IPS=172.28.0.1
 ```
 
-Set `TRUST_CF_CONNECTING_IP=true` only for cloudflared (every request must come through Cloudflare).
-For a non-Cloudflare host proxy (nginx, Caddy): have it strip any client-supplied
-`CF-Connecting-IP`, set `X-Forwarded-For` itself, and leave `TRUST_CF_CONNECTING_IP=false`.
+How the client IP is resolved: uvicorn runs with `--proxy-headers`, so when the peer matches
+`FORWARDED_ALLOW_IPS` it rewrites the peer to the right-most untrusted `X-Forwarded-For` hop. The
+app then applies its own check (`TRUSTED_PROXY_CIDRS`) to that peer. Cloudflare always sends
+`X-Forwarded-For`, so in practice the right-most `X-Forwarded-For` hop is the client IP that is
+used.
+
+`TRUST_CF_CONNECTING_IP` is therefore close to inert: `CF-Connecting-IP` is consulted only when a
+request from a trusted proxy carries **no** `X-Forwarded-For`. Set it to `true` only for cloudflared
+(every request must come through Cloudflare). For a non-Cloudflare host proxy (nginx, Caddy): have
+it strip any client-supplied `CF-Connecting-IP`, set `X-Forwarded-For` itself, and leave
+`TRUST_CF_CONNECTING_IP=false`.
 
 **(b) A reverse proxy running as a container on the `cvenom` network.** The peer is that
 container's IP on `172.28.0.0/24`: give it a fixed `ipv4_address` and use `<ip>/32` (or the
 subnet) for both settings.
 
 **(c) `127.0.0.1` is wrong for the published-port topology.** The connection arrives from the
-bridge gateway, not loopback. Leaving the setting at `127.0.0.1` makes uvicorn ignore forwarded
-headers, so every visitor appears as one bridge IP and they all share a single rate-limit and
-login-throttle bucket.
+bridge gateway, not loopback. If `FORWARDED_ALLOW_IPS` is `127.0.0.1`, uvicorn ignores the
+forwarded headers and the peer stays `172.28.0.1`; the app's own `X-Forwarded-For` walk still
+separates visitors as long as `TRUSTED_PROXY_CIDRS` contains the gateway. What actually collapses
+every visitor into one rate-limit and login-throttle bucket is a `TRUSTED_PROXY_CIDRS` that does
+not contain the real peer (for example `127.0.0.1/32`): the app then never reads the forwarded
+headers. Set both settings to the gateway.
 
-**(d) Verify.** Request `/api/health` through the tunnel or proxy, then confirm the client IP the
-app sees is the real visitor's, not `172.28.0.1`: temporarily add `--access-log` to the `api` line
-in `backend/docker-entrypoint.sh` (or run uvicorn once with it), rebuild, and check
-`docker compose -f deploy/docker-compose.prod.yml logs api`. Remove it afterwards.
+**(d) Verify.**
+
+1. Confirm the gateway: `docker network inspect deploy_cvenom --format '{{(index .IPAM.Config 0).Gateway}}'`
+   (the network is `<project>_cvenom`; the project name is `deploy` unless you pass `-p`). It
+   should print `172.28.0.1`.
+2. Request `/api/health` through the tunnel or proxy, then read the access log. uvicorn logs
+   access by default, so no rebuild is needed:
+
+   ```sh
+   docker compose --env-file ./.env -f deploy/docker-compose.prod.yml logs api
+   ```
+
+   The client address on that line must be the real visitor's, not `172.28.0.1`. It shows the
+   peer after uvicorn's rewrite, so `172.28.0.1` there means `FORWARDED_ALLOW_IPS` does not match.
+3. **Docker Desktop (Windows/macOS):** published ports are forwarded through Docker Desktop's VM,
+   so the peer the container sees may not be the bridge gateway. Check the address in the access
+   log for a request sent directly to `127.0.0.1:8000`, and set both settings to that peer.
 
 **Lock down the origin.** Do not rely on Cloudflare alone. Keep `127.0.0.1:8000` bound to loopback
 (or firewall the port to the proxy), and if the origin is reachable from the internet, require
@@ -76,19 +109,38 @@ connects to the container, otherwise forwarded headers are ignored (default `127
   login for everything.
 - `CORS_ORIGINS`: JSON list of exact origins, e.g. `'["https://cvenom.example.com"]'`. No wildcards.
   Empty means same-origin only.
-- `API_DOCS` (default `false`): enables `/docs` and `/redoc`. Keep off in production.
+- `API_DOCS` (default `false`): enables `/docs` and `/redoc`. Keep off in production. Note that
+  the strict `Content-Security-Policy` (`default-src 'none'`) blocks the Swagger UI / ReDoc assets,
+  so those pages render blank; `/openapi.json` itself works.
+
+## Alert rules
+
+- Rules fire only on **KEV additions** (CISA KEV or VulnCheck KEV), by design: that keeps alerts
+  to "exploited in the wild" and prevents a firehose.
+- `kev_added` matches every KEV addition. `keyword` matches the summary or affected products.
+- `cvss_min` and `epss_min` filter by **known** scores: a CVE whose CVSS / EPSS percentile is known
+  and below the threshold does not fire.
+- An **unknown** score fires: a CVE added to KEV before NVD/EPSS have scored it still alerts
+  rather than being silently dropped.
 
 ## Key rotation
 
 - **JWT signing keys** rotate automatically every 7 days (`JWT_ROTATION_DAYS`); no action needed.
-- **`SECRETS_KEY`** rotation is a manual re-encrypt and is **not automated in v1**. Changing the
-  value makes everything encrypted under the old key unreadable: stored webhook secrets/URLs show
-  as "(unavailable)" (re-enter them), and the stored JWT private keys cannot be decrypted, so new
-  JWT keys are generated and **all users are logged out**. Back the key up; do not change it casually.
+- **`SECRETS_KEY`** re-encryption is **not automated in v1**. Changing the value makes everything
+  encrypted under the old key unreadable:
+  - **JWT keys rotate automatically** on the first login or refresh after the change: the
+    undecryptable signing key is retired (a warning is logged) and a new one is created. Sessions
+    survive, and access tokens already issued keep verifying until they expire (verification
+    uses only the public key).
+  - **Webhook URLs and secrets** become unreadable. The API masks them as "(unavailable)", and
+    their deliveries are deferred (retried hourly, no attempts burned) until they expire after 7
+    days. An admin must delete and re-add those recipients.
+
+  Back the key up; do not change it casually.
 
 ## Backups
 
-- Database: `docker compose -f deploy/docker-compose.prod.yml exec -T postgres pg_dump -U postgres -Fc cvenom > cvenom-$(date +%F).dump`
+- Database: `docker compose --env-file ./.env -f deploy/docker-compose.prod.yml exec -T postgres pg_dump -U postgres -Fc cvenom > cvenom-$(date +%F).dump`
 - `.env` (notably `SECRETS_KEY`): store it separately from the database dump, in a secrets manager
   or encrypted vault. A dump without the key cannot recover webhook secrets or sessions.
 - The `geoip` volume is re-downloadable and need not be backed up.
@@ -133,3 +185,10 @@ uv pip compile pyproject.toml --generate-hashes --python-platform linux --python
 
 Then re-add the three-line comment header at the top of the file (it is checked by the tests), run
 the test suite, and rebuild: `docker build -t cvenom-backend backend`.
+
+There is no dependency vulnerability scan in CI yet. Run one periodically (and before each
+release) against the lock file:
+
+```sh
+pip-audit -r backend/requirements.lock
+```
