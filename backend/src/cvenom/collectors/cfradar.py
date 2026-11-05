@@ -26,6 +26,18 @@ HIJACKS_URL = f"{BASE}/radar/bgp/hijacks/events"
 OUTAGE_PARAMS = {"dateRange": "7d", "format": "json", "limit": 100}
 HIJACK_PARAMS = {"dateRange": "7d", "format": "json", "per_page": 100}
 _SKIP = (ValidationError, ValueError, TypeError, AttributeError, KeyError, OverflowError, OSError)
+_disabled_logged = False
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _log_disabled(name: str) -> None:
+    global _disabled_logged
+    level = logging.DEBUG if _disabled_logged else logging.INFO
+    _disabled_logged = True
+    log.log(level, "%s: no CF_RADAR_TOKEN configured; collector disabled", name)
 
 
 def _parse_time(value: object) -> datetime:
@@ -89,7 +101,7 @@ class CloudflareRadarCollector(Collector):
 
     async def run(self) -> CollectorResult:
         if not get_settings().cf_radar_token:
-            log.info("%s: no CF_RADAR_TOKEN configured; collector disabled", self.name)
+            _log_disabled(self.name)
             return CollectorResult()
         return await super().run()
 
@@ -124,7 +136,11 @@ class CloudflareRadarCollector(Collector):
 
     def _outage(self, rec: dict) -> list[NormalizedGeoEvent]:
         oid = _record_id(rec["id"])
-        observed = _parse_time(rec["startDate"])
+        start = _parse_time(rec["startDate"])
+        ongoing = rec.get("endDate") is None
+        # An ongoing outage is re-observed every run, so keep it inside the summary window;
+        # external_id is unchanged, so the upsert keeps first_seen.
+        observed = _utcnow() if ongoing else start
         details_codes = [
             d.get("code") for d in _list(rec.get("locationsDetails")) if isinstance(d, dict)
         ]
@@ -141,7 +157,8 @@ class CloudflareRadarCollector(Collector):
             "cause": cause or None,
             "type": otype or None,
             "scope": scope or None,
-            "ongoing": rec.get("endDate") is None,
+            "ongoing": ongoing,
+            "start": start.isoformat(),
         }
         return [
             NormalizedGeoEvent(

@@ -8,7 +8,7 @@ from cvenom.models import GeoEvent
 from cvenom.pipeline import ingest, purge_old_geo_events
 from cvenom.schemas import NormalizedGeoEvent
 
-NOW = datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
 
 
 def ev(external_id="e1", **kw):
@@ -114,3 +114,11 @@ def test_non_finite_floats_in_details_stored_as_null(db_session):
     assert row.details["a"] is None and row.details["b"] is None and row.details["c"] is None
     assert row.details["ok"] == 1.5
     assert row.details["n"]["x"] == [None, 2, {"y": None}]
+
+
+def test_details_keys_sanitized_and_upsert_succeeds(db_session):
+    run(db_session, ev(details={"<b>x</b>\x00": 1, 5: "v", "n": {"<i>k</i>": 2}}))
+    row = rows(db_session)[0]
+    assert "<" not in str(row.details) and "\x00" not in str(row.details)
+    assert row.details["5"] == "v"
+    assert list(row.details["n"].values()) == [2]

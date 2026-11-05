@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -22,6 +22,20 @@ def fast_sleep(monkeypatch):
         pass
 
     monkeypatch.setattr(base, "_sleep", fake)
+
+
+FIXED_NOW = datetime(2026, 11, 4, 18, 0, tzinfo=UTC)
+ENDED = "2026-11-04T12:00:00Z"
+
+
+@pytest.fixture(autouse=True)
+def pinned_now(monkeypatch):
+    monkeypatch.setattr(cfradar, "_utcnow", lambda: FIXED_NOW)
+
+
+@pytest.fixture(autouse=True)
+def reset_disabled_flag(monkeypatch):
+    monkeypatch.setattr(cfradar, "_disabled_logged", False)
 
 
 @pytest.fixture
@@ -150,11 +164,12 @@ def test_multi_country_outage():
     assert [e.external_id for e in evs] == ["out-1:IR", "out-1:IQ"]
     e = evs[0]
     assert (e.source, e.kind, e.country_code) == ("cf_radar", "outage", "IR")
-    assert e.observed_at == datetime(2026, 11, 4, 10, 0, tzinfo=UTC)
+    assert e.observed_at == FIXED_NOW  # ongoing: observed now, start kept in details
     assert e.magnitude == 3.0
     assert e.label == "GOVERNMENT_DIRECTED"
     assert e.details == {
         "cause": "GOVERNMENT_DIRECTED", "type": "NATIONWIDE", "scope": "Nationwide", "ongoing": True,
+        "start": "2026-11-04T10:00:00+00:00",
     }
 
 
@@ -242,9 +257,9 @@ def test_malformed_records_skipped_others_kept():
 
 def test_epoch_and_z_timestamps():
     want = datetime(2026, 11, 4, 10, 0, tzinfo=UTC)
-    z = _norm(outages=[_outage(startDate="2026-11-04T10:00:00Z")])[0].observed_at
-    off = _norm(outages=[_outage(startDate="2026-11-04T10:00:00+00:00")])[0].observed_at
-    epoch = _norm(outages=[_outage(startDate=1793786400)])[0].observed_at
+    z = _norm(outages=[_outage(startDate="2026-11-04T10:00:00Z", endDate=ENDED)])[0].observed_at
+    off = _norm(outages=[_outage(startDate="2026-11-04T10:00:00+00:00", endDate=ENDED)])[0].observed_at
+    epoch = _norm(outages=[_outage(startDate=1793786400, endDate=ENDED)])[0].observed_at
     assert z == off == epoch == want
     ms = _norm(hijacks=[_hijack(min_hijack_ts=1793786400000)])[0].observed_at
     assert ms == want
@@ -287,10 +302,50 @@ def test_hijack_details_confidence_validated(score):
 
 
 def test_naive_timestamp_treated_as_utc():
-    e = _norm(outages=[_outage(startDate="2026-11-04T10:00:00")])[0]
+    e = _norm(outages=[_outage(startDate="2026-11-04T10:00:00", endDate=ENDED)])[0]
     assert e.observed_at == datetime(2026, 11, 4, 10, 0, tzinfo=UTC)
 
 
 def test_missing_result_sections_yield_nothing():
     raw = {"outages": {"success": True, "result": {}}, "hijacks": {"success": True, "result": {}}}
     assert CloudflareRadarCollector().normalize(raw).geo_events == []
+
+
+def test_ongoing_outage_observed_now_with_start_in_details():
+    three_days_ago = FIXED_NOW - timedelta(days=3)
+    e = _norm(outages=[_outage(startDate=three_days_ago.isoformat())])[0]
+    assert e.observed_at == FIXED_NOW
+    assert e.details["ongoing"] is True
+    assert e.details["start"] == three_days_ago.isoformat()
+
+
+def test_ended_outage_keeps_start_date():
+    e = _norm(outages=[_outage(startDate="2026-11-01T10:00:00Z", endDate=ENDED)])[0]
+    assert e.observed_at == datetime(2026, 11, 1, 10, 0, tzinfo=UTC)
+    assert e.details["start"] == "2026-11-01T10:00:00+00:00"
+
+
+def test_external_id_same_for_ongoing_and_ended_run():
+    ongoing = _norm(outages=[_outage(startDate="2026-11-01T10:00:00Z")])
+    ended = _norm(outages=[_outage(startDate="2026-11-01T10:00:00Z", endDate=ENDED)])
+    assert [e.external_id for e in ongoing] == [e.external_id for e in ended]
+
+
+def test_disabled_message_logged_at_info_once(monkeypatch, caplog):
+    monkeypatch.setattr(cfradar, "get_settings", lambda: SimpleNamespace(cf_radar_token=None))
+    with caplog.at_level(logging.DEBUG, logger="cvenom.collectors.cfradar"):
+        _run()
+        _run()
+    disabled = [r for r in caplog.records if "disabled" in r.getMessage()]
+    assert [r.levelno for r in disabled] == [logging.INFO, logging.DEBUG]
+
+
+def test_overlong_record_id_skips_only_that_record():
+    evs = _norm(outages=[_outage(id="x" * 300), _outage(id="ok", locations=("FR",))])
+    assert [e.external_id for e in evs] == ["ok:FR"]
+
+
+def test_hijack_asn_over_32_bits_skips_only_that_record():
+    evs = _norm(hijacks=[_hijack(id=1, hijacker_asn=2**40, victim_countries=["US"]),
+                         _hijack(id=2, victim_countries=["US"])])
+    assert [e.external_id for e in evs] == ["bgp:2:US"]

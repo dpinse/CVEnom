@@ -23,6 +23,11 @@ def fast_sleep(monkeypatch):
     monkeypatch.setattr(base, "_sleep", fake)
 
 
+@pytest.fixture(autouse=True)
+def reset_disabled_flag(monkeypatch):
+    monkeypatch.setattr(ransomware, "_disabled_logged", False)
+
+
 @pytest.fixture
 def keyed(monkeypatch):
     s = SimpleNamespace(ransomware_live_api_key=SecretStr(KEY))
@@ -218,3 +223,41 @@ def test_ingest_idempotent(db_session):
     rows = db_session.scalars(select(GeoEvent).where(GeoEvent.source == "ransomware_live")).all()
     assert len(rows) == 3
     assert db_session.query(Story).count() == 3
+
+
+@pytest.mark.parametrize("bad", ["0001-01-01T00:00:00+05:00", "9999-12-31T00:00:00Z", "1969-01-01"])
+def test_out_of_range_dates_skip_only_that_record(bad):
+    res = RansomwareLiveCollector().normalize(
+        [_rec("Bad Co", discovered=bad, published=None), _rec("Good Co")]
+    )
+    assert [e.label for e in res.geo_events] == ["lockbit5: Good Co"]
+    assert len(res.stories) == 1
+
+
+def test_discovered_beats_older_attackdate():
+    res = RansomwareLiveCollector().normalize([_rec(attackdate="2026-10-01")])
+    assert res.geo_events[0].observed_at == datetime(2026, 11, 4, 10, 15, 30, 123456, tzinfo=UTC)
+
+
+def test_external_id_stable_when_attackdate_added():
+    a = RansomwareLiveCollector().normalize([_rec()]).geo_events[0]
+    b = RansomwareLiveCollector().normalize([_rec(attackdate="2026-10-01")]).geo_events[0]
+    assert a.external_id == b.external_id
+
+
+def test_attackdate_is_last_resort():
+    res = RansomwareLiveCollector().normalize(
+        [_rec(discovered=None, published=None, attackdate="2026-10-01")]
+    )
+    assert res.geo_events[0].observed_at == datetime(2026, 10, 1, tzinfo=UTC)
+
+
+def test_disabled_message_logged_at_info_once(monkeypatch, caplog):
+    import asyncio
+
+    monkeypatch.setattr(ransomware, "get_settings", lambda: SimpleNamespace(ransomware_live_api_key=None))
+    with caplog.at_level(logging.DEBUG, logger="cvenom.collectors.ransomware"):
+        asyncio.run(RansomwareLiveCollector().run())
+        asyncio.run(RansomwareLiveCollector().run())
+    disabled = [r for r in caplog.records if "disabled" in r.getMessage()]
+    assert [r.levelno for r in disabled] == [logging.INFO, logging.DEBUG]

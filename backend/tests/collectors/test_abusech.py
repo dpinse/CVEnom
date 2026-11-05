@@ -61,17 +61,17 @@ def _tf(status="ok", data=None):
         data = [
             {"id": "111", "ioc": "1.2.3.4:443", "ioc_type": "ip:port", "threat_type": "botnet_cc",
              "malware": "win.x", "malware_printable": "Pretty", "confidence_level": 75,
-             "first_seen": "2026-11-05 10:00:00 UTC", "tags": ["a", "b"]},
+             "first_seen": "2026-11-03 10:00:00 UTC", "tags": ["a", "b"]},
             {"id": "112", "ioc": "evil.test", "ioc_type": "domain", "malware": "m",
-             "first_seen": "2026-11-05 10:00:00"},
+             "first_seen": "2026-11-03 10:00:00"},
             {"id": "113", "ioc": "[2001:4860:4860::8888]:80", "ioc_type": "ip:port", "malware": "m6",
-             "confidence_level": float("nan"), "first_seen": "2026-11-05 10:00:00", "tags": None},
+             "confidence_level": float("nan"), "first_seen": "2026-11-03 10:00:00", "tags": None},
             {"id": "114", "ioc": "2001:4860:4860::8888:80", "ioc_type": "ip:port", "malware": "m7",
-             "confidence_level": 150, "first_seen": "2026-11-05 10:00:00"},
+             "confidence_level": 150, "first_seen": "2026-11-03 10:00:00"},
             {"id": "115", "ioc": "10.0.0.1:80", "ioc_type": "ip:port", "malware": "priv",
-             "first_seen": "2026-11-05 10:00:00"},
+             "first_seen": "2026-11-03 10:00:00"},
             {"id": "116", "ioc": "not-an-ip:80", "ioc_type": "ip:port", "malware": "bad",
-             "first_seen": "2026-11-05 10:00:00"},
+             "first_seen": "2026-11-03 10:00:00"},
         ]
     return {"query_status": status, "data": data}
 
@@ -204,7 +204,7 @@ def test_threatfox_with_key(monkeypatch):
     e = tf["111"]
     assert e.kind == "c2" and e.country_code == "CN"
     assert e.label == "Pretty C2"
-    assert e.observed_at == datetime(2026, 11, 5, 10, tzinfo=UTC)
+    assert e.observed_at == datetime(2026, 11, 3, 10, tzinfo=UTC)
     assert e.details == {"threat_type": "botnet_cc", "confidence": 75, "tags": ["a", "b"]}
     assert tf["113"].details["confidence"] is None and tf["113"].details["tags"] == []
     assert tf["114"].details["confidence"] is None  # 150 out of range
@@ -214,7 +214,7 @@ def test_threatfox_with_key(monkeypatch):
 def test_threatfox_splits_on_last_colon(monkeypatch):
     geo = StubGeo()
     data = [{"id": "9", "ioc": "2001:4860:4860::8888:80", "ioc_type": "ip:port", "malware": "m",
-             "first_seen": "2026-11-05 10:00:00"}]
+             "first_seen": "2026-11-03 10:00:00"}]
     c, _, _ = _make(monkeypatch, geo, key=KEY, tf=_tf(data=data))
     res = asyncio.run(c.run())
     assert [e.external_id for e in res.geo_events if e.source == "threatfox"] == ["9"]
@@ -259,3 +259,30 @@ def test_external_ids_idempotent(monkeypatch):
         res = asyncio.run(c.run())
         ids.append(sorted((e.source, e.external_id) for e in res.geo_events))
     assert ids[0] == ids[1] and ids[0]
+
+
+def test_feodo_record_dated_9999_skipped_others_kept(monkeypatch):
+    bad = {"ip_address": "5.5.5.5", "port": 80, "status": "online",
+           "first_seen": "9999-01-01 00:00:00", "last_online": None, "country": "US"}
+    c, _, _ = _make(monkeypatch, StubGeo(), feodo=_feodo() + [bad])
+    res = asyncio.run(c.run())
+    ids = {e.external_id for e in res.geo_events}
+    assert "5.5.5.5:80" not in ids and "1.2.3.4:443" in ids
+
+
+def test_feodo_non_string_status_and_as_name_become_none(monkeypatch):
+    rec = {"ip_address": "5.5.5.5", "port": 80, "status": {"x": 1}, "as_name": ["a"],
+           "first_seen": "2026-11-01 00:00:00", "country": "US"}
+    c, _, _ = _make(monkeypatch, StubGeo(), feodo=[rec])
+    ev = asyncio.run(c.run()).geo_events[0]
+    assert ev.details["status"] is None and ev.details["as_name"] is None
+    assert ev.magnitude == 1.0
+
+
+def test_threatfox_non_string_threat_type_becomes_none(monkeypatch):
+    data = [{"id": "9", "ioc": "1.2.3.4:443", "ioc_type": "ip:port", "threat_type": {"a": 1},
+             "malware": "m", "first_seen": "2026-11-03 10:00:00"}]
+    c, _, _ = _make(monkeypatch, StubGeo(), key=KEY, feodo=[], tf=_tf(data=data))
+    res = asyncio.run(c.run())
+    tf = [e for e in res.geo_events if e.source == "threatfox"]
+    assert tf[0].details["threat_type"] is None

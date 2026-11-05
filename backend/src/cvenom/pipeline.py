@@ -108,7 +108,7 @@ _DETAILS_MAX_DEPTH = 4
 
 
 def _sanitize_details(value, depth: int = 0):
-    """Sanitize every string inside a details structure (keys untouched, depth-limited)."""
+    """Sanitize every string inside a details structure (keys coerced to str, depth-limited)."""
     if isinstance(value, str):
         return sanitize_text(value)
     if isinstance(value, float) and not math.isfinite(value):
@@ -116,7 +116,7 @@ def _sanitize_details(value, depth: int = 0):
     if depth >= _DETAILS_MAX_DEPTH:
         return None if isinstance(value, (dict, list, tuple)) else value
     if isinstance(value, dict):
-        return {k: _sanitize_details(v, depth + 1) for k, v in value.items()}
+        return {sanitize_text(str(k)): _sanitize_details(v, depth + 1) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_sanitize_details(v, depth + 1) for v in value]
     return value

@@ -26,7 +26,15 @@ from cvenom.schemas import NormalizedGeoEvent, NormalizedStory
 log = logging.getLogger(__name__)
 
 URL = "https://api-pro.ransomware.live/victims/recent"
-_SKIP = (ValidationError, ValueError, TypeError, AttributeError, KeyError)
+_SKIP = (ValidationError, ValueError, TypeError, AttributeError, KeyError, OverflowError, OSError)
+_disabled_logged = False
+
+
+def _log_disabled(name: str) -> None:
+    global _disabled_logged
+    level = logging.DEBUG if _disabled_logged else logging.INFO
+    _disabled_logged = True
+    log.log(level, "%s: no RANSOMWARE_LIVE_API_KEY configured; collector disabled", name)
 
 
 def _text(value: object) -> str:
@@ -63,7 +71,7 @@ class RansomwareLiveCollector(Collector):
 
     async def run(self) -> CollectorResult:
         if not get_settings().ransomware_live_api_key:
-            log.info("%s: no RANSOMWARE_LIVE_API_KEY configured; collector disabled", self.name)
+            _log_disabled(self.name)
             return CollectorResult()
         return await super().run()
 
@@ -98,7 +106,7 @@ class RansomwareLiveCollector(Collector):
         if not group or not victim:
             raise ValueError("missing group/victim")
         observed = None
-        for k in ("attackdate", "discovered", "published"):
+        for k in ("discovered", "published", "attackdate"):
             observed = _parse_time(rec.get(k))
             if observed:
                 break

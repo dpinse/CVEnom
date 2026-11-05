@@ -108,3 +108,73 @@ def test_geo_event_rejects_bad_cve_story_url_and_asn():
     for bad in [dict(cve_id="CVE-bad"), dict(story_url="javascript:alert(1)"), dict(asn=-1)]:
         with pytest.raises(ValidationError):
             NormalizedGeoEvent(**{**base, **bad})
+
+
+def _story(**kw):
+    from datetime import datetime, timezone
+
+    from cvenom.schemas import NormalizedStory
+
+    base = dict(url="https://example.com/a", source="s", title="t", summary="x",
+                published=datetime(2026, 11, 1, tzinfo=timezone.utc))
+    return NormalizedStory(**{**base, **kw})
+
+
+def _geo(**kw):
+    from datetime import datetime, timezone
+
+    from cvenom.schemas import NormalizedGeoEvent
+
+    base = dict(source="x", external_id="1", kind="scan",
+                observed_at=datetime(2026, 11, 1, tzinfo=timezone.utc))
+    return NormalizedGeoEvent(**{**base, **kw})
+
+
+@pytest.mark.parametrize("year", [1969, 2101])
+def test_story_and_geo_reject_years_outside_1970_2100(year):
+    from datetime import datetime, timezone
+
+    dt = datetime(year, 6, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValidationError):
+        _story(published=dt)
+    with pytest.raises(ValidationError):
+        _geo(observed_at=dt)
+
+
+def test_future_dates_clamped_to_now_but_small_skew_kept():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    for make, field in ((_story, "published"), (_geo, "observed_at")):
+        far = getattr(make(**{field: now + timedelta(days=1)}), field)
+        assert abs(far - now) < timedelta(minutes=1)
+        near = now + timedelta(minutes=30)
+        assert getattr(make(**{field: near}), field) == near
+
+
+@pytest.mark.parametrize("bad", ["a" * 257, "a\x00b", "   ", "", "a\x7fb", "a\nb"])
+def test_geo_external_id_rejected(bad):
+    with pytest.raises(ValidationError):
+        _geo(external_id=bad)
+
+
+def test_geo_external_id_256_ok_and_asn_bound():
+    assert _geo(external_id="a" * 256).external_id == "a" * 256
+    assert _geo(asn=2**32 - 1).asn == 2**32 - 1
+    with pytest.raises(ValidationError):
+        _geo(asn=2**32)
+
+
+@pytest.mark.parametrize("bad", [
+    "https://www.bleepingcomputer.com@evil.example/",
+    "https://user:pw@host/",
+    "https://user@host/",
+])
+def test_story_url_rejects_userinfo(bad):
+    with pytest.raises(ValidationError):
+        _story(url=bad)
+
+
+def test_story_url_normal_urls_still_pass():
+    for ok in ("https://www.bleepingcomputer.com/news/x?a=b@c", "http://host:8080/p"):
+        assert _story(url=ok).url == ok

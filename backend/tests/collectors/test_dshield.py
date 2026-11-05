@@ -12,7 +12,7 @@ from cvenom.geoip import GeoResult
 from cvenom.models import GeoEvent
 from cvenom.pipeline import ingest
 
-NOW = datetime(2026, 11, 5, 14, 37, 12, tzinfo=UTC)
+NOW = datetime(2026, 11, 3, 14, 37, 12, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
@@ -89,8 +89,8 @@ def test_aggregation(monkeypatch):
     assert cn.magnitude == 350
     assert cn.details == {"sources": 2, "targets": 30}
     assert cn.source == "dshield" and cn.kind == "scan"
-    assert cn.external_id == "CN:2026-11-05T14"
-    assert cn.observed_at == datetime(2026, 11, 5, 14, tzinfo=UTC)
+    assert cn.external_id == "CN:2026-11-03T14"
+    assert cn.observed_at == datetime(2026, 11, 3, 14, tzinfo=UTC)
     assert calls[0][0] == "https://isc.sans.edu/api/sources/attacks/100/?json"
     assert calls[0][1]["max_bytes"] == 2_000_000
 

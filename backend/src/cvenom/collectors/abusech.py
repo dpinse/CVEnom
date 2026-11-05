@@ -51,6 +51,10 @@ def _valid_cc(value: object) -> str | None:
     return None
 
 
+def _str_or_none(value: object) -> str | None:
+    return str(value) if isinstance(value, str) else None
+
+
 def _int(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
@@ -137,9 +141,9 @@ class AbuseChCollector(Collector):
                         magnitude=2.0 if rec.get("status") == "online" else 1.0,
                         label=f"{malware} C2" if malware else "Botnet C2",
                         details={
-                            "status": rec.get("status"),
+                            "status": _str_or_none(rec.get("status")),
                             "port": port,
-                            "as_name": rec.get("as_name"),
+                            "as_name": _str_or_none(rec.get("as_name")),
                         },
                     )
                 )
@@ -189,7 +193,7 @@ class AbuseChCollector(Collector):
                         observed_at=observed,
                         label=f"{name} C2" if name else "Botnet C2",
                         details={
-                            "threat_type": ioc.get("threat_type"),
+                            "threat_type": _str_or_none(ioc.get("threat_type")),
                             "confidence": conf,
                             "tags": tags,
                         },
