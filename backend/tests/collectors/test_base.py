@@ -237,3 +237,70 @@ async def test_non_finite_retry_after_falls_back_to_backoff(respx_mock, fast_sle
     ]
     await http_get_json("https://api.test/x")
     assert fast_sleep == [base.BACKOFF_BASE]
+
+
+async def test_http_get_bytes_returns_bytes_and_respects_cap(respx_mock):
+    from cvenom.collectors.base import ResponseTooLarge, http_get_bytes
+
+    respx_mock.get("https://b.test/x").mock(return_value=httpx.Response(200, content=b"\x00\x01" * 8))
+    assert await http_get_bytes("https://b.test/x") == b"\x00\x01" * 8
+    with pytest.raises(ResponseTooLarge):
+        await http_get_bytes("https://b.test/x", max_bytes=10)
+
+
+async def test_http_get_conditional_304(respx_mock):
+    from cvenom.collectors.base import http_get_conditional
+
+    route = respx_mock.get("https://c.test/f").mock(
+        return_value=httpx.Response(304, headers={"ETag": '"abc"'})
+    )
+    status, body, hdrs = await http_get_conditional(
+        "https://c.test/f", etag='"abc"', last_modified="Wed, 01 Jan 2025 00:00:00 GMT"
+    )
+    assert (status, body) == (304, b"")
+    assert hdrs["etag"] == '"abc"'
+    sent = route.calls.last.request.headers
+    assert sent["If-None-Match"] == '"abc"'
+    assert sent["If-Modified-Since"] == "Wed, 01 Jan 2025 00:00:00 GMT"
+
+
+async def test_http_get_conditional_200_returns_validators(respx_mock):
+    from cvenom.collectors.base import http_get_conditional
+
+    route = respx_mock.get("https://c.test/f").mock(
+        return_value=httpx.Response(
+            200, content=b"<rss/>", headers={"ETag": '"v2"', "Last-Modified": "Thu, 02 Jan 2025 00:00:00 GMT"}
+        )
+    )
+    status, body, hdrs = await http_get_conditional("https://c.test/f")
+    assert (status, body) == (200, b"<rss/>")
+    assert hdrs["etag"] == '"v2"'
+    assert hdrs["last-modified"] == "Thu, 02 Jan 2025 00:00:00 GMT"
+    assert "If-None-Match" not in route.calls.last.request.headers
+    assert "If-Modified-Since" not in route.calls.last.request.headers
+
+
+async def test_http_get_conditional_too_large_not_retried(respx_mock):
+    from cvenom.collectors.base import ResponseTooLarge, http_get_conditional
+
+    route = respx_mock.get("https://c.test/f").mock(return_value=httpx.Response(200, content=b"a" * 2048))
+    with pytest.raises(ResponseTooLarge):
+        await http_get_conditional("https://c.test/f", max_bytes=1024)
+    assert route.call_count == 1
+
+
+async def test_http_get_text_aborts_past_max_bytes(respx_mock):
+    from cvenom.collectors.base import ResponseTooLarge, http_get_text
+
+    respx_mock.get("https://big.test/x").mock(return_value=httpx.Response(200, content=b"a" * 2048))
+    with pytest.raises(ResponseTooLarge):
+        await http_get_text("https://big.test/x", max_bytes=1024)
+
+
+async def test_http_get_json_too_large_not_retried(respx_mock):
+    from cvenom.collectors.base import ResponseTooLarge
+
+    route = respx_mock.get("https://big.test/j").mock(return_value=httpx.Response(200, content=b"[" + b"1," * 2000 + b"1]"))
+    with pytest.raises(ResponseTooLarge):
+        await http_get_json("https://big.test/j", max_bytes=100)
+    assert route.call_count == 1
