@@ -9,7 +9,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,7 @@ from cvenom.auth.tokens import (
 from cvenom.auth.users import InvalidInvite, accept_invite, authenticate, create_invite
 from cvenom.models import User, UserSession
 
-from .deps import client_ip, get_session, require_admin, require_user
+from .deps import SessionDep, client_ip, require_admin, require_user
 from .ratelimit import enforce_login_limits, rate_limit
 
 router = APIRouter(prefix="/api/auth")
@@ -67,6 +67,7 @@ def _user_json(u: User) -> dict:
 
 
 class LoginBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     email: str = Field(max_length=320)
     password: str = Field(max_length=1024)
 
@@ -100,7 +101,7 @@ def _login_sync(session: Session, request: Request, body: LoginBody) -> JSONResp
 
 @router.post("/login")
 async def login(
-    request: Request, body: LoginBody, session: Session = Depends(get_session)
+    request: Request, body: LoginBody, session: Session = SessionDep
 ) -> JSONResponse:
     await enforce_login_limits(request, body.email)  # before any DB work
     return await run_in_threadpool(_login_sync, session, request, body)
@@ -137,13 +138,17 @@ def _refresh_sync(session: Session, request: Request, raw: str) -> JSONResponse:
     return resp
 
 
-@router.post("/refresh", dependencies=[Depends(rate_limit("auth"))])
-async def refresh(request: Request, session: Session = Depends(get_session)) -> JSONResponse:
+@router.post("/refresh", dependencies=[Depends(rate_limit("auth", identity="ip"))])
+async def refresh(request: Request, session: Session = SessionDep) -> JSONResponse:
     if request.headers.get("x-cvenom-csrf") != "1":
         return _error(403, "csrf")
     raw = request.cookies.get(COOKIE_NAME)
-    if not raw or len(raw) > _MAX_REFRESH_LEN:
+    if not raw:
         return _error(401, "invalid_token")
+    if len(raw) > _MAX_REFRESH_LEN:
+        resp = _error(401, "invalid_token")
+        _clear_refresh(resp)
+        return resp
     return await run_in_threadpool(_refresh_sync, session, request, raw)
 
 
@@ -154,7 +159,7 @@ async def refresh(request: Request, session: Session = Depends(get_session)) -> 
 def logout(
     request: Request,
     user: User = Depends(require_user),
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> Response:
     row = session.get(UserSession, request.state.claims.sid)
     if row is not None and row.user_id == user.id and row.revoked_at is None:
@@ -177,7 +182,7 @@ def me(user: User = Depends(require_user)) -> dict:
 def list_sessions(
     request: Request,
     user: User = Depends(require_user),
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> list[dict]:
     now = _now()
     rows = session.scalars(
@@ -207,7 +212,7 @@ def list_sessions(
 def revoke_session(
     session_id: str,
     user: User = Depends(require_user),
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> Response:
     not_found = HTTPException(status_code=404, detail={"error": "not_found"})
     try:
@@ -227,11 +232,13 @@ def revoke_session(
 
 
 class InviteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     email: EmailStr
     role: Literal["admin", "member"]
 
 
 class AcceptBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     token: str = Field(max_length=256)
     password: str = Field(max_length=1024)
 
@@ -240,7 +247,7 @@ class AcceptBody(BaseModel):
 def create_invite_route(
     body: InviteBody,
     admin: User = Depends(require_admin),
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> dict:
     now = _now()
     raw = create_invite(
@@ -249,9 +256,9 @@ def create_invite_route(
     return {"token": raw, "expires_at": now + timedelta(hours=INVITE_TTL_HOURS)}
 
 
-@router.post("/invites/accept", dependencies=[Depends(rate_limit("auth"))])
+@router.post("/invites/accept", dependencies=[Depends(rate_limit("auth", identity="ip"))])
 def accept_invite_route(
-    body: AcceptBody, session: Session = Depends(get_session)
+    body: AcceptBody, session: Session = SessionDep
 ) -> JSONResponse:
     try:
         user = accept_invite(session, body.token, body.password)

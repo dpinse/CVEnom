@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from typing import Literal
 
 from fastapi import Depends, HTTPException, Request
 from redis.exceptions import RedisError
@@ -95,13 +96,30 @@ async def _check(request: Request, scope: str, ident: str, limit: int, window_s:
 COUNTED_KEY = "cvenom_rl_counted"
 
 
-def rate_limit(scope: str):
+def rate_limit(scope: str, identity: Literal["auto", "ip"] = "auto"):
     """Dependency: valid user -> bucket u:{id} (authed limit); anonymous OR an
     invalid token -> bucket ip:{ip} (anon limit). Identity is resolved without
     raising, so bad-token floods are counted; the 401 is raised after counting
     (429 wins when the bucket is exhausted). No-Authorization requests do no DB
     work. If ResponseCacheMiddleware already counted this scope for the
-    request's IP bucket, an anonymous request is not counted a second time."""
+    request's IP bucket, an anonymous request is not counted a second time.
+
+    identity="ip": never inspects Authorization (a stale bearer must not break
+    endpoints like refresh), always keys ip:{client_ip}, never raises 401."""
+
+    if identity == "ip":
+
+        async def ip_dependency(request: Request) -> None:
+            if request.scope.get(COUNTED_KEY) != scope:
+                await _check(
+                    request,
+                    scope,
+                    f"ip:{client_ip(request)}",
+                    request.app.state.settings.rate_anon_per_min,
+                    60,
+                )
+
+        return ip_dependency
 
     async def dependency(
         request: Request, resolved: tuple[User | None, bool] = Depends(try_current_user)

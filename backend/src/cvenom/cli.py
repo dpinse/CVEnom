@@ -37,7 +37,7 @@ def main(argv=None, *, session_factory=None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     except IntegrityError:
-        print("error: a user with that email already exists", file=sys.stderr)
+        print("error: user with that email already exists or constraint violated", file=sys.stderr)
         return 1
     except AdminExists:
         print("error: an admin already exists", file=sys.stderr)

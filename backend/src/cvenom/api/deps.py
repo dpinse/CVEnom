@@ -19,6 +19,12 @@ def get_session(request: Request) -> Iterator[Session]:
         yield s
 
 
+# scope="function": the session context exits (and commits) BEFORE the response is
+# sent, so a failed commit becomes a 500 instead of a success the DB never saw.
+# Every dependant must use this same object so there is one session per request.
+SessionDep = Depends(get_session, scope="function")
+
+
 def _unauthorized(error: str = "invalid_token") -> HTTPException:
     return HTTPException(
         status_code=401, detail={"error": error}, headers={"WWW-Authenticate": "Bearer"}
@@ -26,7 +32,7 @@ def _unauthorized(error: str = "invalid_token") -> HTTPException:
 
 
 def try_current_user(
-    request: Request, session: Session = Depends(get_session)
+    request: Request, session: Session = SessionDep
 ) -> tuple[User | None, bool]:
     """Non-raising identity resolution: (user, auth_failed).
 

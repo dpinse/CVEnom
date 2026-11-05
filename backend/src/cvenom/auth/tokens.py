@@ -11,6 +11,7 @@ import hashlib
 import secrets
 import threading
 import time
+from collections import OrderedDict
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -21,7 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from sqlalchemy import select, text
+from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session
 
 from cvenom import secretbox
@@ -41,10 +42,14 @@ _REQUIRED_CLAIMS = ["exp", "iat", "sub", "sid", "kid", "iss", "aud"]
 # Process-wide cache of signing-key rows (kid, public key, retired_at). The grace
 # window is applied at use time against the caller's `now`, never at fetch time.
 KEY_CACHE_TTL_S = 60.0
-KEY_FORCE_REFRESH_MIN_S = 10.0
+KEY_FORCE_REFRESH_MIN_S = 10.0  # per unknown kid
+KEY_FORCE_REFRESH_GLOBAL_S = 1.0  # across all kids
+_KID_TRACK_MAX = 256
 _key_cache_lock = threading.Lock()
 _key_cache: tuple[float, list[tuple[str, Ed25519PublicKey, datetime | None]]] | None = None
-_last_forced_refresh: float | None = None
+_last_forced_refresh: float | None = None  # global
+_kid_refresh: OrderedDict[str, float] = OrderedDict()
+_KEY_CREATED = "cvenom_key_created"
 
 
 def reset_key_cache() -> None:
@@ -52,6 +57,7 @@ def reset_key_cache() -> None:
     with _key_cache_lock:
         _key_cache = None
         _last_forced_refresh = None
+        _kid_refresh.clear()
 
 
 def _invalidate_key_cache() -> None:
@@ -144,6 +150,7 @@ class KeyRing:
         new = KeyRing._generate(now)
         session.add(new)
         session.flush()
+        session.info[_KEY_CREATED] = True
         _invalidate_key_cache()
         return new
 
@@ -203,14 +210,34 @@ def issue_access(session: Session, user: User, sid: uuid.UUID, now: datetime) ->
     return jwt.encode(claims, priv, algorithm=ALGORITHM, headers={"kid": key.kid})  # type: ignore[arg-type]
 
 
-def _may_force_refresh() -> bool:
+def _may_force_refresh(kid: str) -> bool:
+    """One forced refresh per unknown kid per 10 s (bounded LRU), and at most one
+    forced refresh per second overall, so bogus kids cannot starve a real one."""
     global _last_forced_refresh
     mono = time.monotonic()
     with _key_cache_lock:
-        if _last_forced_refresh is not None and mono - _last_forced_refresh < KEY_FORCE_REFRESH_MIN_S:
+        if _last_forced_refresh is not None and mono - _last_forced_refresh < KEY_FORCE_REFRESH_GLOBAL_S:
+            return False
+        last = _kid_refresh.get(kid)
+        if last is not None and mono - last < KEY_FORCE_REFRESH_MIN_S:
             return False
         _last_forced_refresh = mono
+        _kid_refresh[kid] = mono
+        _kid_refresh.move_to_end(kid)
+        while len(_kid_refresh) > _KID_TRACK_MAX:
+            _kid_refresh.popitem(last=False)
         return True
+
+
+@event.listens_for(Session, "after_commit")
+def _after_commit(session: Session) -> None:
+    if session.info.pop(_KEY_CREATED, False):
+        _invalidate_key_cache()
+
+
+@event.listens_for(Session, "after_rollback")
+def _after_rollback(session: Session) -> None:
+    session.info.pop(_KEY_CREATED, None)
 
 
 def decode_access(session: Session, token: str, now: datetime) -> AccessClaims:
@@ -224,7 +251,7 @@ def decode_access(session: Session, token: str, now: datetime) -> AccessClaims:
     if header.get("alg") != ALGORITHM or not isinstance(kid, str):
         raise InvalidToken("invalid token")
     pub = KeyRing.verification_keys(session, now).get(kid)
-    if pub is None and _may_force_refresh():
+    if pub is None and _may_force_refresh(kid):
         # Unknown kid: a key created by another worker? One refresh, rate-limited.
         pub = KeyRing.verification_keys(session, now, force=True).get(kid)
     if pub is None:

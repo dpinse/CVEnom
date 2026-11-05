@@ -535,3 +535,66 @@ def test_current_creating_key_invalidates_cache(db_session):
     KeyRing.verification_keys(db_session, NOW)
     KeyRing.current(db_session, NOW)
     assert tokens._key_cache is None
+
+
+def test_bogus_kid_burst_does_not_block_real_new_kid(db_session, user, monkeypatch):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tokens.time, "monotonic", lambda: clock["t"])
+    tok = issue_access(db_session, user, uuid.uuid4(), NOW)
+    KeyRing.verification_keys(db_session, NOW)  # warm
+    other = KeyRing._generate(NOW)
+    db_session.add(other)
+    db_session.flush()
+    priv = serialization.load_der_private_key(secretbox.decrypt(other.private_enc), password=None)
+    claims = jwt.decode(tok, options={"verify_signature": False})
+    for i in range(20):  # burst of bogus kids, each past the 1 s global cap
+        clock["t"] += 1.1
+        bogus = jwt.encode(claims, priv, algorithm="EdDSA", headers={"kid": f"bogus{i}"})
+        with pytest.raises(InvalidToken):
+            decode_access(db_session, bogus, NOW)
+    # first bogus refresh already picked up the new key; invalidate to prove the
+    # real kid still gets its own forced refresh after the global 1 s cap.
+    tokens._invalidate_key_cache()
+    tokens.KeyRing.verification_keys(db_session, NOW)
+    tokens._key_cache = (tokens._key_cache[0], [e for e in tokens._key_cache[1] if e[0] != other.kid])
+    clock["t"] += 1.1
+    claims["kid"] = other.kid
+    real = jwt.encode(claims, priv, algorithm="EdDSA", headers={"kid": other.kid})
+    assert decode_access(db_session, real, NOW).kid == other.kid
+
+
+def test_global_forced_refresh_cap_one_per_second(db_session, user, monkeypatch):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tokens.time, "monotonic", lambda: clock["t"])
+    assert tokens._may_force_refresh("a") is True
+    assert tokens._may_force_refresh("b") is False  # same second
+    clock["t"] += 1.1
+    assert tokens._may_force_refresh("b") is True
+    clock["t"] += 1.1
+    assert tokens._may_force_refresh("a") is False  # per-kid 10 s
+    clock["t"] += 10
+    assert tokens._may_force_refresh("a") is True
+
+
+def test_kid_tracking_bounded():
+    for i in range(tokens._KID_TRACK_MAX + 50):
+        tokens._kid_refresh[f"k{i}"] = 0.0
+        while len(tokens._kid_refresh) > tokens._KID_TRACK_MAX:
+            tokens._kid_refresh.popitem(last=False)
+    assert len(tokens._kid_refresh) == tokens._KID_TRACK_MAX
+
+
+def test_cache_invalidated_on_commit_of_key_creation(test_engine):
+    from sqlalchemy.orm import Session
+
+    s = Session(bind=test_engine)
+    try:
+        KeyRing.current(s, NOW)
+        tokens._key_cache = (0.0, [])  # simulate a pre-commit refetch
+        s.commit()
+        assert tokens._key_cache is None
+    finally:
+        s.rollback()
+        s.execute(__import__("sqlalchemy").text("DELETE FROM signing_key"))
+        s.commit()
+        s.close()

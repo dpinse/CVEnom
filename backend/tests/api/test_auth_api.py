@@ -42,6 +42,17 @@ def make_app(db_session, redis=None, **overrides):
     )
 
 
+def make_failing_commit_app(db_session):
+    settings = get_settings()
+
+    @contextmanager
+    def factory():
+        yield db_session
+        raise RuntimeError("commit failed")
+
+    return create_app(settings, redis=fakeredis.FakeAsyncRedis(), session_factory=factory)
+
+
 def client(app, peer=("1.2.3.4", 1234)):
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app, client=peer), base_url="https://test"
@@ -344,3 +355,91 @@ async def test_accept_rate_limited(db_session):
             for _ in range(3)
         ]
     assert codes == [400, 400, 429]
+
+
+# ---------------------------------------------------------------- fix round 1
+
+
+async def test_stale_bearer_does_not_break_refresh(db_session):
+    mk_user(db_session)
+    app = make_app(db_session)
+    async with client(app) as c:
+        r = await login(c)
+        tok = cookie_value(r)
+        r2 = await c.post(
+            "/api/auth/refresh",
+            headers={**CSRF, "Authorization": "Bearer expired.garbage.x"},
+        )
+    assert r2.status_code == 200
+    assert set_cookie(r2) == COOKIE_PREFIX + cookie_value(r2) + ATTRS
+    assert cookie_value(r2) != tok
+
+
+async def test_stale_bearer_does_not_break_accept(db_session):
+    async with client(make_app(db_session)) as c:
+        r = await c.post(
+            "/api/auth/invites/accept",
+            json={"token": "t", "password": PW},
+            headers={"Authorization": "Bearer junk"},
+        )
+    assert r.status_code == 400 and r.json() == {"error": "invalid_invite"}
+
+
+async def test_refreshed_access_token_keeps_sid(db_session):
+    from cvenom.auth.tokens import decode_access
+
+    mk_user(db_session)
+    async with client(make_app(db_session)) as c:
+        r = await login(c)
+        r2 = await c.post("/api/auth/refresh", headers=CSRF)
+    now = datetime.now(UTC)
+    a = decode_access(db_session, r.json()["access_token"], now)
+    b = decode_access(db_session, r2.json()["access_token"], now)
+    assert a.sid == b.sid
+
+
+async def test_refresh_oversized_cookie_clears(db_session):
+    async with client(make_app(db_session)) as c:
+        r = await c.post(
+            "/api/auth/refresh", headers={**CSRF, "Cookie": "cvenom_refresh=" + "a" * 300}
+        )
+    assert r.status_code == 401 and set_cookie(r) == CLEARED
+
+
+async def test_login_inactive_byte_identical(db_session):
+    mk_user(db_session)
+    u = mk_user(db_session, "off@example.com")
+    u.is_active = False
+    db_session.flush()
+    async with client(make_app(db_session)) as c:
+        a = await login(c, "nobody@example.com", PW)
+        b = await login(c, "off@example.com", PW)
+    assert a.content == b.content and dict(a.headers) == dict(b.headers)
+
+
+async def test_extra_fields_rejected(db_session):
+    async with client(make_app(db_session)) as c:
+        r = await c.post(
+            "/api/auth/invites/accept", json={"token": "t", "password": PW, "role": "admin"}
+        )
+        assert r.status_code == 422
+        r = await c.post(
+            "/api/auth/login", json={"email": "a@b.c", "password": "x", "admin": True}
+        )
+        assert r.status_code == 422
+
+
+async def test_failed_commit_login_is_500_without_cookie(db_session):
+    mk_user(db_session)
+    async with client(make_failing_commit_app(db_session)) as c:
+        r = await login(c)
+    assert r.status_code == 500 and r.json() == {"error": "internal_error"}
+    assert "set-cookie" not in r.headers
+
+
+async def test_failed_commit_logout_not_204(db_session):
+    u = mk_user(db_session)
+    auth, _ = bearer(db_session, u)
+    async with client(make_failing_commit_app(db_session)) as c:
+        r = await c.post("/api/auth/logout", headers=auth)
+    assert r.status_code == 500
