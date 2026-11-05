@@ -46,8 +46,8 @@
   - Geo purge runs hourly. Both maintenance jobs are Redis-locked, and failures are logged without secrets.
 
 ## Decisions that need you
-1. **ransomware.live retired its free API.** The v2 endpoint returns 404. The collector targets the Pro API (`api-pro.ransomware.live/victims/recent`, `X-API-KEY`) and is **disabled until you set `CVENOM_RANSOMWARE_LIVE_API_KEY`**. The swagger doesn't document the record field names, so the parser uses defensive aliases. Once you have a key, compare one real response against `ransomware.py`.
-2. **Cloudflare Radar and ThreatFox need free tokens:** `CVENOM_CF_RADAR_TOKEN` and `CVENOM_ABUSECH_AUTH_KEY`. Without them those layers are cleanly disabled. Once the CF token exists, check whether the hijack query (`per_page=100`, 7 days) returns the newest events. That item is parked.
+1. **ransomware.live retired its free API.** The v2 endpoint returns 404. The collector targets the Pro API (`api-pro.ransomware.live/victims/recent`, `X-API-KEY`) and is **disabled until you set `RANSOMWARE_LIVE_API_KEY`**. The swagger doesn't document the record field names, so the parser uses defensive aliases. Once you have a key, compare one real response against `ransomware.py`.
+2. **Cloudflare Radar and ThreatFox need free tokens:** `CF_RADAR_TOKEN` and `ABUSECH_AUTH_KEY`. Without them those layers are cleanly disabled. Once the CF token exists, check whether the hijack query (`per_page=100`, 7 days) returns the newest events. That item is parked.
 3. **Carried over from Plan 1:** the CISA-after-VulnCheck alert rule. Still awaiting your call.
 
 ## Parked or deferred (details in the ledger)

@@ -30,7 +30,7 @@
 - **Remote git.** Never push, fetch, or pull. Commit locally only, and never stage `.superpowers/`.
 - **Deployment posture.** The app faces the internet behind Cloudflare, but Cloudflare is NOT relied on. The origin enforces its own rate limits, security headers, body-size limits, and caching, and trusts forwarded client-IP headers ONLY from configured `trusted_proxy_cidrs`.
 - **Stored-text contract.** Stored `title`/`summary`/`label`/`affected` are HTML-entity-escaped plain text, and the API returns them as-is. The frontend decodes once into a text node. Email bodies are **plain text only** (decode entities once). No HTML email in v1.
-- **Secrets.** Secrets come only from env: `CVENOM_SECRETS_KEY` (base64, 32 bytes, required for the API and alerts), SMTP credentials, and the CF/abuse.ch/MaxMind tokens.
+- **Secrets.** Secrets come only from env: `SECRETS_KEY` (base64, 32 bytes, required for the API and alerts), SMTP credentials, and the CF/abuse.ch/MaxMind tokens.
   - Secrets never appear in logs, URLs, error responses, or API output.
   - Webhook secrets and JWT private keys are encrypted at rest with AES-256-GCM, a random 96-bit nonce, and a key-id prefix.
 - **Passwords and tokens.**
@@ -118,7 +118,7 @@
 ```python
 def test_secretbox_roundtrip_and_tamper(monkeypatch):
     import base64, os, pytest
-    monkeypatch.setenv("CVENOM_SECRETS_KEY", base64.b64encode(os.urandom(32)).decode())
+    monkeypatch.setenv("SECRETS_KEY", base64.b64encode(os.urandom(32)).decode())
     from cvenom.config import get_settings; get_settings.cache_clear()
     from cvenom import secretbox
     tok = secretbox.encrypt(b"hook-secret")
@@ -176,7 +176,7 @@ def test_secretbox_roundtrip_and_tamper(monkeypatch):
   - `create_admin(session, email, pw) -> User`. It refuses if any admin already exists, unless `force=True`.
   - `create_invite(session, admin, email, role, ttl_hours=72) -> str`. It returns the raw token once and stores only its SHA-256.
   - `accept_invite(session, token, pw) -> User`. It is single-use and checks expiry.
-  - CLI: `python -m cvenom.cli create-admin --email E` reads the password from the `CVENOM_ADMIN_PASSWORD` env var or from stdin (never a CLI argument).
+  - CLI: `python -m cvenom.cli create-admin --email E` reads the password from the `ADMIN_PASSWORD` env var or from stdin (never a CLI argument).
 - [ ] **Step 1: Write the failing tests.**
   - Hashes are argon2id (`$argon2id$`), and verification works.
   - `authenticate` for an unknown email still calls the verifier (patch it and assert it was called once). Unknown user and wrong password return the identical `None`.
@@ -559,7 +559,7 @@ def test_validate_url_rejects_dns_that_resolves_private(monkeypatch):
     - Redis runs with `--requirepass ${REDIS_PASSWORD:?}`, and `REDIS_URL` includes the password.
     - Only `api` publishes, on `127.0.0.1:8000` (Cloudflare Tunnel or a reverse proxy sits in front).
     - Healthchecks, `restart: unless-stopped`.
-  - **.env.example:** every setting, with secrets blank. It includes the `openssl rand -base64 32` hint for `CVENOM_SECRETS_KEY`.
+  - **.env.example:** every setting, with secrets blank. It includes the `openssl rand -base64 32` hint for `SECRETS_KEY`.
   - **docs/deploy.md:** first-run steps (migrate, create-admin, invite users), Cloudflare notes, and key rotation.
 - [ ] **Step 1: Write the failing tests.** Parse the YAML and the Dockerfile text, and assert:
   - Postgres and Redis have no `ports`.
