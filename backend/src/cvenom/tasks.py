@@ -23,7 +23,7 @@ from cvenom.config import get_settings
 from cvenom.db import get_engine, session_scope
 from cvenom.models import CollectorRun, Cve
 from cvenom.geoip import ASN_FILE, COUNTRY_FILE, refresh_geoip
-from cvenom.pipeline import ingest, purge_old_geo_events
+from cvenom.pipeline import ingest, persist_events, purge_old_geo_events
 
 log = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ class RedisLock:
 def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLock | None = None) -> dict:
     cls = REGISTRY[name]
     lock = lock if lock is not None else RedisLock()
-    summary = {"collector": name, "ok": False, "cves": 0, "stories": 0, "events": [], "skipped": False}
+    summary = {"collector": name, "ok": False, "cves": 0, "stories": 0, "events": [], "events_persisted": 0, "skipped": False}
     # The Redis lock is the cheap skip; the row lock (FOR UPDATE) below is the
     # correctness guarantee. TTL is 2x cadence so a slow run rarely outlives it.
     if not lock.acquire(name, 2 * cls.cadence_seconds):
@@ -124,9 +124,12 @@ def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLo
                     session.expunge(row)
                 return summary
             events = ingest(session, result, enrich_only=enrich_only)
+            # Outbox: same transaction as the data and the seen-state.
+            persisted = persist_events(session, events, source_default=name)
             row.last_run = started_at
             row.state = collector.state
-        summary.update(ok=True, cves=len(result.cves), stories=len(result.stories), events=events)
+        summary.update(ok=True, cves=len(result.cves), stories=len(result.stories), events=events,
+                       events_persisted=persisted)
         return summary
     finally:
         lock.release(name)

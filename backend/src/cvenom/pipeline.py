@@ -3,9 +3,10 @@
 ``ingest`` does not commit: it flushes and the caller owns the transaction.
 """
 
+import logging
 import math
 from collections.abc import Callable, Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -16,11 +17,12 @@ from cvenom.collectors.base import CollectorResult
 from cvenom.config import get_settings
 from cvenom.db import upsert_cve
 from cvenom.extract import extract_cve_ids, link_story
-from cvenom.models import Cve, GeoEvent, Story, StoryCveLink
-from cvenom.schemas import NormalizedCve, NormalizedGeoEvent, NormalizedStory
+from cvenom.models import AlertEvent, Cve, GeoEvent, Story, StoryCveLink
+from cvenom.schemas import CVE_ID_RE, NormalizedCve, NormalizedGeoEvent, NormalizedStory
 from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve
 from cvenom.textutil import content_hash, find_existing_story, sanitize_text
 
+log = logging.getLogger(__name__)
 
 _UNIQUE_VIOLATION = "23505"
 
@@ -196,6 +198,56 @@ def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = Fal
 
     session.flush()
     return events
+
+
+def _json_safe(value, depth: int = 0):
+    """JSON/JSONB-safe copy: dates -> ISO strings, NUL stripped, NaN/Inf -> None."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if depth >= _DETAILS_MAX_DEPTH + 4:
+        return None
+    if isinstance(value, dict):
+        return {str(k).replace("\x00", ""): _json_safe(v, depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_safe(v, depth + 1) for v in value]
+    return str(value).replace("\x00", "")
+
+
+def persist_events(session: Session, events: list[dict], *, source_default: str) -> int:
+    """Write events as AlertEvent outbox rows in the caller's transaction (no commit).
+
+    Malformed events are skipped with a WARNING, never raised. Events repeating a
+    (type, cve_id) pair within one call are written once. Returns the count added.
+    """
+    seen: set[tuple[str, str | None]] = set()
+    added = 0
+    for e in events:
+        etype = e.get("type") if isinstance(e, dict) else None
+        cve_id = e.get("cve_id") if isinstance(e, dict) else None
+        source = (e.get("source") or source_default) if isinstance(e, dict) else None
+        if not (
+            isinstance(etype, str) and 0 < len(etype) <= 64
+            and (cve_id is None or (isinstance(cve_id, str) and CVE_ID_RE.fullmatch(cve_id)))
+            and isinstance(source, str) and 0 < len(source) <= 64
+        ):
+            log.warning("skipping invalid alert event (type=%r)", etype if isinstance(etype, str) else None)
+            continue
+        key = (etype, cve_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        payload = {k: v for k, v in e.items() if k not in ("type", "cve_id", "source")}
+        session.add(AlertEvent(type=etype, cve_id=cve_id, source=source, payload=_json_safe(payload)))
+        added += 1
+    if added:
+        session.flush()
+    return added
 
 
 def lane_views(session: Session, now: datetime) -> dict[Lane, list[CveView]]:
