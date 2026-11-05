@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 from fastapi import Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from starlette.requests import Request
 
 from cvenom.api import client_ip, create_app
@@ -30,6 +30,15 @@ def secrets_key(monkeypatch):
 class Body(BaseModel):
     password: str
     n: int
+
+
+class Checked(BaseModel):
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def _check(cls, v):
+        raise ValueError(f"bad-{v}")
 
 
 def make_app(db_session, **overrides):
@@ -71,6 +80,10 @@ def make_app(db_session, **overrides):
     def body(b: Body):
         return {"ok": True}
 
+    @app.post("/t/checked")
+    def checked(b: Checked):
+        return {"ok": True}
+
     @app.post("/t/sink")
     async def sink(request: Request):
         return {"n": len(await request.body())}
@@ -80,7 +93,7 @@ def make_app(db_session, **overrides):
 
 def client(app, peer=("1.2.3.4", 1234)):
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app, client=peer, raise_app_exceptions=False),
+        transport=httpx.ASGITransport(app, client=peer),
         base_url="http://test",
     )
 
@@ -192,6 +205,28 @@ async def test_chunked_body_without_content_length_413(db_session):
     assert_security_headers(r)
 
 
+async def test_streamed_oversize_does_not_log_error(db_session, caplog):
+    async def gen():
+        for _ in range(70):
+            yield b"x" * 1024
+
+    async with client(make_app(db_session)) as c:
+        with caplog.at_level("DEBUG"):
+            r = await c.post("/t/sink", content=gen())
+    assert r.status_code == 413
+    assert not [rec for rec in caplog.records if rec.levelname == "ERROR"]
+
+
+async def test_413_has_cors_headers(db_session):
+    app = make_app(db_session, cors_origins=["https://ok.example"])
+    async with client(app) as c:
+        r = await c.post(
+            "/t/sink", content=b"x" * 70_000, headers={"Origin": "https://ok.example"}
+        )
+    assert r.status_code == 413
+    assert r.headers["access-control-allow-origin"] == "https://ok.example"
+
+
 async def test_small_body_ok(db_session):
     async with client(make_app(db_session)) as c:
         r = await c.post("/t/sink", content=b"x" * 1000)
@@ -211,10 +246,26 @@ async def test_validation_error_does_not_echo_input(db_session):
         assert set(e) == {"loc", "msg", "type"}
 
 
+async def test_validator_message_not_echoed(db_session):
+    async with client(make_app(db_session)) as c:
+        r = await c.post("/t/checked", json={"password": "hunter2"})
+    assert r.status_code == 422
+    assert "bad-hunter2" not in r.text
+    assert "hunter2" not in r.text
+    assert r.json()["detail"][0]["msg"] == "invalid value"
+
+
+async def test_validation_loc_truncated(db_session):
+    async with client(make_app(db_session)) as c:
+        r = await c.post("/t/body", json={"password": {"attacker-key": 1}, "n": 1})
+    assert r.status_code == 422
+    assert "attacker-key" not in r.text
+
+
 # ---- client_ip ----
 
-async def ip_of(db_session, peer, headers=None, trusted=TRUSTED):
-    app = make_app(db_session, trusted_proxy_cidrs=trusted)
+async def ip_of(db_session, peer, headers=None, trusted=TRUSTED, cf=True):
+    app = make_app(db_session, trusted_proxy_cidrs=trusted, trust_cf_connecting_ip=cf)
     async with client(app, peer=peer) as c:
         return (await c.get("/t/ip", headers=headers or {})).json()["ip"]
 
@@ -236,6 +287,39 @@ async def test_client_ip_trusted_peer_cf_header(db_session):
 async def test_client_ip_trusted_peer_xff_rightmost_untrusted(db_session):
     got = await ip_of(
         db_session, ("10.0.0.5", 1), {"X-Forwarded-For": "evil, 9.9.9.9, 10.1.1.1"}
+    )
+    assert got == "9.9.9.9"
+
+
+async def test_client_ip_cf_ignored_unless_flag(db_session):
+    h = {"CF-Connecting-IP": "8.8.8.8"}
+    assert await ip_of(db_session, ("10.0.0.5", 1), h, cf=False) == "10.0.0.5"
+    assert await ip_of(db_session, ("10.0.0.5", 1), h, cf=True) == "8.8.8.8"
+    h = {"CF-Connecting-IP": "8.8.8.8", "X-Forwarded-For": "9.9.9.9"}
+    assert await ip_of(db_session, ("10.0.0.5", 1), h, cf=False) == "9.9.9.9"
+
+
+@pytest.mark.parametrize(
+    "xff,expected",
+    [
+        ("6.6.6.6, 9.9.9.9:443", "9.9.9.9"),
+        ("6.6.6.6, [2606:4700::1]:443", "2606:4700::1"),
+        ("6.6.6.6, [2606:4700::1]", "2606:4700::1"),
+        ("6.6.6.6, unknown", "10.0.0.5"),
+        ("6.6.6.6,", "10.0.0.5"),
+        ("6.6.6.6, , 10.1.1.1", "10.0.0.5"),
+        ("6.6.6.6, fe80::1%eth0", "10.0.0.5"),
+    ],
+)
+async def test_client_ip_xff_stops_at_invalid_hop(db_session, xff, expected):
+    got = await ip_of(db_session, ("10.0.0.5", 1), {"X-Forwarded-For": xff})
+    assert got == expected
+    assert got != "6.6.6.6"
+
+
+async def test_client_ip_ipv4_mapped_peer_is_trusted(db_session):
+    got = await ip_of(
+        db_session, ("::ffff:10.0.0.5", 1), {"X-Forwarded-For": "::ffff:9.9.9.9"}
     )
     assert got == "9.9.9.9"
 

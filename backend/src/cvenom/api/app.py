@@ -28,10 +28,13 @@ async def _http_exception(request: Request, exc: StarletteHTTPException) -> JSON
 
 async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     # Never echo `input`/`ctx`: request values may contain secrets.
-    detail = [
-        {"loc": list(e.get("loc", ())), "msg": e.get("msg", ""), "type": e.get("type", "")}
-        for e in exc.errors()
-    ]
+    detail = []
+    for e in exc.errors():
+        etype = e.get("type", "")
+        msg = e.get("msg", "")
+        if etype in ("value_error", "assertion_error"):
+            msg = "invalid value"  # custom validators may embed the input
+        detail.append({"loc": list(e.get("loc", ()))[:2], "msg": msg, "type": etype})
     return JSONResponse({"error": "validation_error", "detail": detail}, status_code=422)
 
 
@@ -59,8 +62,9 @@ def create_app(settings: Settings | None = None, *, redis=None, session_factory=
     app.add_exception_handler(Exception, _unhandled)
 
     # add_middleware: last added is outermost. Order outer -> inner:
-    # security headers, body limit, CORS, error catch, router.
+    # security headers, CORS, body limit, error catch, router.
     app.add_middleware(ErrorCatchMiddleware)
+    app.add_middleware(BodyLimitMiddleware, max_bytes=settings.max_body_bytes)
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -69,7 +73,6 @@ def create_app(settings: Settings | None = None, *, redis=None, session_factory=
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
             allow_headers=["Authorization", "Content-Type", "X-CVEnom-CSRF"],
         )
-    app.add_middleware(BodyLimitMiddleware, max_bytes=settings.max_body_bytes)
     app.add_middleware(SecurityHeadersMiddleware)
 
     @app.get("/api/health")

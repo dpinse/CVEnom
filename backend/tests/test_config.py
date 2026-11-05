@@ -90,3 +90,31 @@ def test_bad_trusted_proxy_cidr_fails_at_load():
             database_url="postgresql://x", redis_url="redis://y",
             trusted_proxy_cidrs=["10.0.0.0/8", "not-a-cidr"], _env_file=None,
         )
+
+
+def test_cors_origins_validation():
+    import pytest
+    from pydantic import ValidationError
+
+    from cvenom.config import Settings
+
+    def mk(origins):
+        return Settings(
+            database_url="postgresql://x", redis_url="redis://y",
+            cors_origins=origins, _env_file=None,
+        )
+
+    for bad in ("*", "https://a.com/path", "https://u@a.com", "ftp://a.com",
+                "https://a.com?x=1", "https://a.com#f", "https://*.a.com", "a.com"):
+        with pytest.raises(ValidationError):
+            mk([bad])
+    assert mk(["https://a.com", "http://localhost:5173", "https://a.com/"]).cors_origins == [
+        "https://a.com", "http://localhost:5173", "https://a.com",
+    ]
+
+
+def test_trust_cf_connecting_ip_defaults_false():
+    from cvenom.config import Settings
+
+    s = Settings(database_url="postgresql://x", redis_url="redis://y", _env_file=None)
+    assert s.trust_cf_connecting_ip is False

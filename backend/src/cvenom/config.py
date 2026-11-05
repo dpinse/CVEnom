@@ -1,5 +1,6 @@
 import ipaddress
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -36,6 +37,7 @@ class Settings(BaseSettings):
     api_docs: bool = False
     cors_origins: list[str] = []
     trusted_proxy_cidrs: list[str] = []
+    trust_cf_connecting_ip: bool = False
     jwt_issuer: str = "cvenom"
     jwt_audience: str = "cvenom-api"
     access_ttl_minutes: int = 15
@@ -67,6 +69,36 @@ class Settings(BaseSettings):
         if isinstance(v, SecretStr) and v.get_secret_value() == "":
             return None
         return v
+
+    @field_validator("cors_origins")
+    @classmethod
+    def _valid_origins(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for entry in v:
+            raw = entry.strip()
+            if raw.endswith("/"):
+                raw = raw[:-1]
+            try:
+                u = urlsplit(raw)
+                port = u.port  # validates the port
+            except ValueError:
+                raise ValueError(f"invalid cors_origins entry: {entry!r}") from None
+            bad = (
+                "*" in raw
+                or u.scheme not in ("http", "https")
+                or not u.hostname
+                or "@" in u.netloc
+                or u.path
+                or u.query
+                or u.fragment
+                or "?" in raw
+                or "#" in raw
+            )
+            if bad:
+                raise ValueError(f"cors_origins entry must be a bare origin: {entry!r}")
+            del port
+            out.append(f"{u.scheme}://{u.netloc}")
+        return out
 
     @field_validator("trusted_proxy_cidrs")
     @classmethod
