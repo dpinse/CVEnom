@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -47,20 +48,33 @@ _RELEASE_LUA = (
 )
 
 
+# One lazily-created client (one connection pool) shared by every default lock,
+# so per-run RedisLock instances don't each open and leak a pool.
+_redis_client: Any = None
+_redis_client_guard = threading.Lock()
+
+
+def _default_redis_client() -> Any:
+    global _redis_client
+    if _redis_client is None:
+        with _redis_client_guard:
+            if _redis_client is None:
+                import redis
+
+                _redis_client = redis.Redis.from_url(get_settings().redis_url)
+    return _redis_client
+
+
 class RedisLock:
     """Per-collector lock: SET NX EX; release deletes only if we still hold it."""
 
     def __init__(self, client: Any = None) -> None:
-        self._client = client
+        self._client = client  # injectable (tests); None -> shared module client
         self._token = uuid.uuid4().hex
 
     @property
     def client(self) -> Any:
-        if self._client is None:
-            import redis
-
-            self._client = redis.Redis.from_url(get_settings().redis_url)
-        return self._client
+        return self._client if self._client is not None else _default_redis_client()
 
     def acquire(self, name: str, ttl: int) -> bool:
         return bool(self.client.set(LOCK_PREFIX + name, self._token, nx=True, ex=ttl))

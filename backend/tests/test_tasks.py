@@ -307,3 +307,28 @@ def test_ingest_failure_creates_no_run_row(db_session, fake_registry, monkeypatc
     with pytest.raises(RuntimeError):
         tasks.run_collector("fake_t", session_factory=tx, lock=FakeLock())
     assert db_session.get(CollectorRun, "fake_t") is None
+
+
+
+def test_default_redis_client_is_shared_module_level_and_lazy(monkeypatch):
+    import redis
+    from cvenom import tasks
+
+    created = []
+
+    def fake_from_url(url, **kw):
+        created.append(url)
+        return object()
+
+    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(fake_from_url))
+    monkeypatch.setattr(tasks, "_redis_client", None)
+    a, b = tasks.RedisLock(), tasks.RedisLock()
+    assert created == []  # lazy: nothing created until used
+    assert a.client is b.client
+    assert len(created) == 1  # one client (one connection pool) for all locks
+
+
+def test_injected_redis_client_still_used():
+    from cvenom.tasks import RedisLock
+    sentinel = object()
+    assert RedisLock(sentinel).client is sentinel
