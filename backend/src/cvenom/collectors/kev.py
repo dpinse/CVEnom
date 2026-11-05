@@ -6,6 +6,7 @@ import logging
 from datetime import date
 
 from cvenom.collectors.base import Collector, CollectorResult, http_get_json, register
+from cvenom.collectors.seenstate import track_new
 from cvenom.schemas import NormalizedCve
 
 log = logging.getLogger(__name__)
@@ -50,16 +51,7 @@ class KevCollector(Collector):
                 log.warning("kev: skipping malformed entry %s", cve_id)
 
         current = {c.cve_id for c in cves}
-        stored = self.state.get("seen")
-        prior: set[str] = set()
-        if "seen" not in self.state:
-            events: list[dict] = []  # first run: baseline only, no alert flood
-        elif not isinstance(stored, list):
-            log.warning("%s: persisted seen state corrupt; re-baselining", self.name)
-            events = []
-        else:
-            prior = {x for x in stored if isinstance(x, str)}
-            events = self.diff(prior, current)
-        # KEV is append-only: union so a truncated feed never shrinks the baseline.
-        self.state["seen"] = sorted(prior | current)
+        events = track_new(
+            self.state, current, source="cisa", collector_name=self.name, logger=log
+        )
         return CollectorResult(cves=cves, events=events)
