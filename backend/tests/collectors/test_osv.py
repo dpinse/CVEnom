@@ -175,3 +175,59 @@ async def test_fetch_uses_self_since(respx_mock):
     b = respx_mock.get(VULN_URL.format(id="GO-B-1")).mock(return_value=httpx.Response(200, json=OWN_CVE))
     await OsvCollector(since=datetime(2026, 11, 3, tzinfo=UTC)).fetch()
     assert a.call_count == 1 and b.call_count == 0
+
+
+# --- per-CVE aggregation across records (#4) ---
+
+FIXED_SAME_CVE = {
+    "id": "PYSEC-2026-50",
+    "aliases": ["CVE-2026-5050"],
+    "affected": [
+        {
+            "package": {"ecosystem": "PyPI", "name": "fixedpkg"},
+            "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "2.0"}]}],
+        }
+    ],
+}
+UNFIXED_SAME_CVE = {
+    "id": "GHSA-5050-5050-5050",
+    "aliases": ["CVE-2026-5050"],
+    "affected": [
+        {
+            "package": {"ecosystem": "npm", "name": "openpkg"},
+            "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}]}],
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize("order", ["fixed_first", "unfixed_first"])
+def test_records_for_same_cve_aggregate_patch_any_and_affected_union(order):
+    recs = [FIXED_SAME_CVE, UNFIXED_SAME_CVE]
+    if order == "unfixed_first":
+        recs.reverse()
+    res = OsvCollector().normalize(recs)
+    assert [c.cve_id for c in res.cves] == ["CVE-2026-5050"]  # one NormalizedCve per CVE
+    c = res.cves[0]
+    assert c.patch_available is True
+    assert sorted(c.affected) == ["PyPI:fixedpkg", "npm:openpkg"]
+
+
+def test_non_dict_event_containing_fixed_substring_is_not_a_fix():
+    rec = {
+        "id": "GHSA-6060-6060-6060",
+        "aliases": ["CVE-2026-6060"],
+        "affected": [
+            {"package": {"ecosystem": "Go", "name": "x"}, "ranges": [{"events": ["unfixed", None, 3]}]}
+        ],
+    }
+    res = OsvCollector().normalize([rec])
+    assert [(c.cve_id, c.patch_available) for c in res.cves] == [("CVE-2026-6060", False)]
+
+
+def test_invalid_alias_skipped_but_valid_aliases_kept(caplog):
+    rec = dict(FIXED_SAME_CVE, aliases=["CVE-1<img src=x>", "cve-2026-5050", "CVE-24-1"])
+    with caplog.at_level(logging.WARNING, logger="cvenom.collectors.osv"):
+        res = OsvCollector().normalize([rec])
+    assert [c.cve_id for c in res.cves] == ["CVE-2026-5050"]
+    assert any("CVE-1<img src=x>" in r.getMessage() for r in caplog.records)

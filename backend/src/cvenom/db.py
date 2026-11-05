@@ -55,7 +55,8 @@ def upsert_cve(session: Session, data: NormalizedCve) -> Cve:
     ):
         row.kev_source = data.kev_source
     if data.patch_available is not None:
-        row.patch_available = data.patch_available
+        # Sticky True: one source saying "fixed" is not undone by a later "no fix".
+        row.patch_available = row.patch_available is True or data.patch_available
     row.kev = bool(row.kev) or data.kev
     row.poc_badge = bool(row.poc_badge) or data.poc_badge
     existing = list(row.affected or [])

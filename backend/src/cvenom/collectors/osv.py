@@ -13,7 +13,7 @@ from cvenom.collectors.base import (
     http_get_text,
     register,
 )
-from cvenom.schemas import NormalizedCve
+from cvenom.schemas import CVE_ID_RE, NormalizedCve
 
 log = logging.getLogger(__name__)
 
@@ -89,32 +89,68 @@ class OsvCollector(Collector):
                 records.append(rec)
         return records
 
+    @staticmethod
+    def _cve_ids(rec: dict) -> list[str]:
+        """Valid, normalized CVE ids from the record's aliases and its own id."""
+        own = rec.get("id")
+        aliases = rec.get("aliases") or []
+        if not isinstance(aliases, list):
+            raise TypeError("aliases is not a list")
+        candidates = [a for a in aliases if isinstance(a, str)]
+        if isinstance(own, str):
+            candidates.append(own)
+        ids: list[str] = []
+        for cand in candidates:
+            norm = cand.strip().upper()
+            if not norm.startswith("CVE-"):
+                continue
+            if not CVE_ID_RE.fullmatch(norm):
+                log.warning("osv: skipping invalid cve alias %r in %s", cand, own)
+                continue
+            if norm not in ids:
+                ids.append(norm)
+        return ids
+
+    @staticmethod
+    def _signals(rec: dict) -> tuple[bool, list[str]]:
+        """(patch available, affected package labels) for one OSV record."""
+        patch = False
+        affected: list[str] = []
+        for aff in rec.get("affected") or []:
+            pkg = aff.get("package") or {}
+            if pkg.get("name"):
+                label = f"{pkg.get('ecosystem', '')}:{pkg['name']}"
+                if label not in affected:
+                    affected.append(label)
+            for rng in aff.get("ranges") or []:
+                events = rng.get("events") or []
+                if any(isinstance(ev, dict) and "fixed" in ev for ev in events):
+                    patch = True
+        return patch, affected
+
     def normalize(self, raw: list[dict]) -> CollectorResult:
-        cves: list[NormalizedCve] = []
+        # Several OSV records (GHSA, PYSEC, GO, ...) can describe one CVE: aggregate
+        # per CVE across the run so the result is order-independent.
+        patch_by_cve: dict[str, bool] = {}
+        affected_by_cve: dict[str, list[str]] = {}
         for rec in raw:
             try:
-                own = rec.get("id")
-                cve_ids = [a for a in rec.get("aliases") or [] if str(a).startswith("CVE-")]
-                if isinstance(own, str) and own.startswith("CVE-") and own not in cve_ids:
-                    cve_ids.append(own)
+                if not isinstance(rec, dict):
+                    raise TypeError("record is not an object")
+                cve_ids = self._cve_ids(rec)
                 if not cve_ids:
                     continue
-                patch = False
-                affected: list[str] = []
-                for aff in rec.get("affected") or []:
-                    pkg = aff.get("package") or {}
-                    if pkg.get("name"):
-                        label = f"{pkg.get('ecosystem', '')}:{pkg['name']}"
-                        if label not in affected:
-                            affected.append(label)
-                    for rng in aff.get("ranges") or []:
-                        if any("fixed" in ev for ev in rng.get("events") or []):
-                            patch = True
-                for cve_id in dict.fromkeys(cve_ids):
-                    cves.append(
-                        NormalizedCve(cve_id=cve_id, patch_available=patch, affected=list(affected))
-                    )
-            except (AttributeError, TypeError, ValueError):  # incl. ValidationError
+                patch, affected = self._signals(rec)
+            except (AttributeError, TypeError, ValueError):
                 rid = rec.get("id") if isinstance(rec, dict) else "?"
                 log.warning("osv: skipping malformed record %s", rid)
+                continue
+            for cve_id in cve_ids:
+                patch_by_cve[cve_id] = patch_by_cve.get(cve_id, False) or patch
+                merged = affected_by_cve.setdefault(cve_id, [])
+                merged.extend(a for a in affected if a not in merged)
+        cves = [
+            NormalizedCve(cve_id=cve_id, patch_available=patch, affected=affected_by_cve[cve_id])
+            for cve_id, patch in patch_by_cve.items()
+        ]
         return CollectorResult(cves=cves)

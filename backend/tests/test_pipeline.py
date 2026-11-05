@@ -312,3 +312,26 @@ def test_kev_event_for_new_cve_passes_and_other_events_untouched(db_session):
     assert ingest(db_session, res) == res.events
     # Second time around the CVE is KEV in the DB: kev_added dropped, other kept.
     assert ingest(db_session, res) == [{"type": "other", "cve_id": "CVE-2026-7003"}]
+
+
+def test_osv_later_run_without_fix_does_not_downgrade_patch(db_session):
+    from cvenom.collectors.osv import OsvCollector
+
+    fixed = {
+        "id": "GHSA-8080-8080-8080",
+        "aliases": ["CVE-2026-8080"],
+        "affected": [{"package": {"ecosystem": "PyPI", "name": "p"},
+                      "ranges": [{"events": [{"introduced": "0"}, {"fixed": "1.1"}]}]}],
+    }
+    unfixed = {
+        "id": "GO-2026-8080",
+        "aliases": ["CVE-2026-8080"],
+        "affected": [{"package": {"ecosystem": "Go", "name": "q"},
+                      "ranges": [{"events": [{"introduced": "0"}]}]}],
+    }
+    _insert_cve(db_session, "CVE-2026-8080")
+    ingest(db_session, OsvCollector().normalize([fixed]), enrich_only=True)
+    ingest(db_session, OsvCollector().normalize([unfixed]), enrich_only=True)
+    row = db_session.get(Cve, "CVE-2026-8080")
+    assert row.patch_available is True
+    assert sorted(row.affected) == ["Go:q", "PyPI:p"]

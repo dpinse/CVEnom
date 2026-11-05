@@ -71,3 +71,19 @@ def test_kev_source_cisa_overwrites_vulncheck(db_session):
     upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0007", kev=True, kev_source="vulncheck"))
     row = upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-0007", kev=True, kev_source="cisa"))
     assert row.kev_source == "cisa"
+
+
+def test_patch_available_is_sticky_true(db_session):
+    from cvenom.db import upsert_cve
+    from cvenom.schemas import NormalizedCve
+    cid = "CVE-2026-0008"
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid))
+    assert row.patch_available is None
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, patch_available=False))
+    assert row.patch_available is False  # None -> False is fine
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, patch_available=True))
+    assert row.patch_available is True
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, patch_available=False))
+    assert row.patch_available is True  # never True -> False
+    row = upsert_cve(db_session, NormalizedCve(cve_id=cid, patch_available=None))
+    assert row.patch_available is True
