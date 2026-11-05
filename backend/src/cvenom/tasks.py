@@ -12,7 +12,7 @@ from typing import Any, Protocol
 from celery import Celery
 from sqlalchemy import func, select
 
-from cvenom.collectors import cfradar, dshield, epss, kev, news, nvd, osv, ransomware, vulncheck  # noqa: F401  (register)
+from cvenom.collectors import abusech, cfradar, dshield, epss, kev, news, nvd, osv, ransomware, vulncheck  # noqa: F401  (register)
 from cvenom.collectors.base import REGISTRY
 from cvenom.config import get_settings
 from cvenom.db import session_scope

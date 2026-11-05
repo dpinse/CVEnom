@@ -98,8 +98,10 @@ async def _request(
     max_bytes: int,
     accept_304: bool = False,
     follow_redirects: bool = False,
+    method: str = "GET",
+    json_body: Any = None,
 ) -> httpx.Response:
-    """GET url (streamed, size-capped), retrying 429/5xx/transport errors.
+    """GET (or POST with json_body) url (streamed, size-capped), retrying 429/5xx/transport errors.
 
     Returns an OK response whose body is fully loaded. ResponseTooLarge is raised
     as soon as the cap is exceeded and is never retried.
@@ -113,7 +115,7 @@ async def _request(
             last = attempt == attempts - 1
             delay = BACKOFF_BASE * (2**attempt)
             try:
-                async with client.stream("GET", url, params=params) as resp:
+                async with client.stream(method, url, params=params, json=json_body) as resp:
                     status = resp.status_code
                     if status == 429 or status >= 500:
                         if last:
@@ -159,6 +161,29 @@ async def http_get_json(
     """GET url and return parsed JSON, retrying 429/5xx/transport errors."""
     resp = await _request(
         url, headers=headers, params=params, retries=retries, timeout=timeout, max_bytes=max_bytes
+    )
+    return resp.json()
+
+
+async def http_post_json(
+    url: str,
+    *,
+    json_body: Any,
+    headers: dict[str, str] | None = None,
+    retries: int = 3,
+    timeout: float = 20,
+    max_bytes: int = 25_000_000,
+) -> Any:
+    """POST json_body to url and return parsed JSON, retrying 429/5xx/transport errors."""
+    resp = await _request(
+        url,
+        headers=headers,
+        params=None,
+        retries=retries,
+        timeout=timeout,
+        max_bytes=max_bytes,
+        method="POST",
+        json_body=json_body,
     )
     return resp.json()
 

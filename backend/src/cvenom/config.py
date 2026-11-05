@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     maxmind_license_key: SecretStr | None = None
     ransomware_live_api_key: SecretStr | None = None
     cf_radar_token: SecretStr | None = None
+    abusech_auth_key: SecretStr | None = None
 
 
 @lru_cache

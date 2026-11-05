@@ -2,7 +2,7 @@ import httpx
 import pytest
 
 from cvenom.collectors import base
-from cvenom.collectors.base import Collector, CollectorResult, http_get_json
+from cvenom.collectors.base import Collector, CollectorResult, http_get_json, http_post_json
 
 
 @pytest.fixture(autouse=True)
@@ -367,3 +367,35 @@ async def test_http_get_bytes_redirects_only_when_asked(respx_mock):
     with pytest.raises(httpx.HTTPStatusError):
         await http_get_bytes("https://r.test/a")
     assert await http_get_bytes("https://r.test/a", follow_redirects=True) == b"ok"
+
+
+@pytest.mark.asyncio
+async def test_http_post_json_sends_body_headers_and_user_agent(respx_mock):
+    route = respx_mock.post("https://api.test/p").mock(
+        return_value=httpx.Response(200, json={"ok": 1})
+    )
+    out = await http_post_json("https://api.test/p", json_body={"q": "x"}, headers={"Auth-Key": "k"})
+    assert out == {"ok": 1}
+    req = route.calls[0].request
+    assert req.headers["Auth-Key"] == "k"
+    assert req.headers["User-Agent"] == base.USER_AGENT
+    assert req.content == b'{"q":"x"}' or req.content == b'{"q": "x"}'
+
+
+@pytest.mark.asyncio
+async def test_http_post_json_retries_then_succeeds(respx_mock):
+    route = respx_mock.post("https://api.test/p")
+    route.side_effect = [httpx.Response(503), httpx.Response(200, json={"ok": True})]
+    assert await http_post_json("https://api.test/p", json_body={}) == {"ok": True}
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_http_post_json_does_not_retry_4xx_and_caps_size(respx_mock):
+    route = respx_mock.post("https://api.test/p").mock(return_value=httpx.Response(401))
+    with pytest.raises(httpx.HTTPStatusError):
+        await http_post_json("https://api.test/p", json_body={})
+    assert route.call_count == 1
+    respx_mock.post("https://api.test/big").mock(return_value=httpx.Response(200, content=b"x" * 50))
+    with pytest.raises(base.ResponseTooLarge):
+        await http_post_json("https://api.test/big", json_body={}, max_bytes=10)
