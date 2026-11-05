@@ -60,6 +60,6 @@ class EpssCollector(Collector):
                             epss_percentile=float(rec["percentile"]),
                         )
                     )
-                except (KeyError, TypeError, ValueError):
+                except (KeyError, TypeError, ValueError):  # incl. ValidationError
                     log.warning("epss: skipping malformed record %s", cve_id)
         return CollectorResult(cves=cves)

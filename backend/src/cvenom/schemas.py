@@ -6,9 +6,9 @@ from pydantic import BaseModel, Field
 class NormalizedCve(BaseModel):
     cve_id: str
     published: datetime | None = None
-    cvss: float | None = None
-    epss: float | None = None
-    epss_percentile: float | None = None
+    cvss: float | None = Field(default=None, ge=0, le=10, allow_inf_nan=False)
+    epss: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    epss_percentile: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     kev: bool = False
     kev_added: date | None = None
     kev_source: str | None = None

@@ -92,3 +92,21 @@ def test_enrich_only_and_registration():
     assert REGISTRY["epss"] is EpssCollector
     assert EpssCollector.name == "epss"
     assert EpssCollector.cadence_seconds == 7200
+
+
+def test_normalize_skips_nan_inf_and_out_of_range():
+    raw = [
+        _page(
+            [
+                _rec("CVE-2026-1001"),
+                _rec("CVE-2026-1002", e="nan"),
+                _rec("CVE-2026-1003", p="inf"),
+                _rec("CVE-2026-1004", p="1.5"),
+                _rec("CVE-2026-1005", e="-0.2"),
+                _rec("CVE-2026-1006", e="1", p="0"),
+            ],
+            6,
+        )
+    ]
+    ids = [c.cve_id for c in EpssCollector().normalize(raw).cves]
+    assert ids == ["CVE-2026-1001", "CVE-2026-1006"]
