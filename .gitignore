@@ -6,3 +6,6 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .env
+
+# SDD scratch workspace
+.superpowers/
