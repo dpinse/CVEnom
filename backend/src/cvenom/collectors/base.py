@@ -38,6 +38,7 @@ class Collector(ABC):
     def __init__(self, since: datetime | None = None, state: dict | None = None) -> None:
         self.since = since
         self.state = copy.deepcopy(state or {})
+        self.last_error: Exception | None = None
 
     @abstractmethod
     async def fetch(self) -> Any: ...
@@ -46,10 +47,12 @@ class Collector(ABC):
     def normalize(self, raw: Any) -> CollectorResult: ...
 
     async def run(self) -> CollectorResult:
+        self.last_error = None
         try:
             raw = await self.fetch()
             return self.normalize(raw)
-        except Exception:
+        except Exception as exc:
+            self.last_error = exc
             log.exception("collector %s failed", self.name)
             return CollectorResult()
 

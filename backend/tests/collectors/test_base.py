@@ -200,3 +200,27 @@ async def test_http_get_text_raises_when_retries_exhausted(respx_mock):
     with pytest.raises(httpx.HTTPStatusError):
         await base.http_get_text("https://api.test/t", retries=2)
     assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_records_last_error_and_clears_on_success():
+    class Flaky(Collector):
+        name = "flaky"
+        cadence_seconds = 60
+        fail = True
+
+        async def fetch(self):
+            if self.fail:
+                raise TimeoutError("down")
+            return {}
+
+        def normalize(self, raw):
+            return CollectorResult()
+
+    c = Flaky()
+    assert c.last_error is None
+    await c.run()
+    assert isinstance(c.last_error, TimeoutError)
+    c.fail = False
+    await c.run()
+    assert c.last_error is None
