@@ -118,3 +118,12 @@ def test_trust_cf_connecting_ip_defaults_false():
 
     s = Settings(database_url="postgresql://x", redis_url="redis://y", _env_file=None)
     assert s.trust_cf_connecting_ip is False
+
+
+def test_cors_origins_normalised():
+    from cvenom.config import Settings
+
+    s = Settings(cors_origins=["https://App.Example.com", "https://a.com:443", "HTTP://B.com:80",
+                               "https://c.com:8443"], _env_file=None)
+    assert s.cors_origins == ["https://app.example.com", "https://a.com", "http://b.com",
+                              "https://c.com:8443"]

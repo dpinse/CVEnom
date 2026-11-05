@@ -751,3 +751,24 @@ def test_run_collector_no_publish_on_failure_or_skip(db_session, factory, fake_r
     calls = []
     out = run_collector("fake_t", session_factory=factory, lock=FakeLock(), publisher=calls.append)
     assert out["ok"] is False and out["published"] is False and calls == []
+
+
+def test_default_publisher_reaches_channel(db_session, factory, fake_registry, monkeypatch):
+    import json
+
+    import fakeredis
+
+    import cvenom.tasks as tasks
+    from cvenom import live
+
+    monkeypatch.undo()  # drop the autouse no-op so the real _publish_live runs
+    r = fakeredis.FakeRedis()
+    monkeypatch.setattr(tasks, "_default_redis_client", lambda: r)
+    sub = r.pubsub()
+    sub.subscribe(live.CHANNEL)
+    sub.get_message(timeout=1)
+    fake_registry(make_fake())
+    out = tasks.run_collector("fake_t", session_factory=factory, lock=FakeLock())
+    assert out["published"] is True
+    msg = sub.get_message(timeout=1)
+    assert json.loads(msg["data"])["what"] == ["lanes"]

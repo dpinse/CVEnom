@@ -45,3 +45,11 @@ def _reset_key_cache():
     tokens.reset_key_cache()
     yield
     tokens.reset_key_cache()
+
+
+@pytest.fixture(autouse=True)
+def _no_live_publish(monkeypatch):
+    """run_collector must never reach a real Redis from the test suite."""
+    import cvenom.tasks
+
+    monkeypatch.setattr(cvenom.tasks, "_publish_live", lambda what: None)

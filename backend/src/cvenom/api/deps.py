@@ -31,6 +31,21 @@ def _unauthorized(error: str = "invalid_token") -> HTTPException:
     )
 
 
+def resolve_access(session: Session, token: str, now: datetime):
+    """Shared by HTTP and WebSocket auth: decode the JWT, require a live
+    session and an active user. Returns (claims, user) or None."""
+    try:
+        claims = decode_access(session, token, now=now)
+    except InvalidToken:
+        return None
+    if not session_is_active(session, claims.sid, now):
+        return None
+    user = session.get(User, claims.sub)
+    if user is None or not user.is_active:
+        return None
+    return claims, user
+
+
 def try_current_user(
     request: Request, session: Session = SessionDep
 ) -> tuple[User | None, bool]:
@@ -46,15 +61,10 @@ def try_current_user(
     if scheme.lower() != "bearer" or not token:
         return None, True
     now = datetime.now(UTC)
-    try:
-        claims = decode_access(session, token, now=now)
-    except InvalidToken:
+    resolved = resolve_access(session, token, now)
+    if resolved is None:
         return None, True
-    if not session_is_active(session, claims.sid, now):
-        return None, True
-    user = session.get(User, claims.sub)
-    if user is None or not user.is_active:
-        return None, True
+    claims, user = resolved
     request.state.claims = claims
     return user, False
 

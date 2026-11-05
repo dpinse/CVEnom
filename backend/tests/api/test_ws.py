@@ -109,7 +109,6 @@ def test_non_updated_message_not_forwarded(db_session, server):
 
 def test_ping_sent(db_session, server, monkeypatch):
     monkeypatch.setattr(routes_ws, "WS_PING_S", 0.1)
-    monkeypatch.setattr(routes_ws, "WS_POLL_S", 0.05)
     with TestClient(make_app(db_session, server)) as c:
         with c.websocket_connect("/api/ws/live") as ws:
             assert json.loads(ws.receive_text()) == {"type": "ping"}
@@ -132,7 +131,7 @@ def test_sixth_connection_closed_4429_and_slot_released(db_session, server):
         with c.websocket_connect("/api/ws/live"):
             pass
     r = fakeredis.FakeRedis(server=server)
-    assert int(r.get("cvenom:ws:ip:testclient") or 0) == 0
+    assert r.zcard("cvenom:ws:ip:testclient") == 0
 
 
 @contextmanager
@@ -151,7 +150,7 @@ def test_redis_error_fails_open(db_session, server, monkeypatch):
     async def boom(*a, **k):
         raise ConnectionError("down")
 
-    monkeypatch.setattr(app.state.redis, "incr", boom)
+    monkeypatch.setattr(app.state.redis, "eval", boom)
     with TestClient(app) as c:
         with c.websocket_connect("/api/ws/live"):
             pass
@@ -207,6 +206,103 @@ def test_token_expiry_closes_4401(db_session, server, monkeypatch):
                 ws.send_text(json.dumps({"type": "auth", "token": token}))
                 ws.receive_text()
         assert ei.value.code == 4401
+
+
+def test_deactivated_user_4401(db_session, server):
+    token, _ = token_for(db_session)
+    db_session.query(User).filter_by(email="ws@example.com").update({"is_active": False})
+    db_session.flush()
+    with TestClient(make_app(db_session, server, public_read=False)) as c:
+        expect_close(c, 4401, send=json.dumps({"type": "auth", "token": token}))
+
+
+def test_ip_bucket_is_zset_with_ttl_and_never_negative(db_session, server):
+    r = fakeredis.FakeRedis(server=server)
+    with TestClient(make_app(db_session, server)) as c:
+        with contextlib_stack(c, 2):
+            assert r.zcard("cvenom:ws:ip:testclient") == 2
+            assert 0 < r.ttl("cvenom:ws:ip:testclient") <= 2 * routes_ws.WS_PING_S + 60
+        assert r.zcard("cvenom:ws:ip:testclient") == 0
+        assert r.type("cvenom:ws:ip:testclient") in (b"none", b"zset")
+
+
+def test_stale_members_pruned_so_new_socket_allowed(db_session, server, monkeypatch):
+    r = fakeredis.FakeRedis(server=server)
+    key = "cvenom:ws:ip:testclient"
+    clock = [1_000_000.0]
+    monkeypatch.setattr(routes_ws, "_now", lambda: clock[0])
+    for i in range(5):  # five fresh sockets that never heartbeat again (killed worker)
+        r.zadd(key, {f"dead{i}": clock[0]})
+    with TestClient(make_app(db_session, server)) as c:
+        expect_close(c, 4429)  # still fresh: full
+        clock[0] += 2 * routes_ws.WS_PING_S + 10  # heartbeats are now stale
+        with c.websocket_connect("/api/ws/live"):
+            assert r.zcard(key) == 1  # stale members gone
+
+
+def test_global_cap_4429(db_session, server, monkeypatch):
+    monkeypatch.setattr(routes_ws, "WS_MAX_TOTAL", 2)
+    with TestClient(make_app(db_session, server)) as c:
+        with contextlib_stack(c, 2):
+            expect_close(c, 4429)
+        with c.websocket_connect("/api/ws/live"):  # slots released
+            pass
+
+
+def test_single_subscriber_serves_many_sockets(db_session, server):
+    app = make_app(db_session, server)
+    created = []
+    orig = app.state.redis.pubsub
+
+    def counting(*a, **k):
+        ps = orig(*a, **k)
+        created.append(ps)
+        return ps
+
+    app.state.redis.pubsub = counting
+    with TestClient(app) as c:
+        with contextlib_stack(c, 3):
+            pass
+    # open all three, then check before closing
+    created.clear()
+    with TestClient(app) as c:
+        from contextlib import ExitStack
+
+        with ExitStack() as st:
+            wss = [st.enter_context(c.websocket_connect("/api/ws/live")) for _ in range(3)]
+            with Pumper(server, UPDATED):
+                for ws in wss:
+                    assert json.loads(ws.receive_text())["type"] == "updated"
+            assert len(created) == 1
+
+
+def test_slow_consumer_does_not_block_others():
+    import asyncio
+
+    hub = routes_ws.Hub()
+    slow = asyncio.Queue(maxsize=routes_ws.WS_QUEUE_MAX)
+    fast = asyncio.Queue(maxsize=routes_ws.WS_QUEUE_MAX)
+    hub.queues.update({slow, fast})
+    for i in range(routes_ws.WS_QUEUE_MAX):
+        slow.put_nowait(f"old{i}")
+    hub.fan_out("new")  # must not raise or block
+    assert fast.get_nowait() == "new"
+    assert slow.qsize() == routes_ws.WS_QUEUE_MAX and slow.get_nowait() == "old0"
+
+
+def test_ipv6_same_64_shares_bucket():
+    assert routes_ws._bucket("2001:db8:1:2::1") == routes_ws._bucket("2001:db8:1:2:ffff::9")
+    assert routes_ws._bucket("2001:db8:1:2::1") != routes_ws._bucket("2001:db8:1:3::1")
+    assert routes_ws._bucket("1.2.3.4") == "1.2.3.4"
+
+
+def test_ipv6_same_64_limit_enforced_across_addresses(db_session, server):
+    app = make_app(db_session, server)
+    with TestClient(app, client=("2001:db8:1:2::1", 1)) as c1, TestClient(
+        app, client=("2001:db8:1:2::2", 1)
+    ) as c2:
+        with contextlib_stack(c1, 5):
+            expect_close(c2, 4429)
 
 
 def test_disallowed_origin_4403(db_session, server):

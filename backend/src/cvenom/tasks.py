@@ -72,7 +72,8 @@ def _default_redis_client() -> Any:
             if _redis_client is None:
                 import redis
 
-                _redis_client = redis.Redis.from_url(get_settings().redis_url)
+                _redis_client = redis.Redis.from_url(
+                    get_settings().redis_url, socket_timeout=5, socket_connect_timeout=5)
     return _redis_client
 
 
@@ -93,6 +94,10 @@ class RedisLock:
     def release(self, name: str) -> None:
         # Atomic compare-and-delete: never delete another worker's lock.
         self.client.eval(_RELEASE_LUA, 1, LOCK_PREFIX + name, self._token)
+
+
+def _publish_live(what: list[str]) -> None:
+    live.publish(_default_redis_client(), what)
 
 
 def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLock | None = None,
@@ -139,7 +144,7 @@ def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLo
         what = live.what_changed(result)
         if what:  # after commit; best effort, never changes the result
             try:
-                (publisher or (lambda w: live.publish(_default_redis_client(), w)))(what)
+                (publisher or _publish_live)(what)
                 summary["published"] = True
             except Exception as exc:
                 log.warning("live publish failed: %s", type(exc).__name__)

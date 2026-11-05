@@ -96,8 +96,12 @@ class Settings(BaseSettings):
             )
             if bad:
                 raise ValueError(f"cors_origins entry must be a bare origin: {entry!r}")
-            del port
-            out.append(f"{u.scheme}://{u.netloc}")
+            host = u.hostname  # urlsplit lowercases the host
+            if ":" in host:
+                host = f"[{host}]"
+            default = 443 if u.scheme == "https" else 80
+            netloc = host if port in (None, default) else f"{host}:{port}"
+            out.append(f"{u.scheme}://{netloc}")
         return out
 
     @field_validator("trusted_proxy_cidrs")

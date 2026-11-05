@@ -2,25 +2,33 @@
 
 Auth is a first message (never a ?token= query: access logs record query
 strings). Origin is checked before accept to stop cross-site hijacking.
+
+Limits: a process-wide socket cap (in-process counter), and a per-IP cap kept
+in Redis as a heartbeat ZSET (member per socket, score = last heartbeat), so
+crashed workers cannot leak slots: stale members are pruned on connect.
+One shared Redis subscriber per process fans out to per-socket bounded queues.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import json
 import logging
 import time
-from functools import partial
+import uuid
 from datetime import datetime, timezone
+from functools import partial
 
 import anyio
 from fastapi import APIRouter, WebSocket
+from fastapi.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from cvenom.auth.tokens import decode_access, session_is_active
 from cvenom.live import CHANNEL
 
+from .deps import resolve_access
 from .middleware import client_ip
 from .ratelimit import get_redis, warn_rate_limited
 
@@ -29,17 +37,48 @@ router = APIRouter()
 
 WS_AUTH_TIMEOUT_S = 5.0
 WS_PING_S = 30.0
-WS_POLL_S = 1.0
 WS_MAX_PER_IP = 5
-WS_IP_TTL_S = 3600
+WS_MAX_TOTAL = 200
+WS_QUEUE_MAX = 16
 WS_AUTH_MAX_BYTES = 4096
-WS_CLIENT_MAX_BYTES = 1024
 IP_KEY = "cvenom:ws:ip:"
 PING = '{"type":"ping"}'
+SUB_BACKOFF_MAX_S = 30.0
+
+# KEYS[1]=bucket; ARGV: now, stale_before, max, ttl, member
+_CONNECT_LUA = """
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[2])
+if redis.call('ZCARD', KEYS[1]) < tonumber(ARGV[3]) then
+  redis.call('ZADD', KEYS[1], ARGV[1], ARGV[5])
+  redis.call('EXPIRE', KEYS[1], ARGV[4])
+  return 1
+end
+return 0
+"""
+
+
+def _now() -> float:
+    return time.time()
 
 
 def _seconds_until(exp: int) -> float:
     return max(0.0, exp - time.time())
+
+
+def _stale_after() -> float:
+    return 2 * WS_PING_S + 5
+
+
+def _bucket(ip: str) -> str:
+    """IPv4: the address. IPv6: the /64 network, so one host cannot rotate
+    through its address space to dodge the limit."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if addr.version == 6:
+        return str(ipaddress.ip_network(f"{addr}/64", strict=False))
+    return str(addr)
 
 
 async def _safe_close(ws: WebSocket, code: int) -> None:
@@ -48,10 +87,91 @@ async def _safe_close(ws: WebSocket, code: int) -> None:
             await ws.close(code=code)
 
 
+class Hub:
+    """Per-app: socket count plus ONE shared pubsub subscriber."""
+
+    def __init__(self) -> None:
+        self.total = 0
+        self.queues: set[asyncio.Queue] = set()
+        self.task: asyncio.Task | None = None
+
+    def register(self, redis) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=WS_QUEUE_MAX)
+        self.queues.add(q)
+        if self.task is None or self.task.done():
+            self.task = asyncio.create_task(self._subscriber(redis))
+        return q
+
+    async def unregister(self, q: asyncio.Queue) -> None:
+        self.queues.discard(q)
+        if not self.queues and self.task is not None:
+            task, self.task = self.task, None
+            task.cancel()
+            with anyio.CancelScope(shield=True):
+                await asyncio.gather(task, return_exceptions=True)
+
+    def fan_out(self, data: str) -> None:
+        for q in list(self.queues):
+            try:
+                q.put_nowait(data)
+            except asyncio.QueueFull:
+                pass  # slow consumer: a dropped "please refetch" hint is harmless
+
+    async def _subscriber(self, redis) -> None:
+        backoff = 1.0
+        while True:
+            pubsub = redis.pubsub()
+            try:
+                await pubsub.subscribe(CHANNEL)
+                backoff = 1.0
+                while True:
+                    msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    if msg is None:
+                        await asyncio.sleep(0.05)
+                        continue
+                    data = msg.get("data")
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8", "replace")
+                    try:
+                        parsed = json.loads(data)
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(parsed, dict) and parsed.get("type") == "updated":
+                        self.fan_out(data)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                warn_rate_limited("ws-sub", f"ws subscriber error: {type(exc).__name__}")
+            finally:
+                with anyio.CancelScope(shield=True):
+                    with contextlib.suppress(Exception):
+                        await pubsub.unsubscribe(CHANNEL)
+                    with contextlib.suppress(Exception):
+                        await pubsub.aclose()
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, SUB_BACKOFF_MAX_S)
+
+
+def _hub(app) -> Hub:
+    hub = getattr(app.state, "ws_hub", None)
+    if hub is None:
+        hub = app.state.ws_hub = Hub()
+    return hub
+
+
 def _msg_size(msg: dict) -> int:
     if msg.get("text") is not None:
         return len(msg["text"].encode())
     return len(msg.get("bytes") or b"")
+
+
+def _check_token_sync(app, token: str, now: datetime) -> int | None:
+    try:
+        with app.state.session_factory() as session:
+            resolved = resolve_access(session, token, now)
+    except Exception:  # any failure means unauthenticated
+        return None
+    return None if resolved is None else resolved[0].exp
 
 
 async def _authenticate(ws: WebSocket) -> int | None:
@@ -69,45 +189,34 @@ async def _authenticate(ws: WebSocket) -> int | None:
         return None
     if not isinstance(data, dict) or data.get("type") != "auth" or not isinstance(data.get("token"), str):
         return None
-    now = datetime.now(timezone.utc)
-    try:
-        with ws.app.state.session_factory() as session:
-            claims = decode_access(session, data["token"], now)
-            if not session_is_active(session, claims.sid, now):
-                return None
-    except Exception:  # InvalidToken or any failure: treat as unauthenticated
-        return None
-    return claims.exp
+    return await run_in_threadpool(_check_token_sync, ws.app, data["token"], datetime.now(timezone.utc))
 
 
-async def _relay(ws: WebSocket, redis) -> None:
-    pubsub = redis.pubsub()
+async def _heartbeat(redis, key: str, member: str) -> None:
     try:
-        await pubsub.subscribe(CHANNEL)
-        last_ping = time.monotonic()
-        while True:
-            msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=WS_POLL_S)
-            if msg is not None:
-                data = msg.get("data")
-                if isinstance(data, bytes):
-                    data = data.decode("utf-8", "replace")
-                try:
-                    parsed = json.loads(data)
-                except (ValueError, TypeError):
-                    parsed = None
-                if isinstance(parsed, dict) and parsed.get("type") == "updated":
-                    await ws.send_text(data)
-            if time.monotonic() - last_ping >= WS_PING_S:
-                last_ping = time.monotonic()
-                await ws.send_text(PING)
-            if msg is None:
-                await asyncio.sleep(0.05)  # never spin if the backend returns immediately
-    finally:
-        with anyio.CancelScope(shield=True):  # cleanup must survive cancellation
-            with contextlib.suppress(Exception):
-                await pubsub.unsubscribe(CHANNEL)
-            with contextlib.suppress(Exception):
-                await pubsub.aclose()
+        async with redis.pipeline(transaction=False) as pipe:
+            pipe.zadd(key, {member: _now()}, xx=True)  # never resurrect a pruned member
+            pipe.expire(key, int(2 * WS_PING_S + 60))
+            await pipe.execute()
+    except Exception as exc:
+        warn_rate_limited("ws-heartbeat", f"ws heartbeat failed: {type(exc).__name__}")
+
+
+async def _relay(ws: WebSocket, q: asyncio.Queue, redis, key: str, member: str | None) -> None:
+    next_ping = time.monotonic() + WS_PING_S
+    while True:
+        remaining = next_ping - time.monotonic()
+        if remaining <= 0:
+            next_ping = time.monotonic() + WS_PING_S
+            await ws.send_text(PING)
+            if member is not None:
+                await _heartbeat(redis, key, member)
+            continue
+        try:
+            data = await asyncio.wait_for(q.get(), timeout=remaining)
+        except asyncio.TimeoutError:
+            continue
+        await ws.send_text(data)
 
 
 async def _drain(ws: WebSocket) -> None:
@@ -129,24 +238,40 @@ async def live(ws: WebSocket) -> None:
 
     origin = ws.headers.get("origin")
     if origin is not None and settings.cors_origins and origin not in settings.cors_origins:
-        await ws.close(code=4403)
+        await ws.close(code=4403)  # before accept: nothing is ever sent to a foreign site
         return
 
+    hub = _hub(app)
+    # Over-limit closes happen AFTER accept: a pre-accept close becomes an
+    # HTTP 403 and the client would never see the 4429 code.
+    if hub.total >= WS_MAX_TOTAL:
+        await ws.accept()
+        await _safe_close(ws, 4429)
+        return
+    hub.total += 1  # no await since the check: atomic under the event loop
     redis = get_redis(app)
-    key = IP_KEY + client_ip(ws)
-    counted = False
+    key = IP_KEY + _bucket(client_ip(ws))
+    member: str | None = None
+    queue: asyncio.Queue | None = None
     try:
         try:
-            n = await redis.incr(key)
-            counted = True
-            await redis.expire(key, WS_IP_TTL_S)
-            if n > WS_MAX_PER_IP:
-                await ws.close(code=4429)
+            mid = uuid.uuid4().hex
+            now = _now()
+            ok = await redis.eval(
+                _CONNECT_LUA, 1, key, now, now - _stale_after(), WS_MAX_PER_IP,
+                int(2 * WS_PING_S + 60), mid,
+            )
+            if int(ok) == 1:
+                member = mid
+            else:
+                await ws.accept()
+                await _safe_close(ws, 4429)
                 return
         except Exception as exc:  # fail open: notifications are low-value
             warn_rate_limited("ws-limit", f"ws connection limit unavailable: {type(exc).__name__}")
 
-        await ws.accept()
+        if ws.application_state == WebSocketState.CONNECTING:
+            await ws.accept()
         exp: int | None = None
         if not settings.public_read:
             exp = await _authenticate(ws)
@@ -154,6 +279,7 @@ async def live(ws: WebSocket) -> None:
                 await _safe_close(ws, 4401)
                 return
 
+        queue = hub.register(redis)
         outcome = {"code": 1000}
 
         async def run(coro_fn, *args, code=None):
@@ -169,12 +295,16 @@ async def live(ws: WebSocket) -> None:
             tg.cancel_scope.cancel()
 
         async with anyio.create_task_group() as tg:
-            tg.start_soon(partial(run, _relay, ws, redis))
+            tg.start_soon(partial(run, _relay, ws, queue, redis, key, member))
             tg.start_soon(partial(run, _drain, ws))
             if exp is not None:
                 tg.start_soon(partial(run, _sleep_until_exp, exp, code=4401))
         await _safe_close(ws, outcome["code"])
     finally:
-        if counted:
-            with anyio.CancelScope(shield=True), contextlib.suppress(Exception):
-                await redis.decr(key)
+        with anyio.CancelScope(shield=True):
+            hub.total -= 1
+            if queue is not None:
+                await hub.unregister(queue)
+            if member is not None:
+                with contextlib.suppress(Exception):
+                    await redis.zrem(key, member)
