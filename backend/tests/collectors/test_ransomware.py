@@ -53,6 +53,38 @@ def _fixture():
     ]
 
 
+def _v2(r):
+    return {"post_title": r["victim"], "group_name": r["group"], "discovered": r["discovered"],
+            "post_url": r["post_url"], "country": r["country"], "sector": r["activity"],
+            "description": r["description"]}
+
+
+def _doc(r):
+    return {"victim": r["victim"], "group": r["group"], "attackdate": r["discovered"],
+            "url": r["post_url"], "country": r["country"], "activity": r["activity"],
+            "description": r["description"]}
+
+
+def test_alias_variants_map_identically():
+    base = _fixture()
+    a = RansomwareLiveCollector().normalize([_v2(r) for r in base if r["post_url"]])
+    b = RansomwareLiveCollector().normalize([_doc(r) for r in base if r["post_url"]])
+    assert [e.model_dump() for e in a.geo_events] == [e.model_dump() for e in b.geo_events]
+    assert [s.model_dump() for s in a.stories] == [s.model_dump() for s in b.stories]
+    assert len(a.geo_events) == 2
+
+
+def test_date_only_attackdate_parses():
+    res = RansomwareLiveCollector().normalize([{"victim": "V", "group": "g", "attackdate": "2026-11-04"}])
+    assert res.geo_events[0].observed_at == datetime(2026, 11, 4, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("wrap", [lambda x: x, lambda x: {"victims": x},
+                                  lambda x: {"data": x}, lambda x: {"results": x}])
+def test_wrappers(wrap):
+    assert len(RansomwareLiveCollector().normalize(wrap(_fixture())).geo_events) == 3
+
+
 def test_registration():
     assert REGISTRY["ransomware_live"] is RansomwareLiveCollector
     assert RansomwareLiveCollector.cadence_seconds == 900
@@ -165,7 +197,7 @@ def test_key_sent_as_header_and_never_logged(keyed, monkeypatch, caplog):
     seen = {}
 
     async def fake(url, **kw):
-        seen.update(kw)
+        seen.update(kw, url=url)
         return [_rec()]
 
     monkeypatch.setattr(ransomware, "http_get_json", fake)
@@ -174,6 +206,7 @@ def test_key_sent_as_header_and_never_logged(keyed, monkeypatch, caplog):
     with caplog.at_level(logging.DEBUG):
         res = asyncio.run(RansomwareLiveCollector().run())
     assert seen["headers"]["X-API-KEY"] == KEY
+    assert seen["url"] == "https://api-pro.ransomware.live/victims/recent"
     assert len(res.geo_events) == 1
     assert KEY not in caplog.text
 

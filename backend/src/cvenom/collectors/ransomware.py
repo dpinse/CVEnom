@@ -1,4 +1,10 @@
-"""ransomware.live recent-victims collector (token-gated; see report)."""
+"""ransomware.live recent-victims collector (Pro API, key-gated, disabled by default).
+
+Verified (docs only): the free v2 API is retired (api.ransomware.live/v2/... is 404). The
+"Ransomware.live API PRO" swagger (api-pro.ransomware.live/swagger.json) defines auth as an
+`X-API-KEY` header and `GET /victims/recent`. It does NOT define record field names, so the
+mapping below is alias-based and defensive: field names are UNVERIFIED against live data.
+"""
 
 from __future__ import annotations
 
@@ -19,12 +25,19 @@ from cvenom.schemas import NormalizedGeoEvent, NormalizedStory
 
 log = logging.getLogger(__name__)
 
-URL = "https://api.ransomware.live/v2/recentvictims"
+URL = "https://api-pro.ransomware.live/victims/recent"
 _SKIP = (ValidationError, ValueError, TypeError, AttributeError, KeyError)
 
 
 def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _first(rec: dict, *keys: str) -> str:
+    for k in keys:
+        if v := _text(rec.get(k)):
+            return v
+    return ""
 
 
 def _parse_time(value: object) -> datetime | None:
@@ -60,7 +73,7 @@ class RansomwareLiveCollector(Collector):
 
     def normalize(self, raw) -> CollectorResult:
         if isinstance(raw, dict):
-            for k in ("data", "victims"):
+            for k in ("victims", "data", "results"):
                 if isinstance(raw.get(k), list):
                     raw = raw[k]
                     break
@@ -80,16 +93,21 @@ class RansomwareLiveCollector(Collector):
         return CollectorResult(geo_events=events, stories=stories)
 
     def _one(self, rec) -> tuple[NormalizedGeoEvent, NormalizedStory | None]:
-        group, victim = _text(rec.get("group")), _text(rec.get("victim"))
+        group = _first(rec, "group", "group_name")
+        victim = _first(rec, "victim", "post_title")
         if not group or not victim:
             raise ValueError("missing group/victim")
-        observed = _parse_time(rec.get("discovered")) or _parse_time(rec.get("published"))
+        observed = None
+        for k in ("attackdate", "discovered", "published"):
+            observed = _parse_time(rec.get(k))
+            if observed:
+                break
         if observed is None:
             raise ValueError("no parseable timestamp")
 
         def build(url: str | None, country: str | None) -> NormalizedGeoEvent:
             details = {"group": group}
-            if activity := _text(rec.get("activity")):
+            if activity := _first(rec, "activity", "sector"):
                 details["activity"] = activity
             return NormalizedGeoEvent(
                 source="ransomware_live",
@@ -102,7 +120,7 @@ class RansomwareLiveCollector(Collector):
                 details=details,
             )
 
-        country = _text(rec.get("country")) or None
+        country = _first(rec, "country") or None
         try:
             return self._with_urls(rec, group, victim, observed, build, country)
         except ValidationError:
@@ -113,7 +131,8 @@ class RansomwareLiveCollector(Collector):
     def _with_urls(self, rec, group, victim, observed, build, country):
         story = None
         url = None
-        for cand in (rec.get("post_url"), rec.get("website")):
+        for k in ("url", "post_url", "website"):
+            cand = rec.get(k)
             if not _text(cand):
                 continue
             try:
@@ -121,7 +140,7 @@ class RansomwareLiveCollector(Collector):
                     url=_text(cand),
                     source="ransomware.live",
                     title=f"{victim} listed by {group}",
-                    summary=_text(rec.get("description")),
+                    summary=_first(rec, "description"),
                     published=observed,
                 )
             except ValidationError:
