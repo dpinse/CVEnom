@@ -356,3 +356,14 @@ async def test_gzip_bomb_is_capped_on_decoded_size(respx_mock):
     )
     with pytest.raises(ResponseTooLarge):
         await http_get_bytes("https://z.test/bomb", max_bytes=10_000)
+
+
+@pytest.mark.asyncio
+async def test_http_get_bytes_redirects_only_when_asked(respx_mock):
+    from cvenom.collectors.base import http_get_bytes
+
+    respx_mock.get("https://r.test/a").respond(302, headers={"Location": "https://s.test/b"})
+    respx_mock.get("https://s.test/b").respond(200, content=b"ok")
+    with pytest.raises(httpx.HTTPStatusError):
+        await http_get_bytes("https://r.test/a")
+    assert await http_get_bytes("https://r.test/a", follow_redirects=True) == b"ok"

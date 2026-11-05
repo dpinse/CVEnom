@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 COUNTRY_FILE = "country.mmdb"
 ASN_FILE = "asn.mmdb"
 _CC_RE = re.compile(r"^[A-Z]{2}$")
-_MAX_DB_BYTES = 500_000_000
+_MAX_DB_BYTES = 100_000_000
 
 DBIP_URL = "https://download.db-ip.com/free/dbip-{kind}-lite-{month}.mmdb.gz"
 MAXMIND_URL = "https://download.maxmind.com/geoip/databases/{edition}/download"
@@ -45,18 +45,27 @@ class GeoIP:
 
     @classmethod
     def open(cls, dir) -> GeoIP | None:
+        """Open the databases in dir, fully loaded in memory (no file handles are held).
+
+        Readers are a snapshot: re-open after refresh_geoip to pick up new data.
+        Returns None if the country DB is missing or unusable.
+        """
         d = Path(dir)
         cpath = d / COUNTRY_FILE
         if not cpath.is_file():
             return None
-        country = maxminddb.open_database(str(cpath))
+        try:
+            country = maxminddb.open_database(str(cpath), maxminddb.MODE_MEMORY)
+        except (OSError, ValueError, maxminddb.InvalidDatabaseError):
+            log.warning("country database unusable; geolocation disabled")
+            return None
         apath = d / ASN_FILE
         asn = None
         if apath.is_file():
             try:
-                asn = maxminddb.open_database(str(apath))
-            except (OSError, ValueError):
-                log.warning("could not open ASN database; continuing without it")
+                asn = maxminddb.open_database(str(apath), maxminddb.MODE_MEMORY)
+            except (OSError, ValueError, maxminddb.InvalidDatabaseError):
+                log.warning("ASN database unusable; continuing without ASN")
         return cls(country, asn)
 
     def lookup(self, ip: str) -> GeoResult | None:
@@ -122,13 +131,19 @@ def _extract_mmdb(data: bytes) -> bytes:
         return found
 
 
-def _stage(directory: Path, payload: bytes) -> Path:
+def _stage(directory: Path, payload: bytes, expect: str) -> Path:
     """Write payload to a temp file beside the target and verify it opens as an mmdb."""
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".geoip-", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(payload)
-        maxminddb.open_database(tmp).close()
+        reader = maxminddb.open_database(tmp, maxminddb.MODE_MEMORY)
+        try:
+            dbtype = reader.metadata().database_type
+        finally:
+            reader.close()
+        if expect not in dbtype:
+            raise ValueError(f"unexpected database type {dbtype!r}, wanted {expect!r}")
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
@@ -139,11 +154,15 @@ async def _fetch_dbip(kind: str, now: datetime) -> bytes:
     this = now.strftime("%Y-%m")
     prev = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
     try:
-        raw = await http_get_bytes(DBIP_URL.format(kind=kind, month=this))
+        raw = await http_get_bytes(
+            DBIP_URL.format(kind=kind, month=this), follow_redirects=True
+        )
     except httpx.HTTPStatusError as e:
         if e.response.status_code != 404:
             raise
-        raw = await http_get_bytes(DBIP_URL.format(kind=kind, month=prev))
+        raw = await http_get_bytes(
+            DBIP_URL.format(kind=kind, month=prev), follow_redirects=True
+        )
     return _gunzip(raw)
 
 
@@ -153,6 +172,7 @@ async def _fetch_maxmind(edition: str, account: str, key: str) -> bytes:
         MAXMIND_URL.format(edition=edition),
         params={"suffix": "tar.gz"},
         headers={"Authorization": f"Basic {token}"},
+        follow_redirects=True,
     )
     return _extract_mmdb(raw)
 
@@ -164,7 +184,10 @@ async def refresh_geoip(dir, settings: Settings, *, now: datetime | None = None)
     directory.mkdir(parents=True, exist_ok=True)
 
     account = settings.maxmind_account_id
-    key = settings.maxmind_license_key
+    secret = settings.maxmind_license_key
+    key = secret.get_secret_value() if secret else None
+    if bool(account) != bool(key):
+        log.warning("only one MaxMind credential is set; MaxMind not configured, using DB-IP")
     if account and key:
         provider = "maxmind"
         country = await _fetch_maxmind("GeoLite2-Country", account, key)
@@ -176,8 +199,8 @@ async def refresh_geoip(dir, settings: Settings, *, now: datetime | None = None)
 
     staged: list[tuple[Path, str]] = []
     try:
-        staged.append((_stage(directory, country), COUNTRY_FILE))
-        staged.append((_stage(directory, asn), ASN_FILE))
+        staged.append((_stage(directory, country, "Country"), COUNTRY_FILE))
+        staged.append((_stage(directory, asn, "ASN"), ASN_FILE))
         for tmp, final in staged:
             os.replace(tmp, directory / final)
         staged.clear()

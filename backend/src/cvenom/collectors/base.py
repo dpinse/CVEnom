@@ -97,6 +97,7 @@ async def _request(
     timeout: float,
     max_bytes: int,
     accept_304: bool = False,
+    follow_redirects: bool = False,
 ) -> httpx.Response:
     """GET url (streamed, size-capped), retrying 429/5xx/transport errors.
 
@@ -105,7 +106,9 @@ async def _request(
     """
     hdrs = {"User-Agent": USER_AGENT, **(headers or {})}
     attempts = max(retries, 1)
-    async with httpx.AsyncClient(timeout=timeout, headers=hdrs) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, headers=hdrs, follow_redirects=follow_redirects
+    ) as client:
         for attempt in range(attempts):
             last = attempt == attempts - 1
             delay = BACKOFF_BASE * (2**attempt)
@@ -184,10 +187,14 @@ async def http_get_bytes(
     retries: int = 3,
     timeout: float = 60,
     max_bytes: int = 200_000_000,
+    follow_redirects: bool = False,
 ) -> bytes:
     """GET url and return the raw body bytes (size-capped)."""
     resp = await _request(
-        url, headers=headers, params=params, retries=retries, timeout=timeout, max_bytes=max_bytes
+        url, headers=headers, params=params, retries=retries,
+        timeout=timeout,
+        max_bytes=max_bytes,
+        follow_redirects=follow_redirects,
     )
     return resp.content
 

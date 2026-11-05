@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,7 +23,7 @@ class Settings(BaseSettings):
     geo_retention_days: int = 30
     geoip_dir: str = "data/geoip"
     maxmind_account_id: str | None = None
-    maxmind_license_key: str | None = None
+    maxmind_license_key: SecretStr | None = None
 
 
 @lru_cache
