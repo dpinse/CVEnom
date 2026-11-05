@@ -1,0 +1,123 @@
+"""NVD CVE 2.0 collector."""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from cvenom.collectors import base
+from cvenom.collectors.base import Collector, CollectorResult, http_get_json, register
+from cvenom.config import get_settings
+from cvenom.schemas import NormalizedCve
+
+log = logging.getLogger(__name__)
+
+NVD_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+PAGE_SIZE = 2000
+MAX_WINDOW = timedelta(days=120)  # NVD rejects wider date ranges
+DELAY_NO_KEY = 6.0
+DELAY_WITH_KEY = 0.6
+
+
+async def _sleep(delay: float) -> None:
+    # Resolved through base at call time so tests can patch either module.
+    await base._sleep(delay)
+
+
+def _fmt(dt: datetime) -> str:
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}"
+
+
+def _parse_ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+
+def _cvss(metrics: dict[str, Any]) -> float | None:
+    for key in ("cvssMetricV31", "cvssMetricV30"):
+        entries = metrics.get(key) or []
+        if not entries:
+            continue
+        chosen = next((e for e in entries if e.get("type") == "Primary"), entries[0])
+        score = (chosen.get("cvssData") or {}).get("baseScore")
+        if score is not None:
+            return float(score)
+    return None
+
+
+def _summary(descriptions: list[dict[str, Any]]) -> str | None:
+    for d in descriptions or []:
+        if d.get("lang") == "en":
+            return d.get("value")
+    return None
+
+
+@register
+class NvdCollector(Collector):
+    name = "nvd"
+    cadence_seconds = 7200
+
+    async def fetch(self, since: datetime | None = None) -> list[dict]:
+        settings = get_settings()
+        end = datetime.now(UTC)
+        if since is None:
+            since = end - timedelta(days=settings.backfill_days)
+        elif since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+
+        key = settings.nvd_api_key
+        headers = {"apiKey": key} if key else None
+        delay = DELAY_WITH_KEY if key else DELAY_NO_KEY
+
+        pages: list[dict] = []
+        first = True
+        start = since
+        while start < end:
+            chunk_end = min(start + MAX_WINDOW, end)
+            index = 0
+            while True:
+                if not first:
+                    await _sleep(delay)
+                first = False
+                page = await http_get_json(
+                    NVD_URL,
+                    headers=headers,
+                    params={
+                        "lastModStartDate": _fmt(start),
+                        "lastModEndDate": _fmt(chunk_end),
+                        "startIndex": index,
+                        "resultsPerPage": PAGE_SIZE,
+                    },
+                )
+                pages.append(page)
+                index += PAGE_SIZE
+                total = page.get("totalResults", 0)
+                if index >= total or not page.get("vulnerabilities"):
+                    break
+            start = chunk_end
+        return pages
+
+    def normalize(self, raw: list[dict]) -> CollectorResult:
+        cves: list[NormalizedCve] = []
+        for page in raw:
+            for item in page.get("vulnerabilities", []):
+                cve = item.get("cve") or {}
+                cve_id = cve.get("id")
+                if not cve_id:
+                    log.warning("nvd: skipping record without id")
+                    continue
+                try:
+                    cves.append(
+                        NormalizedCve(
+                            cve_id=cve_id,
+                            published=_parse_ts(cve.get("published")),
+                            cvss=_cvss(cve.get("metrics") or {}),
+                            summary=_summary(cve.get("descriptions") or []),
+                        )
+                    )
+                except Exception:
+                    log.exception("nvd: skipping malformed record %s", cve_id)
+        return CollectorResult(cves=cves)

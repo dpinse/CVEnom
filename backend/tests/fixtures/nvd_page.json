@@ -1,0 +1,76 @@
+{
+  "resultsPerPage": 3,
+  "startIndex": 0,
+  "totalResults": 3,
+  "format": "NVD_CVE",
+  "version": "2.0",
+  "timestamp": "2026-11-04T12:00:00.000",
+  "vulnerabilities": [
+    {
+      "cve": {
+        "id": "CVE-2026-1001",
+        "sourceIdentifier": "cna@example.com",
+        "published": "2026-10-30T14:15:08.123",
+        "lastModified": "2026-11-02T09:00:00.000",
+        "vulnStatus": "Analyzed",
+        "descriptions": [
+          {"lang": "es", "value": "Desbordamiento de buffer."},
+          {"lang": "en", "value": "Heap overflow in Example Server <b>allows</b> RCE."}
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "cna@example.com",
+              "type": "Secondary",
+              "cvssData": {"version": "3.1", "baseScore": 8.1, "baseSeverity": "HIGH"}
+            },
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {"version": "3.1", "baseScore": 9.8, "baseSeverity": "CRITICAL"}
+            }
+          ],
+          "cvssMetricV2": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {"version": "2.0", "baseScore": 7.5}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2026-1002",
+        "published": "2026-10-31T01:00:00.000",
+        "lastModified": "2026-11-01T01:00:00.000",
+        "vulnStatus": "Analyzed",
+        "descriptions": [
+          {"lang": "en", "value": "Path traversal in Example CLI."}
+        ],
+        "metrics": {
+          "cvssMetricV30": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {"version": "3.0", "baseScore": 7.5, "baseSeverity": "HIGH"}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2026-1003",
+        "published": "2026-11-02T20:30:00.000",
+        "lastModified": "2026-11-02T20:30:00.000",
+        "vulnStatus": "Awaiting Analysis",
+        "descriptions": [
+          {"lang": "en", "value": "Unrated issue in Example Library."}
+        ],
+        "metrics": {}
+      }
+    }
+  ]
+}
