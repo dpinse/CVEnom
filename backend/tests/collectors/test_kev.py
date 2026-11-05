@@ -128,8 +128,10 @@ def test_non_dict_element_skipped():
 
 
 @pytest.mark.parametrize("bad", [None, "CVE-2026-1001", 7, {"a": 1}])
-def test_corrupt_seen_state_treated_as_empty_prior(bad):
+def test_corrupt_seen_state_rebaselines_without_events(bad, caplog):
     k = KevCollector(state={"seen": bad})
-    res = k.normalize(_three())
-    assert len(res.events) == 3
+    with caplog.at_level("WARNING"):
+        res = k.normalize(_three())
+    assert res.events == []
+    assert "corrupt" in caplog.text and "cisa_kev" in caplog.text
     assert k.state["seen"] == ["CVE-2026-1001", "CVE-2026-1002", "CVE-2026-1003"]
