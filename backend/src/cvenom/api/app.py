@@ -18,6 +18,8 @@ from .cache import ResponseCacheMiddleware
 from .middleware import BodyLimitMiddleware, ErrorCatchMiddleware, SecurityHeadersMiddleware
 from .ratelimit import get_redis
 from .routes_auth import router as auth_router
+from .routes_read import CACHE_PATHS
+from .routes_read import router as read_router
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +67,8 @@ def create_app(
     cache_paths: dict[str, frozenset[str]] | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
+    if cache_paths is None:
+        cache_paths = CACHE_PATHS
     docs = settings.api_docs
     app = FastAPI(
         lifespan=_lifespan,
@@ -102,6 +106,7 @@ def create_app(
     app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(auth_router)
+    app.include_router(read_router)
 
     @app.get("/api/health")
     def health() -> dict:

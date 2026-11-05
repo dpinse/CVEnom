@@ -1,0 +1,369 @@
+import base64
+import os
+from datetime import UTC, date, datetime, timedelta
+
+from contextlib import contextmanager
+
+import fakeredis
+import httpx
+import pytest
+from sqlalchemy import event
+
+from cvenom.api import create_app
+from cvenom.auth.passwords import hash_password
+from cvenom.auth.tokens import create_session, issue_access
+from cvenom.config import get_settings
+from cvenom.models import Cve, GeoEvent, Story, StoryCveLink, User
+
+
+
+def make_app(db_session, redis=None, **overrides):
+    settings = get_settings().model_copy(update=overrides)
+
+    @contextmanager
+    def factory():
+        yield db_session
+
+    return create_app(
+        settings, redis=redis or fakeredis.FakeAsyncRedis(), session_factory=factory
+    )
+
+
+def client(app, peer=("1.2.3.4", 1234)):
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app, client=peer), base_url="https://test"
+    )
+
+
+def mk_user(db):
+    u = User(email="u@example.com", password_hash=hash_password("correct horse battery"),
+             role="member", is_active=True)
+    db.add(u)
+    db.flush()
+    return u
+
+
+def bearer(db, user):
+    now = datetime.now(UTC)
+    row, _ = create_session(db, user, now, "ua", "9.9.9.9")
+    return {"Authorization": f"Bearer {issue_access(db, user, row.id, now)}"}, row
+
+NOW = datetime.now(UTC)
+LANE_KEYS = {
+    "cve_id", "cvss", "epss_percentile", "kev", "kev_added", "kev_source", "poc_badge",
+    "patch_available", "published", "summary", "recent_story_count",
+}
+GEO_EVENT_KEYS = {"kind", "country_code", "label", "magnitude", "observed_at", "details"}
+
+
+@pytest.fixture(autouse=True)
+def secrets_key(monkeypatch):
+    monkeypatch.setenv("SECRETS_KEY", base64.b64encode(os.urandom(32)).decode())
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def cve(db, cve_id, **kw):
+    kw.setdefault("published", NOW - timedelta(days=100))
+    kw.setdefault("summary", "s")
+    c = Cve(cve_id=cve_id, **kw)
+    db.add(c)
+    db.flush()
+    return c
+
+
+def story(db, n, cve_ids=(), published=None, title="t"):
+    s = Story(
+        url=f"https://ex.test/{n}", content_hash=f"h{n}", source="src", title=title,
+        summary="x", published=published or NOW - timedelta(hours=1),
+    )
+    db.add(s)
+    db.flush()
+    for cid in cve_ids:
+        db.add(StoryCveLink(story_id=s.id, cve_id=cid))
+    db.flush()
+    return s
+
+
+def geo(db, ext, **kw):
+    kw.setdefault("source", "s")
+    kw.setdefault("kind", "outage")
+    kw.setdefault("observed_at", NOW)
+    kw.setdefault("country_code", "US")
+    e = GeoEvent(external_id=ext, **kw)
+    db.add(e)
+    db.flush()
+    return e
+
+
+async def get(db, url, headers=None, **app_kw):
+    async with client(make_app(db, **app_kw)) as c:
+        return await c.get(url, headers=headers)
+
+
+# ---------------------------------------------------------------- lanes
+
+
+async def test_lanes_shape_and_keys(db_session):
+    cve(db_session, "CVE-2024-0001", kev=True, kev_added=date(2024, 1, 2), kev_source="cisa",
+        cvss=9.8, summary="&lt;b&gt;")
+    cve(db_session, "CVE-2024-0002", epss_percentile=0.99)
+    cve(db_session, "CVE-2024-0003")
+    story(db_session, 1, ["CVE-2024-0003"])
+    cve(db_session, "CVE-2024-0004", cvss=9.5, published=NOW - timedelta(hours=2))
+    r = await get(db_session, "/api/lanes")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {"EXPLOITED", "LIKELY", "LOUD", "FRESH"}
+    for lane, expect in [("EXPLOITED", "CVE-2024-0001"), ("LIKELY", "CVE-2024-0002"),
+                         ("LOUD", "CVE-2024-0003"), ("FRESH", "CVE-2024-0004")]:
+        assert [i["cve_id"] for i in body[lane]] == [expect]
+        assert set(body[lane][0]) == LANE_KEYS
+    ex = body["EXPLOITED"][0]
+    assert ex["kev_added"] == "2024-01-02" and ex["kev_source"] == "cisa"
+    assert ex["summary"] == "&lt;b&gt;"  # returned as stored, not unescaped
+    assert body["LOUD"][0]["recent_story_count"] == 1
+
+
+async def test_lanes_cap_100(db_session):
+    for i in range(105):
+        cve(db_session, f"CVE-2024-{1000 + i}", kev=True)
+    r = await get(db_session, "/api/lanes")
+    assert len(r.json()["EXPLOITED"]) == 100
+
+
+async def test_lanes_no_n_plus_one(db_session):
+    for i in range(6):
+        cve(db_session, f"CVE-2024-{2000 + i}", kev=True, epss_percentile=0.99, cvss=9.9,
+            published=NOW - timedelta(hours=1))
+        story(db_session, 100 + i, [f"CVE-2024-{2000 + i}"])
+    stmts = []
+
+    def count(conn, cursor, statement, *a):
+        stmts.append(statement)
+
+    engine = db_session.get_bind()
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        r = await get(db_session, "/api/lanes")
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert r.status_code == 200
+    assert all(len(v) == 6 for v in r.json().values())
+    assert len(stmts) <= 4, stmts
+
+
+async def test_lanes_second_anonymous_call_is_cache_hit(db_session):
+    cve(db_session, "CVE-2024-0001", kev=True)
+    async with client(make_app(db_session)) as c:
+        r1 = await c.get("/api/lanes")
+        r2 = await c.get("/api/lanes")
+    assert r1.headers["x-cache"] == "MISS"
+    assert r2.headers["x-cache"] == "HIT"
+    assert r1.json() == r2.json()
+
+
+async def test_search_and_detail_not_cached(db_session):
+    cve(db_session, "CVE-2024-0001")
+    async with client(make_app(db_session)) as c:
+        for url in ("/api/cves", "/api/cves/CVE-2024-0001"):
+            await c.get(url)
+            r = await c.get(url)
+            assert "x-cache" not in r.headers
+
+
+# ---------------------------------------------------------------- auth
+
+
+async def test_public_read_off_requires_auth(db_session):
+    u = mk_user(db_session)
+    h, _ = bearer(db_session, u)
+    for url in ("/api/lanes", "/api/cves", "/api/velocity", "/api/geo", "/api/stories/loud"):
+        anon = await get(db_session, url, public_read=False)
+        assert anon.status_code == 401, url
+        ok = await get(db_session, url, headers=h, public_read=False)
+        assert ok.status_code == 200, url
+
+
+# ---------------------------------------------------------------- detail
+
+
+async def test_detail(db_session):
+    cve(db_session, "CVE-2024-0001", epss=0.5, affected=[{"vendor": "v"}], kev=True)
+    for i in range(55):
+        story(db_session, i, ["CVE-2024-0001"], published=NOW - timedelta(minutes=i + 1),
+              title=f"T{i}")
+    for i in range(105):
+        geo(db_session, f"x{i}", cve_id="CVE-2024-0001", asn=64512, story_url="https://s.test",
+            label=f"L{i}", observed_at=NOW - timedelta(minutes=i), details={"k": 1})
+    geo(db_session, "other", cve_id="CVE-2024-9999")
+    r = await get(db_session, "/api/cves/CVE-2024-0001")
+    assert r.status_code == 200
+    b = r.json()
+    assert set(b) == LANE_KEYS | {"epss", "affected", "stories", "geo_events"}
+    assert b["epss"] == 0.5 and b["affected"] == [{"vendor": "v"}]
+    assert len(b["stories"]) == 50 and b["stories"][0]["title"] == "T0"
+    assert set(b["stories"][0]) == {"title", "url", "source", "published"}
+    assert len(b["geo_events"]) == 100 and b["geo_events"][0]["label"] == "L0"
+    assert set(b["geo_events"][0]) == GEO_EVENT_KEYS
+    assert "external_id" not in r.text and "64512" not in r.text
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["../../etc", "..%2F..%2Fetc", "cve-2024-0001", "CVE-2024-0001%20", "CVE-24-1",
+     "CVE-2024-9999", "CVE-2024-0001/x"],
+)
+async def test_detail_not_found(db_session, path):
+    cve(db_session, "CVE-2024-0001")
+    r = await get(db_session, f"/api/cves/{path}")
+    assert r.status_code == 404
+    if path != "../../etc":  # httpx collapses raw dot-segments before the app sees them
+        assert r.json() == {"error": "not_found"}
+
+
+# ---------------------------------------------------------------- search
+
+
+async def test_search_basic_and_filters(db_session):
+    cve(db_session, "CVE-2024-0001", kev=True, kev_source="cisa", cvss=9.0,
+        published=NOW - timedelta(days=1), summary="Apache thing")
+    cve(db_session, "CVE-2024-0002", kev=True, kev_source="vulncheck", cvss=5.0,
+        published=NOW - timedelta(days=200), summary="nginx")
+    cve(db_session, "CVE-2024-0003", cvss=7.0, published=None)
+    story(db_session, 1, ["CVE-2024-0001"])
+
+    async def ids(qs):
+        r = await get(db_session, "/api/cves" + qs)
+        assert r.status_code == 200, r.text
+        return [i["cve_id"] for i in r.json()["items"]]
+
+    assert await ids("") == ["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003"]  # NULLS LAST
+    assert await ids("?q=apache") == ["CVE-2024-0001"]
+    assert await ids("?q=cve-2024-0002") == ["CVE-2024-0002"]
+    assert await ids("?source=vulncheck") == ["CVE-2024-0002"]
+    assert await ids("?min_cvss=7") == ["CVE-2024-0001", "CVE-2024-0003"]
+    assert await ids("?kev=true") == ["CVE-2024-0001", "CVE-2024-0002"]
+    assert await ids("?kev=false") == ["CVE-2024-0003"]
+    assert await ids("?lane=LOUD") == ["CVE-2024-0001"]
+    assert await ids("?lane=EXPLOITED") == ["CVE-2024-0001", "CVE-2024-0002"]
+    frm = (NOW - timedelta(days=2)).date().isoformat()
+    assert await ids(f"?from={frm}") == ["CVE-2024-0001"]
+    to = (NOW - timedelta(days=100)).date().isoformat()
+    assert await ids(f"?to={to}") == ["CVE-2024-0002"]
+    r = await get(db_session, "/api/cves")
+    b = r.json()
+    assert set(b) == {"items", "page", "page_size", "total"} and b["total"] == 3
+    assert set(b["items"][0]) == LANE_KEYS
+    assert b["items"][0]["recent_story_count"] == 1
+
+
+async def test_search_like_escaping(db_session):
+    cve(db_session, "CVE-2024-0001", summary="100% sure")
+    cve(db_session, "CVE-2024-0002", summary="snake_case")
+    cve(db_session, "CVE-2024-0003", summary="plain text")
+    cve(db_session, "CVE-2024-0004", summary="back\\slash")
+
+    async def ids(q):
+        async with client(make_app(db_session)) as c:
+            r = await c.get("/api/cves", params={"q": q})
+        assert r.status_code == 200
+        return sorted(i["cve_id"] for i in r.json()["items"])
+
+    assert await ids("%") == ["CVE-2024-0001"]
+    assert await ids("_") == ["CVE-2024-0002"]
+    assert await ids("\\") == ["CVE-2024-0004"]
+
+
+async def test_search_validation(db_session):
+    for qs in (
+        "?q=" + "a" * 5000, "?page_size=101", "?page_size=0", "?page=0", "?page=10001",
+        "?min_cvss=11", "?min_cvss=-1", "?source=other", "?lane=NOPE", "?from=notadate",
+        "?kev=maybe",
+    ):
+        r = await get(db_session, "/api/cves" + qs)
+        assert r.status_code == 422, qs
+    assert (await get(db_session, "/api/cves?q=" + "a" * 200)).status_code == 200
+
+
+async def test_search_non_utf8_query_is_422(db_session):
+    for path in ("/api/cves?q=%FF", "/api/velocity?days=%FF", "/api/lanes?x=%C3%28"):
+        r = await get(db_session, path)
+        assert r.status_code == 422, path
+        assert r.json() == {"error": "validation_error"}
+    assert (await get(db_session, "/api/cves?q=%C3%A9")).status_code == 200
+
+
+async def test_search_pagination_and_stable_order(db_session):
+    same = NOW - timedelta(days=3)
+    for i in range(5):
+        cve(db_session, f"CVE-2024-{3000 + i}", published=same)
+    seen = []
+    async with client(make_app(db_session)) as c:
+        for p in (1, 2, 3):
+            r = await c.get("/api/cves", params={"page": p, "page_size": 2})
+            b = r.json()
+            assert b["total"] == 5 and b["page"] == p and b["page_size"] == 2
+            seen += [i["cve_id"] for i in b["items"]]
+        assert len((await c.get("/api/cves", params={"page": 4, "page_size": 2})).json()["items"]) == 0
+    assert seen == [f"CVE-2024-{3000 + i}" for i in range(5)]
+
+
+# ---------------------------------------------------------------- velocity / geo / stories
+
+
+async def test_velocity(db_session):
+    cve(db_session, "CVE-2024-0001", published=NOW)
+    r = await get(db_session, "/api/velocity")
+    assert r.status_code == 200
+    b = r.json()
+    assert set(b) == {"series", "current", "rising"}
+    assert len(b["series"]) == 30 and b["current"] == 1
+    assert set(b["series"][0]) == {"day", "count"}
+    assert len((await get(db_session, "/api/velocity?days=7")).json()["series"]) == 7
+    for d in ("0", "31", "-1", "x"):
+        assert (await get(db_session, f"/api/velocity?days={d}")).status_code == 422
+
+
+async def test_geo(db_session):
+    geo(db_session, "a", country_code="US", magnitude=2.0, asn=1, story_url="https://u.test")
+    geo(db_session, "b", country_code="US", magnitude=3.0)
+    geo(db_session, "c", country_code="DE", kind="bgp")
+    geo(db_session, "old", country_code="FR", observed_at=NOW - timedelta(hours=100))
+    r = await get(db_session, "/api/geo")
+    assert r.status_code == 200
+    items = r.json()
+    assert {(i["country_code"], i["kind"]) for i in items} == {("US", "outage"), ("DE", "bgp")}
+    assert items[0]["country_code"] == "US" and items[0]["magnitude"] == 5.0
+    assert items[0]["events"] == 2
+    assert set(items[0]) == {"country_code", "kind", "magnitude", "events", "last_seen"}
+    assert "external_id" not in r.text and "asn" not in r.text
+    assert len((await get(db_session, "/api/geo?window_hours=168")).json()) == 3
+    for w in ("0", "169"):
+        assert (await get(db_session, f"/api/geo?window_hours={w}")).status_code == 422
+
+
+async def test_loud_stories(db_session):
+    cve(db_session, "CVE-2024-0001")
+    for i in range(3):
+        story(db_session, i, ["CVE-2024-0001"], published=NOW - timedelta(minutes=i + 1))
+    r = await get(db_session, "/api/stories/loud?limit=2")
+    assert r.status_code == 200
+    b = r.json()
+    assert len(b) == 2
+    assert set(b[0]) == {"title", "summary", "url", "source", "published", "cve_ids"}
+    assert b[0]["cve_ids"] == ["CVE-2024-0001"]
+    for lim in ("0", "101"):
+        assert (await get(db_session, f"/api/stories/loud?limit={lim}")).status_code == 422
+    assert len((await get(db_session, "/api/stories/loud")).json()) == 3
+
+
+async def test_default_cache_paths_applied_and_explicit_respected(db_session):
+    app = create_app(
+        get_settings(), redis=fakeredis.FakeAsyncRedis(), cache_paths={},
+        session_factory=make_app(db_session).state.session_factory,
+    )
+    async with client(app) as c:
+        await c.get("/api/lanes")
+        assert "x-cache" not in (await c.get("/api/lanes")).headers
