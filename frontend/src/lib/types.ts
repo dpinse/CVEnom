@@ -160,7 +160,6 @@ export type CveEventKind =
   | "reserved"
   | "published"
   | "nvd_modified"
-  | "fix_released"
   | "poc_published"
   | "detection"
   | "first_news"
