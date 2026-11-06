@@ -6,7 +6,15 @@ import logging
 from datetime import date
 
 from cvenom.collectors import base
-from cvenom.collectors.base import Collector, CollectorResult, http_get_json, register
+from cvenom.collectors.base import (
+    Collector,
+    CollectorResult,
+    http_get_json,
+    parse_iso_date,
+    ransomware_flag,
+    register,
+    str_or_none,
+)
 from cvenom.collectors.seenstate import track_new
 from cvenom.config import get_settings
 from cvenom.schemas import NormalizedCve
@@ -16,19 +24,6 @@ log = logging.getLogger(__name__)
 VULNCHECK_URL = "https://api.vulncheck.com/v3/index/vulncheck-kev"
 PAGE_DELAY = 1.0
 MAX_PAGES = 200  # hard stop against a misbehaving total_pages
-
-
-def _parse_date(value: object) -> date | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        return date.fromisoformat(value[:10])
-    except ValueError:
-        return None
-
-
-def _str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
 
 
 def _first(rec: dict, *keys: str) -> object:
@@ -99,16 +94,13 @@ class VulnCheckCollector(Collector):
                     continue
                 vendor, product = rec.get("vendorProject"), rec.get("product")
                 affected = [f"{vendor} {product}"] if vendor and product else []
-                added = _parse_date(rec.get("date_added"))
-                ransom = rec.get("knownRansomwareCampaignUse")
+                added = parse_iso_date(rec.get("date_added"))
                 detail = {
-                    "kev_name": _str(rec.get("vulnerabilityName")),
-                    "kev_action": _str(_first(rec, "required_action", "requiredAction")),
-                    "kev_due": _parse_date(_first(rec, "dueDate", "due_date")),
-                    "kev_ransomware": {"Known": True, "Unknown": False}.get(ransom)
-                    if isinstance(ransom, str)
-                    else None,
-                    "kev_notes": _str(rec.get("notes")),
+                    "kev_name": str_or_none(rec.get("vulnerabilityName")),
+                    "kev_action": str_or_none(_first(rec, "required_action", "requiredAction")),
+                    "kev_due": parse_iso_date(_first(rec, "dueDate", "due_date")),
+                    "kev_ransomware": ransomware_flag(rec.get("knownRansomwareCampaignUse")),
+                    "kev_notes": str_or_none(rec.get("notes")),
                 }
                 for cve_id in ids:
                     try:

@@ -8,7 +8,7 @@ import logging
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -252,6 +252,29 @@ async def http_get_conditional(
 
 
 REGISTRY: dict[str, type[Collector]] = {}
+
+
+def str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def parse_iso_date(value: object) -> date | None:
+    """Leading YYYY-MM-DD of a string; anything else (or unparseable) gives None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def ransomware_flag(value: object) -> bool | None:
+    """KEV knownRansomwareCampaignUse: Known -> True, Unknown -> False, else None."""
+    if value == "Known":
+        return True
+    if value == "Unknown":
+        return False
+    return None
 
 
 def register(cls: type[Collector]) -> type[Collector]:

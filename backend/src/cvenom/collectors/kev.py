@@ -5,7 +5,15 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from cvenom.collectors.base import Collector, CollectorResult, http_get_json, register
+from cvenom.collectors.base import (
+    Collector,
+    CollectorResult,
+    http_get_json,
+    parse_iso_date,
+    ransomware_flag,
+    register,
+    str_or_none,
+)
 from cvenom.collectors.seenstate import track_new
 from cvenom.config import get_settings
 from cvenom.schemas import NormalizedCve
@@ -15,23 +23,6 @@ log = logging.getLogger(__name__)
 KEV_URL = (
     "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 )
-
-
-def _str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _date(value: object) -> date | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        return date.fromisoformat(value[:10])
-    except ValueError:
-        return None
-
-
-def _ransomware(value: object) -> bool | None:
-    return {"Known": True, "Unknown": False}.get(value) if isinstance(value, str) else None
 
 
 @register
@@ -57,11 +48,11 @@ class KevCollector(Collector):
                         kev_added=date.fromisoformat(rec["dateAdded"]),
                         kev_source="cisa",
                         affected=[f"{rec['vendorProject']} {rec['product']}"],
-                        kev_name=_str(rec.get("vulnerabilityName")),
-                        kev_action=_str(rec.get("requiredAction")),
-                        kev_due=_date(rec.get("dueDate")),
-                        kev_ransomware=_ransomware(rec.get("knownRansomwareCampaignUse")),
-                        kev_notes=_str(rec.get("notes")),
+                        kev_name=str_or_none(rec.get("vulnerabilityName")),
+                        kev_action=str_or_none(rec.get("requiredAction")),
+                        kev_due=parse_iso_date(rec.get("dueDate")),
+                        kev_ransomware=ransomware_flag(rec.get("knownRansomwareCampaignUse")),
+                        kev_notes=str_or_none(rec.get("notes")),
                     )
                 )
             except (KeyError, TypeError, ValueError):  # incl. ValidationError

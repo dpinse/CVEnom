@@ -249,3 +249,15 @@ def test_vulncheck_maps_aliases_and_tolerates_absence(token):
     c = by_id["CVE-2026-1003"]
     assert c.kev_name is None and c.kev_action is None and c.kev_due is None
     assert c.kev_ransomware is None and c.kev_notes is None
+
+
+def test_vulncheck_bad_due_unknown_ransomware_and_non_str(token):
+    r1 = _rec("CVE-2026-1001")
+    r1.update({"dueDate": "garbage", "knownRansomwareCampaignUse": "Unknown"})
+    r2 = _rec("CVE-2026-1002")
+    r2.update({"dueDate": 5, "knownRansomwareCampaignUse": 7, "notes": 3, "vulnerabilityName": ["x"]})
+    by_id = {c.cve_id: c for c in VulnCheckCollector().normalize([_page([r1, r2])]).cves}
+    assert set(by_id) == {"CVE-2026-1001", "CVE-2026-1002"}
+    assert by_id["CVE-2026-1001"].kev_due is None and by_id["CVE-2026-1001"].kev_ransomware is False
+    b = by_id["CVE-2026-1002"]
+    assert b.kev_due is None and b.kev_ransomware is None and b.kev_notes is None and b.kev_name is None

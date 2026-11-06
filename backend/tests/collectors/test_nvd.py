@@ -224,3 +224,29 @@ def test_nvd_record_without_metrics_or_weaknesses(settings):
     c = res.cves[0]
     assert c.cvss is None and c.cvss_vector is None and c.cvss_severity is None
     assert c.cwes is None and c.references is None and c.last_modified is None
+
+
+@pytest.mark.parametrize("bad", ["not-a-date", 12, ["x"], {"a": 1}])
+def test_nvd_bad_last_modified_keeps_record(settings, bad):
+    rec = {"vulnerabilities": [{"cve": {"id": "CVE-2026-2003", "lastModified": bad}}]}
+    res = NvdCollector().normalize([rec])
+    assert len(res.cves) == 1 and res.cves[0].last_modified is None
+
+
+@pytest.mark.parametrize(
+    "cve_extra",
+    [
+        {"weaknesses": ["x", None, 5]},
+        {"weaknesses": [{"description": "CWE-79"}, {"description": [None, "x", 3]}]},
+        {"weaknesses": 5},
+        {"weaknesses": "CWE-79"},
+        {"references": ["x", None, 5]},
+        {"references": 5},
+        {"references": "http://x"},
+    ],
+)
+def test_nvd_malformed_detail_shapes_keep_record(settings, cve_extra):
+    rec = {"vulnerabilities": [{"cve": {"id": "CVE-2026-2004", **cve_extra}}]}
+    res = NvdCollector().normalize([rec])
+    assert len(res.cves) == 1
+    assert res.cves[0].cwes is None and res.cves[0].references is None

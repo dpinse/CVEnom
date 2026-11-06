@@ -49,17 +49,33 @@ def _metric(metrics: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _cwes(weaknesses: list[dict[str, Any]]) -> list[str] | None:
+def _tolerant_ts(value: object) -> datetime | None:
+    """Like _parse_ts but a malformed or non-str value gives None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return _parse_ts(value)
+    except ValueError:
+        return None
+
+
+def _cwes(weaknesses: object) -> list[str] | None:
     vals = [
         d.get("value")
-        for w in weaknesses or []
-        for d in (w.get("description") or [])
+        for w in (weaknesses if isinstance(weaknesses, list) else [])
+        if isinstance(w, dict)
+        for d in (w.get("description") if isinstance(w.get("description"), list) else [])
+        if isinstance(d, dict)
     ]
     return vals or None
 
 
-def _refs(references: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-    out = [{"url": r.get("url"), "tags": r.get("tags") or []} for r in references or []]
+def _refs(references: object) -> list[dict[str, Any]] | None:
+    out = [
+        {"url": r.get("url"), "tags": r.get("tags") or []}
+        for r in (references if isinstance(references, list) else [])
+        if isinstance(r, dict)
+    ]
     return out or None
 
 
@@ -139,12 +155,12 @@ class NvdCollector(Collector):
                         NormalizedCve(
                             cve_id=cve_id,
                             published=_parse_ts(cve.get("published")),
-                            last_modified=_parse_ts(cve.get("lastModified")),
+                            last_modified=_tolerant_ts(cve.get("lastModified")),
                             cvss=float(score) if score is not None else None,
                             cvss_vector=m.get("vectorString") if m else None,
                             cvss_severity=m.get("baseSeverity") if m else None,
-                            cwes=_cwes(cve.get("weaknesses") or []),
-                            references=_refs(cve.get("references") or []),
+                            cwes=_cwes(cve.get("weaknesses")),
+                            references=_refs(cve.get("references")),
                             summary=_summary(cve.get("descriptions") or []),
                         )
                     )
