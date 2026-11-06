@@ -2,7 +2,7 @@
 
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from cvenom.config import get_settings
 from cvenom.models import Cve, GeoEvent, Story, StoryCveLink
@@ -69,21 +69,12 @@ def geo_summary(session, now: datetime, *, window_hours: int = 24) -> list[dict]
     ]
 
 
-def loud_stories(
-    session, now: datetime, *, limit: int = 50, exclude_sources: frozenset[str] = frozenset()
-) -> list[dict]:
-    now = _utc(now)
-    limit = max(1, min(100, limit))
-    since = now - timedelta(hours=get_settings().loud_window_hours)
-    conds = [Story.published >= since]
-    if exclude_sources:
-        conds.append(Story.source.not_in(exclude_sources))
-    stories = session.scalars(
-        select(Story)
-        .where(*conds)
-        .order_by(Story.published.desc(), Story.id.desc())
-        .limit(limit)
-    ).all()
+def _escape_like(q: str) -> str:
+    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _story_dicts(session, stories) -> list[dict]:
+    """Story rows -> API dicts with the sorted CVE ids linked to each (one query)."""
     links: dict[int, list[str]] = {}
     if stories:
         agg = func.array_agg(StoryCveLink.cve_id).label("cve_ids")
@@ -104,3 +95,66 @@ def loud_stories(
         }
         for s in stories
     ]
+
+
+def loud_stories(
+    session, now: datetime, *, limit: int = 50, exclude_sources: frozenset[str] = frozenset()
+) -> list[dict]:
+    now = _utc(now)
+    limit = max(1, min(100, limit))
+    since = now - timedelta(hours=get_settings().loud_window_hours)
+    conds = [Story.published >= since]
+    if exclude_sources:
+        conds.append(Story.source.not_in(exclude_sources))
+    stories = session.scalars(
+        select(Story)
+        .where(*conds)
+        .order_by(Story.published.desc(), Story.id.desc())
+        .limit(limit)
+    ).all()
+    return _story_dicts(session, stories)
+
+
+def search_stories(
+    session,
+    *,
+    q: str | None,
+    source: str | None,
+    start: datetime | None,
+    end: datetime | None,
+    page: int,
+    page_size: int,
+    exclude_sources: frozenset[str] = frozenset(),
+) -> tuple[list[dict], int]:
+    """History search. `end` is exclusive. exclude_sources applies to page and count."""
+    conds = []
+    if exclude_sources:
+        conds.append(Story.source.not_in(exclude_sources))
+    if q:
+        pat = f"%{_escape_like(q)}%"
+        conds.append(or_(Story.title.ilike(pat, escape="\\"), Story.summary.ilike(pat, escape="\\")))
+    if source is not None:
+        conds.append(Story.source == source)
+    if start is not None:
+        conds.append(Story.published >= start)
+    if end is not None:
+        conds.append(Story.published < end)
+    total = session.scalar(select(func.count()).select_from(Story).where(*conds)) or 0
+    rows = session.scalars(
+        select(Story)
+        .where(*conds)
+        .order_by(Story.published.desc(), Story.id.desc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    ).all()
+    return _story_dicts(session, rows), int(total)
+
+
+def story_detail(session, url: str, exclude_sources: frozenset[str] = frozenset()) -> dict | None:
+    conds = [Story.url == url]
+    if exclude_sources:
+        conds.append(Story.source.not_in(exclude_sources))
+    s = session.scalars(select(Story).where(*conds).limit(1)).first()
+    if s is None:
+        return None
+    return {**_story_dicts(session, [s])[0], "details": s.details or {}}

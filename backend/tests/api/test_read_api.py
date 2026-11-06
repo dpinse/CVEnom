@@ -201,7 +201,11 @@ async def test_detail(db_session):
     r = await get(db_session, "/api/cves/CVE-2024-0001")
     assert r.status_code == 200
     b = r.json()
-    assert set(b) == LANE_KEYS | {"epss", "affected", "stories", "geo_events"}
+    assert set(b) == LANE_KEYS | {
+        "epss", "affected", "stories", "geo_events", "kev_name", "kev_action", "kev_notes",
+        "kev_due", "kev_ransomware", "cvss_vector", "cvss_severity", "cwes", "references",
+        "last_modified",
+    }
     assert b["epss"] == 0.5 and b["affected"] == [{"vendor": "v"}]
     assert len(b["stories"]) == 50 and b["stories"][0]["title"] == "T0"
     assert set(b["stories"][0]) == {"title", "url", "source", "published"}

@@ -59,9 +59,24 @@ class GeoEventOut(BaseModel):
     details: dict
 
 
+class CveReferenceOut(BaseModel):
+    url: str
+    tags: list[str]
+
+
 class CveDetail(CveItem):
     epss: float | None
     affected: list
+    kev_name: str | None
+    kev_action: str | None
+    kev_due: date | None
+    kev_ransomware: bool | None
+    kev_notes: str | None
+    cvss_vector: str | None
+    cvss_severity: str | None
+    cwes: list[str]
+    references: list[CveReferenceOut]
+    last_modified: UtcDatetime | None
     stories: list[StoryRef]
     geo_events: list[GeoEventOut]
 
@@ -85,10 +100,24 @@ class GeoSummaryItem(BaseModel):
     last_seen: UtcDatetime
 
 
-class LoudStory(BaseModel):
+class StoryItem(BaseModel):
     title: str
     summary: str
     url: str
     source: str
     published: UtcDatetime
     cve_ids: list[str]
+
+
+LoudStory = StoryItem
+
+
+class StoryListOut(BaseModel):
+    items: list[StoryItem]
+    page: int
+    page_size: int
+    total: int
+
+
+class StoryDetailOut(StoryItem):
+    details: dict

@@ -15,7 +15,14 @@ from sqlalchemy.orm import Session
 from cvenom.config import get_settings
 from cvenom.models import Cve, GeoEvent, Story, StoryCveLink, User
 from cvenom.pipeline import lane_views
-from cvenom.readmodels import cve_velocity, geo_summary, loud_stories
+from cvenom.readmodels import (
+    _escape_like,
+    cve_velocity,
+    geo_summary,
+    loud_stories,
+    search_stories,
+    story_detail,
+)
 from cvenom.schemas import CVE_ID_RE
 from cvenom.scoring import Lane
 
@@ -24,10 +31,13 @@ from .ratelimit import rate_limit
 from .schemas_api import (
     CveDetail,
     CveListOut,
+    CveReferenceOut,
     GeoEventOut,
     GeoSummaryItem,
     LanesOut,
     LoudStory,
+    StoryDetailOut,
+    StoryListOut,
     StoryRef,
     VelocityOut,
 )
@@ -38,6 +48,8 @@ CACHE_PATHS: dict[str, frozenset[str]] = {
     "/api/velocity": frozenset({"days"}),
     "/api/geo": frozenset({"window_hours"}),
     "/api/stories/loud": frozenset({"limit"}),
+    # free-text `q` is not allowed: it bypasses the cache so arbitrary strings cannot fill Redis
+    "/api/stories": frozenset({"source", "from", "to", "page", "page_size"}),
 }
 
 LANE_CAP = 100
@@ -115,10 +127,6 @@ def lanes(session: Session = SessionDep) -> dict:
     return out
 
 
-def _escape_like(q: str) -> str:
-    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 @router.get("/cves", response_model=CveListOut)
 def search_cves(
     q: Annotated[str | None, Query(max_length=200)] = None,
@@ -128,6 +136,9 @@ def search_cves(
     kev: bool | None = None,
     from_: Annotated[date | None, Query(alias="from")] = None,
     to: date | None = None,
+    kev_from: date | None = None,
+    kev_to: date | None = None,
+    sort: Literal["kev_added", "published", "cvss"] | None = None,
     page: Annotated[int, Query(ge=1, le=10000)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
     session: Session = SessionDep,
@@ -148,15 +159,29 @@ def search_cves(
         conds.append(Cve.published >= datetime.combine(from_, time.min, tzinfo=UTC))
     if to is not None and to < date.max:
         conds.append(Cve.published < datetime.combine(to + timedelta(days=1), time.min, tzinfo=UTC))
+    if kev_from is not None:
+        conds.append(Cve.kev_added >= kev_from)
+    if kev_to is not None:  # inclusive
+        conds.append(Cve.kev_added <= kev_to)
     if lane is not None:
         members = [v.cve_id for v in lane_views(session, _now())[lane]]
         conds.append(Cve.cve_id == any_(literal(members, ARRAY(String))))
+
+    # lane= keeps its published-desc order unless sort is passed explicitly.
+    if sort is None:
+        sort = "kev_added" if kev is True and lane is None else "published"
+    if sort == "kev_added":
+        order = (Cve.kev_added.desc().nulls_last(), Cve.cve_id)
+    elif sort == "cvss":
+        order = (Cve.cvss.desc().nulls_last(), Cve.published.desc().nulls_last(), Cve.cve_id)
+    else:
+        order = (Cve.published.desc().nulls_last(), Cve.cve_id)
 
     total = session.scalar(select(func.count()).select_from(Cve).where(*conds)) or 0
     rows = session.scalars(
         select(Cve)
         .where(*conds)
-        .order_by(Cve.published.desc().nulls_last(), Cve.cve_id)
+        .order_by(*order)
         .limit(page_size)
         .offset((page - 1) * page_size)
     ).all()
@@ -207,6 +232,23 @@ def cve_detail(
         **_item(c, counts.get(cve_id, 0)),
         "epss": c.epss,
         "affected": c.affected,
+        "kev_name": c.kev_name,
+        "kev_action": c.kev_action,
+        "kev_due": c.kev_due,
+        "kev_ransomware": c.kev_ransomware,
+        "kev_notes": c.kev_notes,
+        "cvss_vector": c.cvss_vector,
+        "cvss_severity": c.cvss_severity,
+        "cwes": [w for w in (c.cwes or []) if isinstance(w, str)],
+        "references": [
+            CveReferenceOut(
+                url=r["url"],
+                tags=[t for t in (r.get("tags") or []) if isinstance(t, str)],
+            )
+            for r in (c.references or [])
+            if isinstance(r, dict) and isinstance(r.get("url"), str)
+        ],
+        "last_modified": c.last_modified,
         "stories": [StoryRef(**r._asdict()) for r in stories],
         "geo_events": [GeoEventOut(**r._asdict()) for r in geo],
     }
@@ -233,3 +275,43 @@ def stories_loud(
     user: User | None = Depends(current_user),  # gated by the router-level public_or_user
 ) -> list[dict]:
     return loud_stories(session, _now(), limit=limit, exclude_sources=restricted_sources(user))
+
+
+@router.get("/stories", response_model=StoryListOut)
+def stories_search(
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    source: Annotated[str | None, Query(max_length=64)] = None,
+    from_: Annotated[date | None, Query(alias="from")] = None,
+    to: date | None = None,
+    page: Annotated[int, Query(ge=1, le=10000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+    session: Session = SessionDep,
+    user: User | None = Depends(current_user),  # gated by the router-level public_or_user
+) -> dict:
+    start = datetime.combine(from_, time.min, tzinfo=UTC) if from_ is not None else None
+    end = None
+    if to is not None and to < date.max:
+        end = datetime.combine(to + timedelta(days=1), time.min, tzinfo=UTC)
+    items, total = search_stories(
+        session,
+        q=q,
+        source=source,
+        start=start,
+        end=end,
+        page=page,
+        page_size=page_size,
+        exclude_sources=restricted_sources(user),
+    )
+    return {"items": items, "page": page, "page_size": page_size, "total": total}
+
+
+@router.get("/story", response_model=StoryDetailOut)
+def story_lookup(
+    url: Annotated[str, Query(max_length=2048)],
+    session: Session = SessionDep,
+    user: User | None = Depends(current_user),  # gated by the router-level public_or_user
+):
+    found = story_detail(session, url, restricted_sources(user))
+    if found is None:  # missing and restricted-for-anonymous share one response
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return found
