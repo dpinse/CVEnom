@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
 from cvenom.config import get_settings
-from cvenom.models import Cve, GeoEvent, Story, StoryCveLink, User
+from cvenom.models import Cve, CveEvent, GeoEvent, Story, StoryCveLink, User
 from cvenom.pipeline import lane_views
 from cvenom.readmodels import (
     ADDED_DAYS,
@@ -34,21 +34,25 @@ from cvenom.readmodels import (
     story_detail,
     summary_counts,
 )
-from cvenom.ranges import DEFAULT_RANGE, RANGE_DAYS, RangeKey
-from cvenom.schemas import CVE_ID_RE
+from cvenom.ranges import DEFAULT_RANGE, RANGE_DAYS, RangeKey, range_start
+from cvenom.schemas import CVE_ID_RE, AffectedVersion, validate_http_url
 from cvenom.scoring import Lane
 
 from .deps import SessionDep, current_user, public_or_user, restricted_sources
 from .ratelimit import rate_limit
 from .schemas_api import (
+    AffectedVersionOut,
     CountryActivityOut,
     CveDetail,
+    CveEventOut,
     CveListOut,
     CveReferenceOut,
     GeoEventOut,
     GeoSummaryItem,
+    GeoTop,
     LanesOut,
     LoudStory,
+    RelatedCve,
     StoryDetailOut,
     StoryListOut,
     StoryRef,
@@ -293,9 +297,71 @@ def search_cves(
     }
 
 
+def _valid_version(v: object) -> bool:
+    try:
+        AffectedVersion.model_validate(v)
+    except ValueError:
+        return False
+    return True
+
+
+def _related(session: Session, c: Cve) -> list[dict]:
+    """Up to 4 other CVEs: same product first, then same first CWE; kev, cvss desc, id."""
+    label = product_label(c)
+    groups = []
+    if label:
+        affected = [a for a in (c.affected or []) if isinstance(a, str)]
+        if label in affected:
+            groups.append(Cve.affected.contains([label]))
+        else:
+            product = next(
+                (
+                    v["product"]
+                    for v in c.affected_versions or []
+                    if isinstance(v, dict)
+                    and isinstance(v.get("product"), str)
+                    and label in (v["product"], f"{v.get('vendor')} {v['product']}")
+                ),
+                None,
+            )
+            if product:
+                groups.append(Cve.affected_versions.contains([{"product": product}]))
+            elif affected:  # label came from the tail of a CPE-ish entry
+                groups.append(Cve.affected.contains([affected[0]]))
+    cwes = [w for w in (c.cwes or []) if isinstance(w, str)]
+    if cwes:
+        groups.append(Cve.cwes.contains([cwes[0]]))
+    out: list[Cve] = []
+    for cond in groups:
+        if len(out) >= 4:
+            break
+        rows = session.scalars(
+            select(Cve)
+            .where(
+                cond,
+                Cve.cve_id != c.cve_id,
+                Cve.cve_id.not_in([r.cve_id for r in out]),
+            )
+            .order_by(Cve.kev.desc(), Cve.cvss.desc().nulls_last(), Cve.cve_id)
+            .limit(4 - len(out))
+        ).all()
+        out.extend(rows)
+    return [
+        {
+            "cve_id": r.cve_id,
+            "cvss": r.cvss,
+            "kev": r.kev,
+            "epss_percentile": r.epss_percentile,
+            "product": product_label(r),
+        }
+        for r in out
+    ]
+
+
 @router.get("/cves/{cve_id:path}", response_model=CveDetail)
 def cve_detail(
     cve_id: str,
+    range_: Annotated[RangeKey, Query(alias="range")] = DEFAULT_RANGE,
     session: Session = SessionDep,
     user: User | None = Depends(current_user),  # gated by the router-level public_or_user
 ):
@@ -328,6 +394,42 @@ def cve_detail(
     ).all()
     counts = _recent_counts(session, [cve_id], _loud_since())
     seen = last_seen_map(session, [cve_id], hidden)
+    events = session.execute(
+        select(CveEvent.kind, CveEvent.occurred_at, CveEvent.source, CveEvent.detail)
+        .where(CveEvent.cve_id == cve_id, CveEvent.source.not_in(hidden))
+        .order_by(CveEvent.occurred_at, CveEvent.id)
+        .limit(100)
+    ).all()
+    country = GeoEvent.country_code
+    geo_top = session.execute(
+        select(country, func.count().label("events"))
+        .where(
+            GeoEvent.cve_id == cve_id,
+            GeoEvent.observed_at >= range_start(_now(), range_),
+            country.is_not(None),
+        )
+        .group_by(country)
+        .order_by(func.count().desc(), country)
+        .limit(3)
+    ).all()
+    references = [
+        CveReferenceOut(
+            url=r["url"],
+            tags=[t for t in (r.get("tags") or []) if isinstance(t, str)],
+        )
+        for r in (c.references or [])
+        if isinstance(r, dict) and isinstance(r.get("url"), str)
+    ]
+    seen_urls = {r.url for r in references}
+    for ev in events:
+        url = (ev.detail or {}).get("url") if ev.kind == "poc_published" else None
+        try:
+            url = validate_http_url(url)
+        except ValueError:
+            continue
+        if url not in seen_urls:
+            seen_urls.add(url)
+            references.append(CveReferenceOut(url=url, tags=["Exploit"]))
     return {
         **_item(c, counts.get(cve_id, 0), seen.get(cve_id)),
         "epss": c.epss,
@@ -340,17 +442,19 @@ def cve_detail(
         "cvss_vector": c.cvss_vector,
         "cvss_severity": c.cvss_severity,
         "cwes": [w for w in (c.cwes or []) if isinstance(w, str)],
-        "references": [
-            CveReferenceOut(
-                url=r["url"],
-                tags=[t for t in (r.get("tags") or []) if isinstance(t, str)],
-            )
-            for r in (c.references or [])
-            if isinstance(r, dict) and isinstance(r.get("url"), str)
-        ],
+        "references": references,
         "last_modified": c.last_modified,
         "stories": [StoryRef(**r._asdict()) for r in stories],
         "geo_events": [GeoEventOut(**r._asdict()) for r in geo],
+        "events": [CveEventOut(**r._asdict()) for r in events],
+        "affected_versions": [
+            AffectedVersionOut.model_validate(v)
+            for v in (c.affected_versions or [])
+            if _valid_version(v)
+        ],
+        "related": [RelatedCve(**r) for r in _related(session, c)],
+        "geo_top": [GeoTop(country_code=r[0], events=r[1]) for r in geo_top],
+        "updated_at": c.updated_at,
     }
 
 

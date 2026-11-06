@@ -259,7 +259,8 @@ async def test_detail(db_session):
     assert r.status_code == 200
     b = r.json()
     assert set(b) == LANE_KEYS | {
-        "epss", "affected", "stories", "geo_events", "kev_name", "kev_action", "kev_notes",
+        "epss", "affected", "events", "related", "affected_versions", "geo_top",
+        "updated_at", "stories", "geo_events", "kev_name", "kev_action", "kev_notes",
         "kev_due", "kev_ransomware", "cvss_vector", "cvss_severity", "cwes", "references",
         "last_modified",
     }

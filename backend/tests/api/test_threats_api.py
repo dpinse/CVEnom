@@ -7,6 +7,7 @@ from test_read_api import (  # noqa: F401  (secrets_key is an autouse fixture)
     NOW,
     bearer,
     cve,
+    geo,
     get,
     mk_user,
     secrets_key,
@@ -524,3 +525,108 @@ async def test_threats_query_count_is_flat(db_session):
         event.remove(engine, "before_cursor_execute", count)
     assert len(r.json()["items"]) == 20
     assert len(selects) <= 6
+
+
+# ---------------------------------------------------------------- GET /api/cves/{id}
+
+
+def ev(db, cve_id, kind, source, hours_ago, **detail):
+    db.add(CveEvent(cve_id=cve_id, kind=kind, source=source, detail=detail,
+                    occurred_at=NOW - timedelta(hours=hours_ago)))
+    db.flush()
+
+
+async def test_detail_events_sorted_and_restricted(db_session):
+    cve(db_session, "CVE-2024-0001")
+    ev(db_session, "CVE-2024-0001", "published", "nvd", 50)
+    ev(db_session, "CVE-2024-0001", "first_news", "ransomware.live", 40)
+    ev(db_session, "CVE-2024-0001", "kev_added", "cisa", 10)
+    ev(db_session, "CVE-2024-0001", "first_news", "bleeping", 30)
+    anon = (await get(db_session, "/api/cves/CVE-2024-0001")).json()["events"]
+    assert [(e["kind"], e["source"]) for e in anon] == [
+        ("published", "nvd"), ("first_news", "bleeping"), ("kev_added", "cisa")]
+    h, _ = bearer(db_session, mk_user(db_session))
+    full = (await get(db_session, "/api/cves/CVE-2024-0001", headers=h)).json()["events"]
+    assert [e["source"] for e in full] == ["nvd", "ransomware.live", "bleeping", "cisa"]
+    assert set(full[0]) == {"kind", "occurred_at", "source", "detail"}
+
+
+async def test_detail_events_restriction_applies_before_limit(db_session):
+    cve(db_session, "CVE-2024-0001")
+    for i in range(100):
+        ev(db_session, "CVE-2024-0001", f"k{i}", "ransomware.live", 500 - i)
+    ev(db_session, "CVE-2024-0001", "published", "nvd", 1)
+    anon = (await get(db_session, "/api/cves/CVE-2024-0001")).json()["events"]
+    assert [e["kind"] for e in anon] == ["published"]
+
+
+async def test_detail_affected_versions_roundtrip(db_session):
+    av = {"product": "widget", "vendor": "acme", "ecosystem": None, "introduced": "1.0",
+          "fixed": "1.2", "last_affected": None, "source": "NVD"}
+    cve(db_session, "CVE-2024-0001", affected_versions=[av, {"junk": 1}])
+    body = (await get(db_session, "/api/cves/CVE-2024-0001")).json()
+    assert body["affected_versions"] == [av]
+
+
+async def test_detail_related_product_then_cwe_max4(db_session):
+    cve(db_session, "CVE-2024-0001", affected=["Acme Widget"], cwes=["CWE-79"])
+    cve(db_session, "CVE-2024-0002", affected=["Acme Widget"], cvss=5.0)
+    cve(db_session, "CVE-2024-0003", affected=["Acme Widget"], cvss=9.0)
+    cve(db_session, "CVE-2024-0004", affected=["Acme Widget"], kev=True, cvss=1.0)
+    cve(db_session, "CVE-2024-0005", cwes=["CWE-79"], cvss=10.0)
+    cve(db_session, "CVE-2024-0006", cwes=["CWE-79"], cvss=3.0)
+    cve(db_session, "CVE-2024-0007", affected=["Other"], cwes=["CWE-1"])
+    body = (await get(db_session, "/api/cves/CVE-2024-0001")).json()
+    assert [r["cve_id"] for r in body["related"]] == [
+        "CVE-2024-0004", "CVE-2024-0003", "CVE-2024-0002", "CVE-2024-0005"]
+    assert set(body["related"][0]) == {"cve_id", "cvss", "kev", "epss_percentile", "product"}
+    assert body["related"][0]["product"] == "Acme Widget"
+
+
+async def test_detail_related_from_affected_versions_product(db_session):
+    av = {"product": "libfoo", "source": "OSV"}
+    cve(db_session, "CVE-2024-0001", affected_versions=[av])
+    cve(db_session, "CVE-2024-0002", affected_versions=[av, {"product": "x", "source": "OSV"}])
+    cve(db_session, "CVE-2024-0003", affected_versions=[{"product": "bar", "source": "OSV"}])
+    body = (await get(db_session, "/api/cves/CVE-2024-0001")).json()
+    assert [r["cve_id"] for r in body["related"]] == ["CVE-2024-0002"]
+
+
+async def test_detail_geo_top_respects_range(db_session):
+    cve(db_session, "CVE-2024-0001")
+    n = 0
+    for cc, days_ago, count in [("US", 1, 3), ("DE", 2, 2), ("FR", 3, 1), ("JP", 4, 1),
+                                ("CN", 20, 9)]:
+        for _ in range(count):
+            n += 1
+            geo(db_session, f"g{n}", cve_id="CVE-2024-0001", country_code=cc,
+                observed_at=NOW - timedelta(days=days_ago))
+    top = (await get(db_session, "/api/cves/CVE-2024-0001")).json()["geo_top"]
+    assert top == [{"country_code": "US", "events": 3}, {"country_code": "DE", "events": 2},
+                   {"country_code": "FR", "events": 1}]
+    wide = (await get(db_session, "/api/cves/CVE-2024-0001?range=30d")).json()["geo_top"]
+    assert wide[0] == {"country_code": "CN", "events": 9}
+
+
+async def test_detail_exploit_reference_from_poc_event(db_session):
+    cve(db_session, "CVE-2024-0001",
+        references=[{"url": "https://a.test/ref", "tags": ["Vendor"]}])
+    ev(db_session, "CVE-2024-0001", "poc_published", "exploitdb", 5, url="https://edb.test/1")
+    ev(db_session, "CVE-2024-0001", "poc_published", "other", 4, url="https://edb.test/1")
+    ev(db_session, "CVE-2024-0001", "poc_published", "bad", 3, url="javascript:alert(1)")
+    ev(db_session, "CVE-2024-0001", "poc_published", "bad2", 2, url=7)
+    refs = (await get(db_session, "/api/cves/CVE-2024-0001")).json()["references"]
+    assert refs == [{"url": "https://a.test/ref", "tags": ["Vendor"]},
+                    {"url": "https://edb.test/1", "tags": ["Exploit"]}]
+
+
+async def test_detail_invalid_range_422(db_session):
+    cve(db_session, "CVE-2024-0001")
+    assert (await get(db_session, "/api/cves/CVE-2024-0001?range=1y")).status_code == 422
+    assert (await get(db_session, "/api/cves/nope?range=7d")).status_code == 404
+
+
+async def test_detail_updated_at_utc(db_session):
+    cve(db_session, "CVE-2024-0001")
+    body = (await get(db_session, "/api/cves/CVE-2024-0001")).json()
+    assert body["updated_at"].endswith(("Z", "+00:00"))

@@ -75,6 +75,36 @@ class CveReferenceOut(BaseModel):
     tags: list[str]
 
 
+class CveEventOut(BaseModel):
+    kind: str
+    occurred_at: UtcDatetime
+    source: str
+    detail: dict
+
+
+class AffectedVersionOut(BaseModel):
+    product: str
+    vendor: str | None = None
+    ecosystem: str | None = None
+    introduced: str | None = None
+    fixed: str | None = None
+    last_affected: str | None = None
+    source: Literal["OSV", "NVD"]
+
+
+class RelatedCve(BaseModel):
+    cve_id: str
+    cvss: float | None
+    kev: bool
+    epss_percentile: float | None
+    product: str | None
+
+
+class GeoTop(BaseModel):
+    country_code: str
+    events: int
+
+
 class CveDetail(CveItem):
     epss: float | None
     affected: list
@@ -90,6 +120,11 @@ class CveDetail(CveItem):
     last_modified: UtcDatetime | None
     stories: list[StoryRef]
     geo_events: list[GeoEventOut]
+    events: list[CveEventOut]
+    affected_versions: list[AffectedVersionOut]
+    related: list[RelatedCve]
+    geo_top: list[GeoTop]
+    updated_at: UtcDatetime
 
 
 class VelocityPoint(BaseModel):
