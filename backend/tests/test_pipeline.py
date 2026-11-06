@@ -1,18 +1,21 @@
-from datetime import datetime, timedelta, timezone
+import logging
+from datetime import UTC, datetime, timedelta
+from datetime import date as _date
 
 import psycopg.errors
 import pytest
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 from sqlalchemy.exc import IntegrityError
 
 from cvenom import pipeline
 from cvenom.collectors.base import CollectorResult
-from cvenom.models import Cve, Story, StoryCveLink
+from cvenom.collectors.seenstate import track_new
+from cvenom.models import AlertEvent, Cve, Story, StoryCveLink
 from cvenom.pipeline import ingest, lane_views
 from cvenom.schemas import NormalizedCve, NormalizedStory
 from cvenom.scoring import Lane
 
-NOW = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 21, 12, tzinfo=UTC)
 
 
 def _story(url, title, published=NOW, summary="s"):
@@ -26,17 +29,18 @@ def _insert_cve(session, cve_id, **kw):
 
 
 def test_ingest_is_idempotent_and_links_stories(db_session):
-    pub = datetime(2026, 10, 21, tzinfo=timezone.utc)
+    pub = datetime(2026, 10, 21, tzinfo=UTC)
     r = CollectorResult(
         cves=[NormalizedCve(cve_id="CVE-2026-109618", published=pub, cvss=9.2, kev=True)],
         stories=[NormalizedStory(url="https://x/a", source="THN", title="PHP2Shell CVE-2026-109618", summary="rce", published=pub)])
-    ingest(db_session, r); ingest(db_session, r)  # twice
+    ingest(db_session, r)
+    ingest(db_session, r)  # twice
     assert db_session.query(Story).count() == 1
     assert db_session.query(StoryCveLink).count() == 1
 
 
 def test_lane_views_place_kev_in_exploited(db_session):
-    now = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 21, 12, tzinfo=UTC)
     ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-109618", published=now, cvss=9.2, kev=True, kev_added=now.date())]))
     views = lane_views(db_session, now)
     assert any(v.cve_id == "CVE-2026-109618" for v in views[Lane.EXPLOITED])
@@ -263,9 +267,6 @@ def test_exact_boundaries_consistent_between_sql_and_scoring(db_session):
 
 # --- KEV overlap across CISA and VulnCheck (#1) ---
 
-from datetime import date as _date
-
-
 def _kev_result(cve_id, source, added):
     return CollectorResult(
         cves=[NormalizedCve(cve_id=cve_id, kev=True, kev_source=source, kev_added=added)],
@@ -299,7 +300,7 @@ def test_kev_overlap_one_event_stable_source_earliest_date(db_session, first, se
 
 def test_reingest_already_kev_cve_emits_nothing(db_session):
     _insert_cve(db_session, "CVE-2026-7002", kev=True, kev_source="cisa",
-                kev_alerted_at=datetime.now(timezone.utc))
+                kev_alerted_at=datetime.now(UTC))
     res = _kev_result("CVE-2026-7002", "cisa", _date(2026, 11, 3))
     assert ingest(db_session, res) == []
 
@@ -389,13 +390,6 @@ def test_empty_affected_entries_filtered_after_sanitizing(db_session, enrich):
 
 
 # ---- CISA listing alerts when no KEV alert was ever sent (kev_alerted_at)
-
-import logging
-from datetime import UTC
-from sqlalchemy import select
-from cvenom.collectors.seenstate import track_new
-from cvenom.models import AlertEvent
-
 
 def _kev_events(db_session, cid):
     return db_session.scalars(

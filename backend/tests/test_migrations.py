@@ -4,7 +4,6 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
-
 from tests.conftest import TEST_DATABASE_URL  # noqa: F401  (rootdir import)
 
 SCRATCH = "cvenom_mig_test"

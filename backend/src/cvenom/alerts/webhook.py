@@ -9,7 +9,7 @@ import ipaddress
 import json
 import socket
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 import httpx
@@ -213,7 +213,7 @@ class WebhookSink:
             target = validate_url(url)  # re-validate now: defeats DNS rebinding
         except UnsafeWebhookURL:
             raise SinkError("webhook target rejected") from None
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         body = _build_body(cve, rule, now, test=getattr(delivery, "is_test", False))
         status: list[int] = []  # set by _post as soon as the response headers arrive
         try:

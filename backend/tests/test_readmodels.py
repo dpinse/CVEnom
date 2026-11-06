@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import event, text
@@ -6,7 +6,7 @@ from sqlalchemy import event, text
 from cvenom.models import Cve, GeoEvent, Story, StoryCveLink
 from cvenom.readmodels import cve_velocity, geo_summary, loud_stories
 
-NOW = datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 5, 12, 0, tzinfo=UTC)
 
 
 def _cve(session, cid, published):
@@ -52,16 +52,16 @@ def test_velocity_short_window_never_rising(db_session):
 
 
 def test_velocity_utc_day_boundary(db_session):
-    _cve(db_session, "CVE-2026-1", datetime(2026, 11, 4, 23, 30, tzinfo=timezone.utc))
-    _cve(db_session, "CVE-2026-2", datetime(2026, 11, 5, 0, 30, tzinfo=timezone.utc))
+    _cve(db_session, "CVE-2026-1", datetime(2026, 11, 4, 23, 30, tzinfo=UTC))
+    _cve(db_session, "CVE-2026-2", datetime(2026, 11, 5, 0, 30, tzinfo=UTC))
     db_session.flush()
     r = cve_velocity(db_session, NOW, days=3)
     assert [s["count"] for s in r["series"]] == [0, 1, 1]
 
 
 def test_velocity_independent_of_session_timezone(db_session):
-    _cve(db_session, "CVE-2026-1", datetime(2026, 11, 4, 23, 30, tzinfo=timezone.utc))
-    _cve(db_session, "CVE-2026-2", datetime(2026, 11, 5, 0, 30, tzinfo=timezone.utc))
+    _cve(db_session, "CVE-2026-1", datetime(2026, 11, 4, 23, 30, tzinfo=UTC))
+    _cve(db_session, "CVE-2026-2", datetime(2026, 11, 5, 0, 30, tzinfo=UTC))
     db_session.flush()
     db_session.execute(text("SET LOCAL TIME ZONE 'America/New_York'"))
     r = cve_velocity(db_session, NOW, days=3)

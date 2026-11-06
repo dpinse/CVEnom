@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from sqlalchemy import select
@@ -87,7 +87,7 @@ def test_success_commits_events_with_state(db_session, txn_factory, fake_registr
 
 def test_ingest_raises_commits_nothing(db_session, txn_factory, fake_registry, monkeypatch):
     fake_registry(make_events_fake([{"type": "x"}]))
-    prior = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    prior = datetime(2020, 1, 1, tzinfo=UTC)
     db_session.add(CollectorRun(collector="fake_ob", last_run=prior, state={"k": 1}))
     db_session.flush()
 
@@ -105,7 +105,7 @@ def test_ingest_raises_commits_nothing(db_session, txn_factory, fake_registry, m
 def test_failure_after_persist_before_commit_rolls_back(db_session, txn_factory, fake_registry,
                                                         monkeypatch):
     fake_registry(make_events_fake([{"type": "x", "cve_id": "CVE-2099-0001"}]))
-    prior = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    prior = datetime(2020, 1, 1, tzinfo=UTC)
     db_session.add(CollectorRun(collector="fake_ob", last_run=prior, state={"k": 1}))
     db_session.flush()
     persisted = []
@@ -193,7 +193,7 @@ def test_invalid_events_skipped_with_warning(db_session, caplog):
 def test_payload_json_safe(db_session):
     persist_events(db_session, [{
         "type": "t",
-        "when": datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        "when": datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
         "day": date(2026, 1, 2),
         "nested": {"d": date(2026, 1, 3), "l": [datetime(2026, 1, 4)]},
         "nul": "a\x00b",

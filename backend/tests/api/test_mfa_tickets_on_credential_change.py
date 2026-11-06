@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 import fakeredis
 import httpx
 import pytest
+from mfa_helpers import code_for, enroll_user
 from sqlalchemy import select
 
 from cvenom.api import create_app
@@ -16,7 +17,6 @@ from cvenom.auth.passwords import hash_password
 from cvenom.auth.tokens import create_session, issue_access
 from cvenom.config import get_settings
 from cvenom.models import MfaTicket, User
-from mfa_helpers import code_for, enroll_user
 
 PW = "correct horse battery"
 NEW_PW = "another long passphrase"

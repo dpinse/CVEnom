@@ -1,3 +1,5 @@
+from datetime import UTC
+
 import pytest
 from pydantic import ValidationError
 
@@ -45,11 +47,11 @@ def test_cve_id_rejects_invalid(bad):
 
 
 def test_story_url_rejects_non_http_schemes():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from cvenom.schemas import NormalizedStory
 
-    now = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 4, tzinfo=UTC)
     for bad in ["javascript:alert(1)", "data:text/html,x", "ftp://x/y", "//evil", ""]:
         with pytest.raises(ValidationError):
             NormalizedStory(url=bad, source="s", title="t", summary="s", published=now)
@@ -57,11 +59,11 @@ def test_story_url_rejects_non_http_schemes():
 
 
 def test_story_url_accepts_uppercase_scheme_rejects_whitespace_and_control():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from cvenom.schemas import NormalizedStory
 
-    now = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 4, tzinfo=UTC)
     ok = NormalizedStory(url="HTTPS://x.org/a", source="s", title="t", summary="s", published=now)
     assert ok.url == "HTTPS://x.org/a"
     for bad in ["https://x.org/a b", "https://x.org/a\nb", "https://x.org/\x00", "https://x.org/a\tb"]:
@@ -70,11 +72,11 @@ def test_story_url_accepts_uppercase_scheme_rejects_whitespace_and_control():
 
 
 def test_geo_event_validates_country_and_magnitude():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from cvenom.schemas import NormalizedGeoEvent
 
-    now = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 4, tzinfo=UTC)
     ev = NormalizedGeoEvent(source="x", external_id="1", kind="scan", country_code="us", observed_at=now)
     assert ev.country_code == "US"
     for bad in [dict(country_code="USA"), dict(magnitude=float("nan")), dict(magnitude=-1), dict(kind="other")]:
@@ -89,7 +91,7 @@ def test_geo_event_naive_observed_at_is_utc_and_others_normalized():
 
     base = dict(source="x", external_id="1", kind="scan")
     ev = NormalizedGeoEvent(**base, observed_at=datetime(2026, 11, 4, 12))
-    assert ev.observed_at == datetime(2026, 11, 4, 12, tzinfo=timezone.utc)
+    assert ev.observed_at == datetime(2026, 11, 4, 12, tzinfo=UTC)
     assert ev.observed_at.utcoffset() == timedelta(0)
     tz = timezone(timedelta(hours=2))
     ev = NormalizedGeoEvent(**base, observed_at=datetime(2026, 11, 4, 12, tzinfo=tz))
@@ -98,11 +100,11 @@ def test_geo_event_naive_observed_at_is_utc_and_others_normalized():
 
 
 def test_geo_event_rejects_bad_cve_story_url_and_asn():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from cvenom.schemas import NormalizedGeoEvent
 
-    now = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 4, tzinfo=UTC)
     base = dict(source="x", external_id="1", kind="scan", observed_at=now)
     assert NormalizedGeoEvent(**base, cve_id=" cve-2024-1234 ").cve_id == "CVE-2024-1234"
     for bad in [dict(cve_id="CVE-bad"), dict(story_url="javascript:alert(1)"), dict(asn=-1)]:
@@ -111,30 +113,30 @@ def test_geo_event_rejects_bad_cve_story_url_and_asn():
 
 
 def _story(**kw):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from cvenom.schemas import NormalizedStory
 
     base = dict(url="https://example.com/a", source="s", title="t", summary="x",
-                published=datetime(2026, 11, 1, tzinfo=timezone.utc))
+                published=datetime(2026, 11, 1, tzinfo=UTC))
     return NormalizedStory(**{**base, **kw})
 
 
 def _geo(**kw):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from cvenom.schemas import NormalizedGeoEvent
 
     base = dict(source="x", external_id="1", kind="scan",
-                observed_at=datetime(2026, 11, 1, tzinfo=timezone.utc))
+                observed_at=datetime(2026, 11, 1, tzinfo=UTC))
     return NormalizedGeoEvent(**{**base, **kw})
 
 
 @pytest.mark.parametrize("year", [1969, 2101])
 def test_story_and_geo_reject_years_outside_1970_2100(year):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    dt = datetime(year, 6, 1, tzinfo=timezone.utc)
+    dt = datetime(year, 6, 1, tzinfo=UTC)
     with pytest.raises(ValidationError):
         _story(published=dt)
     with pytest.raises(ValidationError):
@@ -142,9 +144,9 @@ def test_story_and_geo_reject_years_outside_1970_2100(year):
 
 
 def test_future_dates_clamped_to_now_but_small_skew_kept():
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for make, field in ((_story, "published"), (_geo, "observed_at")):
         far = getattr(make(**{field: now + timedelta(days=1)}), field)
         assert abs(far - now) < timedelta(minutes=1)
@@ -405,13 +407,13 @@ def test_non_string_cvss_vector_is_none(bad):
 
 
 def test_last_modified_bounded():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     naive = datetime(2026, 10, 1, 12)
     c = NormalizedCve(cve_id="CVE-2026-1001", last_modified=naive)
-    assert c.last_modified == naive.replace(tzinfo=timezone.utc)
+    assert c.last_modified == naive.replace(tzinfo=UTC)
     with pytest.raises(ValidationError):
-        NormalizedCve(cve_id="CVE-2026-1001", last_modified=datetime(1900, 1, 1, tzinfo=timezone.utc))
+        NormalizedCve(cve_id="CVE-2026-1001", last_modified=datetime(1900, 1, 1, tzinfo=UTC))
 
 
 def test_story_details_defaults_to_empty_dict():

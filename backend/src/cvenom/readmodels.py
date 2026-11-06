@@ -1,6 +1,6 @@
 """Read models backing the API: CVE velocity, geo summary, loud stories."""
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import func, or_, select
 
@@ -10,16 +10,16 @@ from cvenom.models import Cve, GeoEvent, Story, StoryCveLink
 
 def _utc(now: datetime) -> datetime:
     if now.tzinfo is None:
-        return now.replace(tzinfo=timezone.utc)
-    return now.astimezone(timezone.utc)
+        return now.replace(tzinfo=UTC)
+    return now.astimezone(UTC)
 
 
 def cve_velocity(session, now: datetime, *, days: int) -> dict:
     now = _utc(now)
     today = now.date()
     first = today - timedelta(days=days - 1)
-    start = datetime.combine(first, time.min, tzinfo=timezone.utc)
-    end = datetime.combine(today + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    start = datetime.combine(first, time.min, tzinfo=UTC)
+    end = datetime.combine(today + timedelta(days=1), time.min, tzinfo=UTC)
 
     day_col = func.date(func.timezone("UTC", Cve.published)).label("day")
     rows = session.execute(
@@ -112,7 +112,7 @@ def country_activity(
     first = end - timedelta(hours=window_hours - 1)
     bucket = func.date_trunc("hour", func.timezone("UTC", GeoEvent.observed_at))
     per_bucket = {
-        r[0].replace(tzinfo=timezone.utc): int(r[1])
+        r[0].replace(tzinfo=UTC): int(r[1])
         for r in session.execute(
             select(bucket, func.count())
             .where(

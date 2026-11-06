@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from cvenom.collectors.base import CollectorResult
 
@@ -22,6 +22,6 @@ def what_changed(result: CollectorResult) -> list[str]:
 
 
 def publish(redis_client, what: list[str], *, now: datetime | None = None) -> None:
-    now = now if now is not None else datetime.now(timezone.utc)
-    payload = {"type": "updated", "what": sorted(set(what)), "at": now.astimezone(timezone.utc).isoformat()}
+    now = now if now is not None else datetime.now(UTC)
+    payload = {"type": "updated", "what": sorted(set(what)), "at": now.astimezone(UTC).isoformat()}
     redis_client.publish(CHANNEL, json.dumps(payload))

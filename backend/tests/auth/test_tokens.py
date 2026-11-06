@@ -4,7 +4,7 @@ import hmac
 import json
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
@@ -27,7 +27,7 @@ from cvenom.auth.tokens import (
 from cvenom.config import get_settings
 from cvenom.models import SigningKey, User, UserSession
 
-NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)

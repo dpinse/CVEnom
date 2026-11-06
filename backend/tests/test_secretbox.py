@@ -31,7 +31,7 @@ def test_secretbox_roundtrip_and_tamper(monkeypatch):
     assert secretbox.decrypt(tok) == b"hook-secret"
     assert secretbox.encrypt(b"x") != secretbox.encrypt(b"x")  # random nonce
     bad = tok[:-4] + ("A" if tok[-4] != "A" else "B") + tok[-3:]
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         secretbox.decrypt(bad)  # GCM tag check
 
 
@@ -54,7 +54,7 @@ def test_decrypt_with_other_key_fails(monkeypatch):
     tok = secretbox.encrypt(b"a")
     _set_key(monkeypatch)
     get_settings.cache_clear()
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         secretbox.decrypt(tok)
 
 

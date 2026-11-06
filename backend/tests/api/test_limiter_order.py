@@ -11,9 +11,7 @@ import httpx
 import pytest
 from fastapi.routing import APIRoute
 
-from cvenom.api import create_app
-from cvenom.api import deps
-from cvenom.api import routes_auth
+from cvenom.api import create_app, deps, routes_auth
 from cvenom.config import get_settings
 
 
@@ -140,7 +138,7 @@ def test_task15_routes_exist_and_limit_before_auth(db_session):
 
 def test_alert_test_route_has_its_own_limiter_scope(db_session):
     app = make_app(db_session, api_docs=False)
-    for path, methods, dependant in _http_routes(app):
+    for path, _methods, dependant in _http_routes(app):
         if path == "/api/alerts/rules/{rule_id}/test":
             scopes = [c.cvenom_rate_limit_scope for c in _execution_order(dependant)
                       if _is_limiter(c)]

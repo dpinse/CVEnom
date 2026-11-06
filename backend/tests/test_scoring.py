@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 
 def _cfg():
@@ -6,11 +6,11 @@ def _cfg():
     return Settings(database_url="postgresql://x", redis_url="redis://y")
 
 
-NOW = datetime(2026, 10, 26, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 26, 12, tzinfo=UTC)
 
 
 def test_kev_item_is_exploited_and_outranks_quiet_foil():
-    from cvenom.scoring import CveView, Lane, lanes_for_cve, heat_rank
+    from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve
     cfg = _cfg()
     php = CveView("CVE-2026-109618", NOW - timedelta(hours=5), 9.2, 0.99, True, kev_added=NOW.date())
     foil = CveView("CVE-2026-115560", NOW - timedelta(hours=5), 9.0, 0.30, False)
@@ -87,10 +87,11 @@ def test_utc_normalization_tz_aware_and_naive():
 
 
 def test_exploited_window_boundary():
-    from cvenom.scoring import CveView, Lane, lanes_for_cve
     from datetime import date
+
+    from cvenom.scoring import CveView, Lane, lanes_for_cve
     cfg = _cfg()
-    now = datetime(2026, 11, 5, 23, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 5, 23, 30, tzinfo=UTC)
     edge = CveView("a", None, None, None, True, kev_added=date(2026, 10, 6))
     past = CveView("b", None, None, None, True, kev_added=date(2026, 10, 5))
     assert Lane.EXPLOITED in lanes_for_cve(edge, now, cfg)
@@ -117,6 +118,7 @@ def test_likely_requires_publish_within_window():
 
 def test_exploited_window_uses_utc_date_for_non_utc_now():
     from datetime import date
+
     from cvenom.scoring import CveView, Lane, lanes_for_cve
     cfg = _cfg()
     now = datetime(2026, 11, 5, 23, 30, tzinfo=timezone(timedelta(hours=-5)))  # 2026-11-06T04:30Z

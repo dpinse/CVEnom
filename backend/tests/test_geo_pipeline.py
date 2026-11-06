@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -8,7 +8,7 @@ from cvenom.models import GeoEvent
 from cvenom.pipeline import ingest, purge_old_geo_events
 from cvenom.schemas import NormalizedGeoEvent
 
-NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 3, 12, 0, tzinfo=UTC)
 
 
 def ev(external_id="e1", **kw):

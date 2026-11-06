@@ -1,4 +1,3 @@
-from pydantic import SecretStr
 import logging
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
@@ -6,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 import respx
+from pydantic import SecretStr
 
 from cvenom.collectors import base, vulncheck
 from cvenom.collectors.vulncheck import VULNCHECK_URL, VulnCheckCollector

@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from cvenom.models import Story
 from cvenom.textutil import content_hash, find_existing_story, sanitize_text
@@ -92,7 +92,7 @@ def _story(url: str, digest: str) -> Story:
         source="test",
         title="t",
         summary="s",
-        published=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        published=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 

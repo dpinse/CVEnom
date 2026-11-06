@@ -1,12 +1,11 @@
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from cvenom.collectors.base import REGISTRY, Collector, CollectorResult
-from cvenom.models import Cve, CollectorRun
+from cvenom.models import CollectorRun, Cve
 from cvenom.schemas import NormalizedCve
-
 
 ALL_COLLECTORS = {
     "nvd", "epss", "cisa_kev", "vulncheck_kev", "osv", "news_krebs", "news_thn",
@@ -97,10 +96,11 @@ def _seed_geo(db_session, now):
 
 
 def test_purge_geo_job_deletes_only_old(db_session, factory, monkeypatch):
-    import cvenom.tasks as tasks
     from sqlalchemy import select
+
+    import cvenom.tasks as tasks
     from cvenom.models import GeoEvent
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 1, tzinfo=UTC)
     _seed_geo(db_session, now)
     monkeypatch.setattr(tasks, "get_settings", lambda: type("S", (), {"geo_retention_days": 150})())
     lock = FakeLock()
@@ -198,9 +198,9 @@ def test_run_collector_success(db_session, factory, fake_registry):
     from cvenom.tasks import run_collector
     fake_registry(make_fake())
     lock = FakeLock()
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     out = run_collector("fake_t", session_factory=factory, lock=lock)
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
     assert out["ok"] and not out["skipped"] and out["cves"] == 1
     assert out["events"] == [{"type": "x"}]
     row = db_session.get(CollectorRun, "fake_t")
@@ -213,7 +213,7 @@ def test_run_collector_success(db_session, factory, fake_registry):
 def test_run_collector_failure_does_not_advance(db_session, factory, fake_registry):
     from cvenom.tasks import run_collector
     fake_registry(make_fake(fail=True))
-    prior = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    prior = datetime(2020, 1, 1, tzinfo=UTC)
     db_session.add(CollectorRun(collector="fake_t", last_run=prior, state={"k": 1}))
     db_session.flush()
     lock = FakeLock()
@@ -240,10 +240,10 @@ def test_run_collector_passes_since_and_state(db_session, factory, fake_registry
     from cvenom.tasks import run_collector
     seen = []
     fake_registry(make_fake(seen=seen))
-    prior = datetime(2021, 5, 5, tzinfo=timezone.utc)
+    prior = datetime(2021, 5, 5, tzinfo=UTC)
     db_session.add(CollectorRun(collector="fake_t", last_run=prior, state={"k": 1}))
     db_session.flush()
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     run_collector("fake_t", session_factory=factory, lock=FakeLock())
     # The window overlaps the previous one by WINDOW_OVERLAP (upserts are idempotent).
     assert seen == [(prior - timedelta(hours=1), {"k": 1})]
@@ -262,6 +262,7 @@ def test_window_overlap_constant_and_first_run_since_is_none(db_session, factory
 
 def test_run_collector_passes_cve_count_to_enrich_only_state(db_session, factory, fake_registry):
     from sqlalchemy import func, select
+
     from cvenom.tasks import run_collector
     seen = []
     fake_registry(make_fake(enrich=True, seen=seen))
@@ -367,6 +368,7 @@ def test_celery_config():
 
 def test_row_loaded_with_for_update(db_session, factory, fake_registry):
     from sqlalchemy import event
+
     from cvenom.tasks import run_collector
     fake_registry(make_fake())
     stmts = []
@@ -387,7 +389,7 @@ def test_row_loaded_with_for_update(db_session, factory, fake_registry):
 def test_ingest_failure_rolls_back_and_releases_lock(db_session, fake_registry, monkeypatch):
     import cvenom.tasks as tasks
     fake_registry(make_fake())
-    prior = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    prior = datetime(2020, 1, 1, tzinfo=UTC)
     db_session.add(CollectorRun(collector="fake_t", last_run=prior, state={"k": 1}))
     db_session.flush()
 
@@ -443,6 +445,7 @@ def test_ingest_failure_creates_no_run_row(db_session, fake_registry, monkeypatc
 
 def test_default_redis_client_is_shared_module_level_and_lazy(monkeypatch):
     import redis
+
     from cvenom import tasks
 
     created = []
@@ -597,13 +600,13 @@ def test_bootstrap_collectors_registered_on_worker_ready():
 
 
 def test_bootstrap_collectors_queues_only_stale(monkeypatch):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from cvenom import tasks
 
     names = sorted(tasks.REGISTRY)
     stale, fresh = names[0], names[1]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     last_runs = {
         stale: now - timedelta(seconds=tasks.REGISTRY[stale].cadence_seconds + 60),
         fresh: now - timedelta(seconds=tasks.REGISTRY[fresh].cadence_seconds // 2),
@@ -662,11 +665,11 @@ def test_bootstrap_collectors_db_error_queues_nothing(monkeypatch, caplog):
 
 def test_collector_last_runs_reads_all_rows(monkeypatch, db_session):
     from contextlib import contextmanager
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from cvenom import tasks
 
-    ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ts = datetime(2026, 1, 1, tzinfo=UTC)
     db_session.add_all([CollectorRun(collector="fake_a", last_run=ts, state={}),
                         CollectorRun(collector="fake_b", last_run=None, state={})])
     db_session.flush()
@@ -706,6 +709,7 @@ def test_worker_process_init_handler_never_raises(monkeypatch):
 
 def test_alerts_dispatch_and_purge_sessions_scheduled():
     from celery.schedules import crontab
+
     from cvenom.tasks import alerts_dispatch_task, beat_schedule, celery_app, purge_sessions_task
     assert beat_schedule["alerts-dispatch"] == {"task": alerts_dispatch_task.name, "schedule": 60.0,
                                                 "options": {"expires": 55}}
@@ -717,7 +721,7 @@ def test_alerts_dispatch_and_purge_sessions_scheduled():
 def test_alerts_dispatch_job_runs_with_lock(db_session, factory):
     import cvenom.tasks as tasks
     lock = FakeLock()
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 1, tzinfo=UTC)
     out = tasks.alerts_dispatch_job(lock=lock, session_factory=factory, sinks={}, now=now)
     assert out["ok"] is True and out["events"] == 0
     assert lock.acquired == [("alerts-dispatch", 120)]
@@ -754,10 +758,12 @@ def test_alerts_dispatch_job_defaults_to_build_sinks(factory, monkeypatch):
 
 def test_purge_sessions_job_deletes_old_expired_and_revoked(db_session, factory):
     import uuid
-    import cvenom.tasks as tasks
+
     from sqlalchemy import select
+
+    import cvenom.tasks as tasks
     from cvenom.models import User, UserSession, UserSessionUsedRefresh
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 1, tzinfo=UTC)
     u = User(email="p@x.io", password_hash="h", role="member")
     db_session.add(u)
     db_session.flush()
@@ -803,7 +809,7 @@ def test_purge_sessions_job_release_failure_swallowed(factory):
             raise RuntimeError("redis down")
 
     out = tasks.purge_sessions_job(lock=BadRelease(), session_factory=factory,
-                                   now=datetime(2026, 6, 1, tzinfo=timezone.utc))
+                                   now=datetime(2026, 6, 1, tzinfo=UTC))
     assert out["ok"] is True
 
 
@@ -898,7 +904,7 @@ def test_worker_ready_checks_secrets_key_and_only_logs(monkeypatch, caplog):
 # ------------------------------------------------------- M-j: retention
 
 
-PURGE_NOW = datetime(2026, 6, 1, tzinfo=timezone.utc)
+PURGE_NOW = datetime(2026, 6, 1, tzinfo=UTC)
 
 
 def _purge(factory):
@@ -909,6 +915,7 @@ def _purge(factory):
 
 def test_purge_invites(db_session, factory):
     from sqlalchemy import select
+
     from cvenom.models import Invite
 
     def mk(tag, expires, used=None):
@@ -930,6 +937,7 @@ def test_purge_invites(db_session, factory):
 
 def test_purge_signing_keys_past_grace(db_session, factory):
     from sqlalchemy import select
+
     from cvenom.config import get_settings
     from cvenom.models import SigningKey
 
@@ -964,6 +972,7 @@ def _alert_fixture(db_session):
 
 def test_purge_alert_events(db_session, factory):
     from sqlalchemy import select
+
     from cvenom.models import AlertDelivery, AlertEvent
 
     rule, rec = _alert_fixture(db_session)
@@ -996,6 +1005,7 @@ def test_purge_alert_events(db_session, factory):
 
 def test_purge_alert_deliveries(db_session, factory):
     from sqlalchemy import select
+
     from cvenom.models import AlertDelivery, AlertEvent
 
     rule, rec = _alert_fixture(db_session)

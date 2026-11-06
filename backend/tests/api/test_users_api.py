@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import fakeredis
 import httpx
 import pytest
+from mfa_helpers import full_login
 from sqlalchemy import event, select
 
 from cvenom.api import create_app
@@ -22,7 +23,6 @@ from cvenom.auth.users import (
 )
 from cvenom.config import get_settings
 from cvenom.models import Invite, User
-from mfa_helpers import full_login
 
 PW = "correct horse battery"
 NEW_PW = "another long passphrase"

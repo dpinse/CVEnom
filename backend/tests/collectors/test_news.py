@@ -247,13 +247,13 @@ def test_malformed_entry_object_is_skipped(monkeypatch):
 
 def test_out_of_range_dates_fall_back_to_now_and_do_not_fail():
     xml = (
-        '<rss version="2.0"><channel><title>t</title>'
-        "<item><title>a</title><link>https://a.test/a</link>"
-        "<pubDate>Fri, 31 Dec 9999 23:59:59 GMT</pubDate></item>"
-        "<item><title>b</title><link>https://a.test/b</link>"
-        "<pubDate>Mon, 01 Jan 0001 00:00:00 GMT</pubDate></item>"
-        "</channel></rss>"
-    ).encode()
+        b'<rss version="2.0"><channel><title>t</title>'
+        b"<item><title>a</title><link>https://a.test/a</link>"
+        b"<pubDate>Fri, 31 Dec 9999 23:59:59 GMT</pubDate></item>"
+        b"<item><title>b</title><link>https://a.test/b</link>"
+        b"<pubDate>Mon, 01 Jan 0001 00:00:00 GMT</pubDate></item>"
+        b"</channel></rss>"
+    )
     before = datetime.now(UTC)
     res = _Feed().normalize(xml)
     after = datetime.now(UTC)

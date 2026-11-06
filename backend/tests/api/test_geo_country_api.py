@@ -1,7 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from tests.api.test_read_api import bearer, client, geo, make_app, mk_user, secrets_key  # noqa: F401
 
 

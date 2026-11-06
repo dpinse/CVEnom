@@ -1,7 +1,7 @@
 import html
 import re
 import unicodedata
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 from urllib.parse import unquote, urlsplit
 
@@ -19,14 +19,14 @@ MAX_FUTURE_SKEW = timedelta(hours=1)
 def bound_datetime(value: datetime) -> datetime:
     """Aware UTC; reject years outside 1970..2100; clamp >1h-future values to now."""
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     try:
-        value = value.astimezone(timezone.utc)
+        value = value.astimezone(UTC)
     except (OverflowError, OSError) as exc:
         raise ValueError("datetime out of range") from exc
     if not MIN_YEAR <= value.year <= MAX_YEAR:
         raise ValueError(f"datetime year {value.year} outside {MIN_YEAR}..{MAX_YEAR}")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return now if value - now > MAX_FUTURE_SKEW else value
 
 

@@ -1,7 +1,7 @@
 import base64
 import os
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, insert, select
@@ -12,7 +12,7 @@ from cvenom.alerts.dispatch import dispatch_once
 from cvenom.alerts.sinks import SinkError, SinkNotConfigured
 from cvenom.models import AlertDelivery, AlertEvent, AlertRecipient, AlertRule, Cve
 
-NOW = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 CVE = "CVE-2099-0001"
 
 

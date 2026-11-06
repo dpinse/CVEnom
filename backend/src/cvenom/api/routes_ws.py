@@ -18,7 +18,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import partial
 from urllib.parse import urlsplit
 
@@ -194,7 +194,7 @@ async def _authenticate(ws: WebSocket) -> int | None:
     """Return the token's exp on success, None on any failure."""
     try:
         msg = await asyncio.wait_for(ws.receive(), timeout=WS_AUTH_TIMEOUT_S)
-    except (asyncio.TimeoutError, WebSocketDisconnect, RuntimeError):
+    except (TimeoutError, WebSocketDisconnect, RuntimeError):
         return None
     text = msg.get("text")
     if msg.get("type") != "websocket.receive" or text is None or _msg_size(msg) > WS_AUTH_MAX_BYTES:
@@ -205,7 +205,7 @@ async def _authenticate(ws: WebSocket) -> int | None:
         return None
     if not isinstance(data, dict) or data.get("type") != "auth" or not isinstance(data.get("token"), str):
         return None
-    return await run_in_threadpool(_check_token_sync, ws.app, data["token"], datetime.now(timezone.utc))
+    return await run_in_threadpool(_check_token_sync, ws.app, data["token"], datetime.now(UTC))
 
 
 async def _heartbeat(redis, key: str, member: str) -> None:
@@ -230,7 +230,7 @@ async def _relay(ws: WebSocket, q: asyncio.Queue, redis, key: str, member: str |
             continue
         try:
             data = await asyncio.wait_for(q.get(), timeout=remaining)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             continue
         await ws.send_text(data)
 

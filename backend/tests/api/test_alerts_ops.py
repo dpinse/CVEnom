@@ -18,7 +18,11 @@ from cvenom.auth.passwords import hash_password
 from cvenom.auth.tokens import create_session, issue_access
 from cvenom.config import get_settings
 from cvenom.models import (
-    AlertDelivery, AlertEvent, AlertRecipient, AlertRule, User,
+    AlertDelivery,
+    AlertEvent,
+    AlertRecipient,
+    AlertRule,
+    User,
 )
 
 HOOK_URL = "https://hooks.example.com/services/T000/SECRETPATHXYZ"

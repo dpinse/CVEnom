@@ -15,7 +15,11 @@ from sqlalchemy.dialects.postgresql import insert
 from cvenom import secretbox
 from cvenom.alerts.sinks import Sink, SinkError, SinkNotConfigured
 from cvenom.models import (
-    AlertDelivery, AlertEvent, AlertRecipient, AlertRule, Cve,
+    AlertDelivery,
+    AlertEvent,
+    AlertRecipient,
+    AlertRule,
+    Cve,
 )
 
 log = logging.getLogger(__name__)

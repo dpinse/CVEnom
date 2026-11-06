@@ -12,7 +12,7 @@ import re
 import tarfile
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -179,7 +179,7 @@ async def _fetch_maxmind(edition: str, account: str, key: str) -> bytes:
 
 async def refresh_geoip(dir, settings: Settings, *, now: datetime | None = None) -> str:
     """Download fresh databases into dir. Existing files are replaced only on full success."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     directory = Path(dir)
     directory.mkdir(parents=True, exist_ok=True)
 

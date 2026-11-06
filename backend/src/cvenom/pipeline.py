@@ -6,7 +6,7 @@
 import logging
 import math
 from collections.abc import Callable, Iterable
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -218,7 +218,7 @@ def _upsert_geo_events(session: Session, events: list[NormalizedGeoEvent]) -> No
 
 def purge_old_geo_events(session: Session, now: datetime, *, days: int) -> int:
     """Delete geo events observed before ``now - days``; returns the row count. No commit."""
-    now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
+    now = now.replace(tzinfo=UTC) if now.tzinfo is None else now.astimezone(UTC)
     cutoff = now - timedelta(days=days)
     return session.execute(delete(GeoEvent).where(GeoEvent.observed_at < cutoff)).rowcount
 
@@ -328,7 +328,7 @@ def persist_events(session: Session, events: list[dict], *, source_default: str)
 
 def lane_views(session: Session, now: datetime) -> dict[Lane, list[CveView]]:
     cfg = get_settings()
-    now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
+    now = now.replace(tzinfo=UTC) if now.tzinfo is None else now.astimezone(UTC)
     loud_cutoff = now - timedelta(hours=cfg.loud_window_hours)
     fresh_cutoff = now - timedelta(hours=cfg.fresh_window_hours)
     kev_cutoff_date = now.date() - timedelta(days=cfg.exploited_window_days)

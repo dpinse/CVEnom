@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 import fakeredis
 import httpx
 import pytest
+from mfa_helpers import code_for, enroll_user, full_login
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import select
 
@@ -20,7 +21,6 @@ from cvenom.auth.passwords import hash_password
 from cvenom.auth.users import create_invite
 from cvenom.config import get_settings
 from cvenom.models import MfaRecoveryCode, MfaTicket, User, UserSession
-from mfa_helpers import code_for, enroll_user, full_login
 
 PW = "correct horse battery"
 EMAIL = "u@example.com"

@@ -1,4 +1,3 @@
-from pydantic import SecretStr
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -7,6 +6,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 import respx
+from pydantic import SecretStr
 
 from cvenom.collectors import base, nvd
 from cvenom.collectors.nvd import NVD_URL, NvdCollector

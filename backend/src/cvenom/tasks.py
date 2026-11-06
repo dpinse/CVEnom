@@ -8,7 +8,7 @@ import threading
 import time
 import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -18,17 +18,34 @@ from celery.schedules import crontab
 from celery.signals import worker_process_init, worker_ready
 from sqlalchemy import delete, exists, func, or_, select
 
-from cvenom.collectors import abusech, cfradar, dshield, epss, kev, news, nvd, osv, ransomware, vulncheck  # noqa: F401  (register)
-from cvenom.collectors.base import REGISTRY
-from cvenom.config import get_settings
-from cvenom.db import get_engine, session_scope
 from cvenom import live, secretbox
 from cvenom.alerts.dispatch import dispatch_once
 from cvenom.alerts.sinks import build_sinks
-from cvenom.models import (
-    AlertDelivery, AlertEvent, CollectorRun, Cve, Invite, SigningKey, UserSession,
+from cvenom.collectors import (  # noqa: F401  (register)
+    abusech,
+    cfradar,
+    dshield,
+    epss,
+    kev,
+    news,
+    nvd,
+    osv,
+    ransomware,
+    vulncheck,
 )
+from cvenom.collectors.base import REGISTRY
+from cvenom.config import get_settings
+from cvenom.db import get_engine, session_scope
 from cvenom.geoip import ASN_FILE, COUNTRY_FILE, refresh_geoip
+from cvenom.models import (
+    AlertDelivery,
+    AlertEvent,
+    CollectorRun,
+    Cve,
+    Invite,
+    SigningKey,
+    UserSession,
+)
 from cvenom.pipeline import ingest, persist_events, purge_old_geo_events
 
 log = logging.getLogger(__name__)
@@ -115,7 +132,7 @@ def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLo
         summary["skipped"] = True
         return summary
     try:
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
         # The DB session stays open during the network fetch by design
         # (single-transaction decision).
         with session_factory() as session:
@@ -210,7 +227,7 @@ def purge_geo_job(*, session_factory=session_scope, lock: CollectorLock | None =
         log.info("geo purge already running; skipping")
         return {"skipped": True}
     try:
-        now = now if now is not None else datetime.now(timezone.utc)
+        now = now if now is not None else datetime.now(UTC)
         with session_factory() as session:
             deleted = purge_old_geo_events(session, now, days=get_settings().geo_retention_days)
         return {"ok": True, "deleted": deleted}
@@ -250,7 +267,7 @@ def bootstrap_collectors(*args: Any, **kwargs: Any) -> None:
     except Exception as exc:
         log.warning("collector bootstrap skipped, last_run lookup failed: %s", type(exc).__name__)
         return
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for name, cls in list(REGISTRY.items()):
         last = last_runs.get(name)
         if last is not None and now - last < timedelta(seconds=cls.cadence_seconds):
@@ -303,7 +320,7 @@ def alerts_dispatch_job(*, lock: CollectorLock | None = None, session_factory=se
         log.info("alerts dispatch already running; skipping")
         return {"skipped": True}
     try:
-        now = now if now is not None else datetime.now(timezone.utc)
+        now = now if now is not None else datetime.now(UTC)
         sinks = sinks if sinks is not None else build_sinks()
         return {"ok": True, **dispatch_once(session_factory, now, sinks)}
     except Exception as exc:
@@ -353,7 +370,7 @@ def purge_sessions_job(*, lock: CollectorLock | None = None, session_factory=ses
         log.info("session purge already running; skipping")
         return {"skipped": True}
     try:
-        now = now if now is not None else datetime.now(timezone.utc)
+        now = now if now is not None else datetime.now(UTC)
         with session_factory() as session:
             counts = _purge_rows(session, now)
         return {"ok": True, **counts}

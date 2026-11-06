@@ -1,8 +1,7 @@
 import base64
 import os
-from datetime import UTC, date, datetime, timedelta
-
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 
 import fakeredis
 import httpx
@@ -14,7 +13,6 @@ from cvenom.auth.passwords import hash_password
 from cvenom.auth.tokens import create_session, issue_access
 from cvenom.config import get_settings
 from cvenom.models import Cve, GeoEvent, Story, StoryCveLink, User
-
 
 
 def make_app(db_session, redis=None, **overrides):

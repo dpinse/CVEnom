@@ -3,7 +3,7 @@ import gzip
 import io
 import logging
 import tarfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import maxminddb
 import pytest
@@ -102,7 +102,7 @@ def test_open_country_only(tmp_path, db_bytes):
     assert _lookup(tmp_path, "8.8.8.8") == GeoResult("US", None)
 
 
-NOW = datetime(2026, 11, 5, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 5, tzinfo=UTC)
 DBIP_C = "https://download.db-ip.com/free/dbip-country-lite-{}.mmdb.gz"
 DBIP_A = "https://download.db-ip.com/free/dbip-asn-lite-{}.mmdb.gz"
 
@@ -130,7 +130,7 @@ async def test_dbip_previous_month_fallback(tmp_path, db_bytes):
 
 @respx.mock
 async def test_january_falls_back_to_december(tmp_path, db_bytes):
-    jan = datetime(2026, 1, 3, tzinfo=timezone.utc)
+    jan = datetime(2026, 1, 3, tzinfo=UTC)
     respx.get(DBIP_C.format("2026-01")).respond(404)
     respx.get(DBIP_A.format("2026-01")).respond(404)
     respx.get(DBIP_C.format("2025-12")).respond(200, content=gzip.compress(db_bytes[0]))
@@ -287,7 +287,7 @@ async def test_second_db_failure_keeps_first(geo_dir, db_bytes):
     respx.get(DBIP_C.format("2026-11")).respond(200, content=gzip.compress(db_bytes[0] + b""))
     respx.get(DBIP_A.format("2026-11")).respond(200, content=gzip.compress(b"junk"))
     (geo_dir / "country.mmdb").write_bytes(b"OLD")
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017 - any failure must leave the old files in place
         await refresh_geoip(geo_dir, settings(), now=NOW)
     assert (geo_dir / "country.mmdb").read_bytes() == b"OLD"
     assert sorted(p.name for p in geo_dir.iterdir()) == ["asn.mmdb", "country.mmdb"]

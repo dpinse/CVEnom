@@ -58,6 +58,10 @@ select = ["E", "F", "W", "I", "B", "UP"]
 # E501: lint only, `ruff format` is not adopted; long lines are left to review.
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# DATABASE_URL must be forced to the test database before cvenom (and its settings) is imported.
+"tests/conftest.py" = ["E402"]
+
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection idiom: `x = Depends(...)` defaults are evaluated by design.
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Body"]

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 
@@ -28,7 +28,7 @@ def test_extract_handles_empty_and_none():
 def _story(session, url="https://example.com/a"):
     story = Story(
         url=url, content_hash="h", source="s", title="t", summary="",
-        published=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        published=datetime(2026, 1, 1, tzinfo=UTC),
     )
     session.add(story)
     session.flush()

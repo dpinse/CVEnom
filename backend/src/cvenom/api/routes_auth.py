@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from cvenom.auth.mfa import TICKET_TTL, is_enrolled, issue_ticket
 from cvenom.auth.passwords import MAX_LENGTH, WeakPassword, dummy_verify
 from cvenom.auth.tokens import (
     InvalidToken,
@@ -21,7 +22,6 @@ from cvenom.auth.tokens import (
     issue_access,
     rotate_refresh,
 )
-from cvenom.auth.mfa import TICKET_TTL, is_enrolled, issue_ticket
 from cvenom.auth.users import InvalidInvite, accept_invite, authenticate, create_invite
 from cvenom.models import User, UserSession
 

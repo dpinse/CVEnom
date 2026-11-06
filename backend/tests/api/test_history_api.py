@@ -4,7 +4,6 @@ from datetime import timedelta
 from urllib.parse import quote
 
 import fakeredis
-import pytest
 from test_read_api import (  # noqa: F401  (secrets_key is an autouse fixture)
     NOW,
     bearer,

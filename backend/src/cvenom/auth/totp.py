@@ -22,7 +22,7 @@ DRIFT_STEPS = 1  # accept the previous and the next step (clock drift)
 SECRET_BYTES = 20  # 160 bits, the RFC 4226 recommendation for SHA-1
 
 # ASCII digits only: `\d` and str.isdigit() also accept other Unicode digits.
-_CODE_RE = re.compile(r"[0-9]{%d}" % DIGITS)
+_CODE_RE = re.compile(r"[0-9]{%d}" % DIGITS)  # noqa: UP031 - regex braces make an f-string harder to read
 
 
 def generate_secret() -> bytes:

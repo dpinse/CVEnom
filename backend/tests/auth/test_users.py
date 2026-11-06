@@ -3,7 +3,7 @@ import io
 import subprocess
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -112,7 +112,7 @@ def test_authenticate_rehashes_when_needed(db_session):
     assert u.password_hash != old and verify_password(u.password_hash, GOOD)
 
 
-NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def test_invite_single_use_and_hashed(db_session):

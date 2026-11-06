@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import secrets
+import time
 from typing import Annotated, Literal, NoReturn
 from urllib.parse import urlsplit
-
-import time
 
 import anyio
 import anyio.to_thread
@@ -14,7 +13,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 

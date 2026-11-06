@@ -5,7 +5,6 @@ import pytest
 from cvenom.collectors import base
 from cvenom.collectors.kev import KevCollector
 
-
 TODAY = datetime.now(UTC).date()
 D1, D2, D3 = (TODAY - timedelta(days=n) for n in (3, 2, 1))
 OLD = TODAY - timedelta(days=400)
@@ -163,6 +162,7 @@ def test_truncated_first_baseline_then_full_feed_emits_only_recent():
 
 def test_new_entry_older_than_max_age_is_silent(monkeypatch):
     from types import SimpleNamespace
+
     from cvenom.collectors import kev
 
     monkeypatch.setattr(kev, "get_settings", lambda: SimpleNamespace(kev_alert_max_age_days=1))

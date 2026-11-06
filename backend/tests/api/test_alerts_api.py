@@ -1,6 +1,8 @@
 import base64
 import os
 import socket
+from contextlib import contextmanager
+from datetime import UTC, datetime
 
 import fakeredis
 import httpx
@@ -14,8 +16,6 @@ from cvenom.auth.passwords import hash_password
 from cvenom.auth.tokens import create_session, issue_access
 from cvenom.config import get_settings
 from cvenom.models import AlertRecipient, AlertRule, User
-from contextlib import contextmanager
-from datetime import UTC, datetime
 
 URL = "https://hooks.example.com/services/T000/B000/XXXSECRETPATH?token=querysecret"
 PUBLIC_IP = "93.184.216.34"

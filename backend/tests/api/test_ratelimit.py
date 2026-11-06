@@ -9,13 +9,12 @@ import pytest
 from fastapi import Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from redis.exceptions import ConnectionError as RedisConnectionError
+from test_app import make_user, token_for
 
 from cvenom.api import create_app
 from cvenom.api import ratelimit as rl
 from cvenom.api.ratelimit import RateLimiter, enforce_login_limits, rate_limit
 from cvenom.config import get_settings
-
-from test_app import make_user, token_for
 
 
 @pytest.fixture(autouse=True)

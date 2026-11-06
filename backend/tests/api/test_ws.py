@@ -11,8 +11,7 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from cvenom import live
-from cvenom.api import create_app
-from cvenom.api import routes_ws
+from cvenom.api import create_app, routes_ws
 from cvenom.auth.tokens import create_session, issue_access
 from cvenom.collectors.base import CollectorResult
 from cvenom.config import get_settings
@@ -387,7 +386,7 @@ def test_total_released_when_setup_raises(db_session, server, monkeypatch):
     monkeypatch.setattr(routes_ws, "client_ip", boom)
     app = make_app(db_session, server)
     with TestClient(app) as c:
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 - TestClient surfaces the server error as any type
             with c.websocket_connect("/api/ws/live") as ws:
                 ws.receive_text()
     assert routes_ws._hub(app).total == 0

@@ -265,7 +265,9 @@ def test_nginx_conf_per_uri_csp():
     csp = _csp_map(text)
     assert set(csp) == {"default", "~^/api/"}
     assert csp["~^/api/"] == API_CSP
-    from cvenom.api.middleware import CSP as APP_CSP  # nginx sends the api's own policy, not a looser one
+    from cvenom.api.middleware import (
+        CSP as APP_CSP,  # nginx sends the api's own policy, not a looser one
+    )
 
     assert csp["~^/api/"] == APP_CSP
     spa = csp["default"]

@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
@@ -39,7 +39,7 @@ def _norm(email: str) -> str:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def authenticate(session: Session, email: str, pw: str) -> User | None:

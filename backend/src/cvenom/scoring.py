@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 
 from cvenom.config import Settings
 
 
-class Lane(str, Enum):
+class Lane(str, Enum):  # noqa: UP042 - StrEnum changes str()/format() output (behaviour change)
     EXPLOITED = "EXPLOITED"
     LIKELY = "LIKELY"
     LOUD = "LOUD"
@@ -30,8 +30,8 @@ class CveView:
 
 def _utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def lanes_for_cve(v: CveView, now: datetime, cfg: Settings) -> set[Lane]:
