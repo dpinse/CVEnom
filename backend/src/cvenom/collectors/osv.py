@@ -12,8 +12,8 @@ from cvenom.collectors import base
 from cvenom.collectors.base import (
     Collector,
     CollectorResult,
-    http_get_json,
     ResponseTooLarge,
+    http_get_json,
     http_stream_lines,
     register,
 )

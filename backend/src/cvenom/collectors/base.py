@@ -217,13 +217,15 @@ async def http_stream_lines(
     """GET url and yield its body line by line without buffering the whole body.
 
     Same client settings as _request (no redirects, same user agent/timeout) and the
-    same 429/5xx/transport retry, which applies only until the first byte is read.
+    same 429/5xx/transport retry, which applies only until the first body chunk is read
+    (after that a transport error propagates; the stream is never re-issued).
     The body is never fully held: once more than max_bytes have been read, the
     lines read so far have been yielded and ResponseTooLarge is raised. Callers
     may stop early (use contextlib.aclosing) to avoid reading the rest.
     """
     hdrs = {"User-Agent": USER_AGENT, **(headers or {})}
     attempts = max(retries, 1)
+    started = False
     async with httpx.AsyncClient(timeout=timeout, headers=hdrs, follow_redirects=False) as client:
         for attempt in range(attempts):
             last = attempt == attempts - 1
@@ -239,20 +241,26 @@ async def http_stream_lines(
                     else:
                         resp.raise_for_status()
                         total = 0
-                        pending = b""
+                        parts: list[bytes] = []  # carried partial line, joined lazily
                         async for chunk in resp.aiter_bytes():
+                            started = True
                             total += len(chunk)
-                            pending += chunk
-                            *lines, pending = pending.split(b"\n")
-                            for raw in lines:
-                                yield raw.decode("utf-8", "replace").rstrip("\r")
+                            *lines, tail = chunk.split(b"\n")
+                            if lines:
+                                parts.append(lines[0])
+                                lines[0] = b"".join(parts)
+                                parts = []
+                                for raw in lines:
+                                    yield raw.decode("utf-8", "replace").rstrip("\r")
+                            if tail:
+                                parts.append(tail)
                             if total > max_bytes:
                                 raise ResponseTooLarge(f"stream exceeds budget of {max_bytes} bytes")
-                        if pending:
-                            yield pending.decode("utf-8", "replace").rstrip("\r")
+                        if parts:
+                            yield b"".join(parts).decode("utf-8", "replace").rstrip("\r")
                         return
             except (httpx.TimeoutException, httpx.TransportError):
-                if last:
+                if last or started:  # never re-issue once body bytes were read
                     raise
                 await _sleep(delay)
                 continue

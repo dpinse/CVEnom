@@ -445,3 +445,44 @@ async def test_http_stream_lines_retries_5xx_before_streaming(respx_mock):
         side_effect=[httpx.Response(503), httpx.Response(200, text="ok\n")]
     )
     assert [x async for x in base.http_stream_lines("https://s.test/a")] == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_http_stream_lines_never_retries_after_bytes_read(respx_mock):
+    async def body():
+        yield b"one\ntwo\npart"
+        raise httpx.ReadError("boom")
+
+    route = respx_mock.get("https://s.test/a").mock(
+        return_value=httpx.Response(200, content=body())
+    )
+    got = []
+    with pytest.raises(httpx.ReadError):
+        async for line in base.http_stream_lines("https://s.test/a"):
+            got.append(line)
+    assert route.call_count == 1
+    assert got == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_http_stream_lines_no_newline_body_hits_budget(respx_mock):
+    async def body():
+        for _ in range(50):
+            yield b"x" * 10
+
+    respx_mock.get("https://s.test/a").mock(return_value=httpx.Response(200, content=body()))
+    with pytest.raises(base.ResponseTooLarge):
+        async for _ in base.http_stream_lines("https://s.test/a", max_bytes=100):
+            pytest.fail("no complete line should be yielded")
+
+
+@pytest.mark.asyncio
+async def test_http_stream_lines_joins_lines_split_across_chunks(respx_mock):
+    async def body():
+        yield b"ab"
+        yield b"c\nd"
+        yield b"e\r"
+        yield b"\nf"
+
+    respx_mock.get("https://s.test/a").mock(return_value=httpx.Response(200, content=body()))
+    assert [x async for x in base.http_stream_lines("https://s.test/a")] == ["abc", "de", "f"]
