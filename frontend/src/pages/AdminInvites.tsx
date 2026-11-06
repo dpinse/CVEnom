@@ -25,9 +25,15 @@ export default function AdminInvites() {
   const confirmBtn = useRef<HTMLButtonElement>(null);
   const revokeBtns = useRef(new Map<number, HTMLButtonElement>());
 
-  const invites = useQuery({ queryKey: qk.invites(), queryFn: ({ signal }) => api<InviteOut[]>("/auth/invites", { signal }) });
+  const invites = useQuery({
+    queryKey: qk.invites(),
+    queryFn: ({ signal }) => api<InviteOut[]>("/auth/invites", { signal }),
+  });
   // Only for the "created by" label; the page works without it.
-  const users = useQuery({ queryKey: qk.users(), queryFn: ({ signal }) => api<UserAdmin[]>("/auth/users", { signal }) });
+  const users = useQuery({
+    queryKey: qk.users(),
+    queryFn: ({ signal }) => api<UserAdmin[]>("/auth/users", { signal }),
+  });
   const emailOf = new Map((users.data ?? []).map((u) => [u.id, u.email]));
 
   useEffect(() => {
@@ -102,11 +108,23 @@ export default function AdminInvites() {
         <h2>Invite someone</h2>
         <label className="field">
           <span>Email</span>
-          <input ref={emailRef} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" maxLength={254} spellCheck={false} />
+          <input
+            ref={emailRef}
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="off"
+            maxLength={254}
+            spellCheck={false}
+          />
         </label>
         <label className="field">
           <span>Role</span>
-          <select className="admin-select" value={role} onChange={(e) => setRole(e.target.value === "admin" ? "admin" : "member")}>
+          <select
+            className="admin-select"
+            value={role}
+            onChange={(e) => setRole(e.target.value === "admin" ? "admin" : "member")}
+          >
             <option value="member">Member</option>
             <option value="admin">Admin</option>
           </select>
@@ -153,13 +171,25 @@ export default function AdminInvites() {
                     <td data-label="Purpose">{i.purpose === "reset" ? "Password reset" : "Invite"}</td>
                     <td data-label="Expires">{relTime(i.expires_at, now) || "—"}</td>
                     <td data-label="Created by">
-                      {i.created_by === null ? "—" : emailOf.has(i.created_by) ? <Text value={emailOf.get(i.created_by) ?? ""} /> : `User #${i.created_by}`}
+                      {i.created_by === null ? (
+                        "—"
+                      ) : emailOf.has(i.created_by) ? (
+                        <Text value={emailOf.get(i.created_by) ?? ""} />
+                      ) : (
+                        `User #${i.created_by}`
+                      )}
                     </td>
                     <td>
                       {confirming === i.id ? (
                         <span className="confirm">
                           <span>Revoke this {i.purpose === "reset" ? "reset link" : "invite"}?</span>
-                          <button ref={confirmBtn} type="button" className="btn danger" disabled={revoke.isPending} onClick={() => revoke.mutate(i)}>
+                          <button
+                            ref={confirmBtn}
+                            type="button"
+                            className="btn danger"
+                            disabled={revoke.isPending}
+                            onClick={() => revoke.mutate(i)}
+                          >
                             Confirm revoke
                           </button>
                           <button type="button" className="btn" onClick={() => cancelRevoke(i.id)}>

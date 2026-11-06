@@ -57,7 +57,9 @@ export function OneTimeSecret({
           onFocus={(e) => e.currentTarget.select()}
         />
       </label>
-      {expiry !== null && Number.isFinite(expiry.getTime()) && <p className="form-hint">Expires {expiry.toLocaleString()}</p>}
+      {expiry !== null && Number.isFinite(expiry.getTime()) && (
+        <p className="form-hint">Expires {expiry.toLocaleString()}</p>
+      )}
       <div className="secret-actions">
         <button type="button" className="btn" onClick={() => void copy()}>
           Copy

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { cspFor } from "../../e2e/nginxHeaders.ts";
 
 const root = resolve(__dirname, "../..");
 const read = (f: string) => readFileSync(join(root, f), "utf8");
@@ -8,8 +9,15 @@ const read = (f: string) => readFileSync(join(root, f), "utf8");
 /** The nginx.conf is the single source of the response headers; the CSP e2e parses the same lines. */
 describe("nginx.conf", () => {
   const conf = existsSync(join(root, "nginx.conf")) ? read("nginx.conf") : "";
-  const csp = /add_header Content-Security-Policy "([^"]+)" always;/.exec(conf)?.[1] ?? "";
-  const directives = new Map(csp.split(";").map((d) => d.trim()).filter(Boolean).map((d) => [d.split(" ")[0], d] as const));
+  const API_CSP = "default-src 'none'; frame-ancestors 'none'";
+  const csp = conf ? cspFor(conf, "/") : "";
+  const directives = new Map(
+    csp
+      .split(";")
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => [d.split(" ")[0], d] as const),
+  );
 
   it("exists and hides the version", () => {
     expect(conf).toContain("server_tokens off;");
@@ -28,6 +36,32 @@ describe("nginx.conf", () => {
     expect(directives.get("frame-ancestors")).toBe("frame-ancestors 'none'");
     expect(directives.get("base-uri")).toBe("base-uri 'none'");
     expect(directives.has("upgrade-insecure-requests")).toBe(true);
+    expect(csp).not.toContain("unsafe-");
+  });
+  it("CSP is ONE server-level add_header whose value is a map on the normalised $uri", () => {
+    expect(conf.match(/add_header\s+Content-Security-Policy\s/g)).toHaveLength(1);
+    expect(conf).toContain("add_header Content-Security-Policy $csp always;");
+    // $uri, not $request_uri: the same normalised path nginx matches locations against.
+    expect(conf).toMatch(/^map \$uri \$csp \{$/m);
+    expect(conf).not.toMatch(/map \$request_uri/);
+  });
+  it("/api/ responses get exactly the api's strict policy; nothing else does", () => {
+    for (const uri of ["/api/", "/api/health", "/api/auth/refresh", "/api/ws/live"])
+      expect(cspFor(conf, uri), uri).toBe(API_CSP);
+    for (const uri of [
+      "/",
+      "/index.html",
+      "/assets/index-abc.js",
+      "/healthz",
+      "/login",
+      "/apix",
+      "/api",
+      "/x/api/",
+      "/API/x",
+    ]) {
+      expect(cspFor(conf, uri), uri).toBe(csp);
+    }
+    expect(csp).not.toBe(API_CSP);
   });
   it("sends the other security headers with `always`", () => {
     for (const h of [
@@ -72,7 +106,13 @@ describe("nginx.conf", () => {
     expect(serverLevel).not.toContain("limit_req zone=");
     expect(conf.match(/limit_req zone=/g)).toHaveLength(2);
     // the api's own copies of these five headers are hidden in both proxied locations
-    for (const h of ["Content-Security-Policy", "Strict-Transport-Security", "X-Content-Type-Options", "Referrer-Policy", "X-Frame-Options"]) {
+    for (const h of [
+      "Content-Security-Policy",
+      "Strict-Transport-Security",
+      "X-Content-Type-Options",
+      "Referrer-Policy",
+      "X-Frame-Options",
+    ]) {
       expect(conf.match(new RegExp(`proxy_hide_header ${h};`, "g")), h).toHaveLength(2);
     }
     expect(conf).not.toMatch(/proxy_hide_header (Permissions-Policy|Cache-Control|Cross-Origin)/);

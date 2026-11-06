@@ -28,21 +28,16 @@ export function Drawer({ heading, onClose, focusKey, children }: DrawerProps) {
   });
 
   useEffect(() => {
-    const opener =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    const bg = Array.from(
-      document.querySelectorAll<HTMLElement>(BACKGROUND),
-    ).filter((el) => !el.contains(dialogRef.current));
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const bg = Array.from(document.querySelectorAll<HTMLElement>(BACKGROUND)).filter(
+      (el) => !el.contains(dialogRef.current),
+    );
     const prevInert = bg.map((el) => el.hasAttribute("inert"));
     bg.forEach((el) => el.setAttribute("inert", ""));
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const trap = (e: globalThis.KeyboardEvent) => {
-      const nodes = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [],
-      );
+      const nodes = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
       if (nodes.length === 0) {
         e.preventDefault();
         return;
@@ -50,12 +45,7 @@ export function Drawer({ heading, onClose, focusKey, children }: DrawerProps) {
       const first = nodes[0];
       const last = nodes[nodes.length - 1];
       const active = document.activeElement;
-      if (
-        e.shiftKey &&
-        (active === first ||
-          active === dialogRef.current ||
-          !dialogRef.current?.contains(active))
-      ) {
+      if (e.shiftKey && (active === first || active === dialogRef.current || !dialogRef.current?.contains(active))) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && active === last) {
@@ -75,9 +65,7 @@ export function Drawer({ heading, onClose, focusKey, children }: DrawerProps) {
       });
       document.body.style.overflow = prevOverflow;
       const target =
-        opener && opener !== document.body && opener.isConnected
-          ? opener
-          : document.getElementById("main");
+        opener && opener !== document.body && opener.isConnected ? opener : document.getElementById("main");
       target?.focus();
     };
   }, []);
@@ -88,30 +76,13 @@ export function Drawer({ heading, onClose, focusKey, children }: DrawerProps) {
 
   return (
     <>
-      <div
-        className="scrim"
-        data-testid="scrim"
-        aria-hidden="true"
-        onClick={onClose}
-      />
-      <div
-        ref={dialogRef}
-        className="drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={headId}
-      >
+      <div className="scrim" data-testid="scrim" aria-hidden="true" onClick={onClose} />
+      <div ref={dialogRef} className="drawer" role="dialog" aria-modal="true" aria-labelledby={headId}>
         <div className="dhead">
           <h2 id={headId} className="dtitle" tabIndex={-1}>
             {heading}
           </h2>
-          <button
-            ref={closeRef}
-            type="button"
-            className="close"
-            aria-label="Close"
-            onClick={onClose}
-          >
+          <button ref={closeRef} type="button" className="close" aria-label="Close" onClick={onClose}>
             <span aria-hidden="true">✕</span>
           </button>
         </div>

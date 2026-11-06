@@ -5,11 +5,28 @@ import { describe, expect, it } from "vitest";
 const css = readFileSync(resolve(__dirname, "../styles/tokens.css"), "utf8");
 
 const REQUIRED = [
-  "--bg", "--panel", "--panel-2", "--line", "--text", "--muted", "--faint",
-  "--sev-crit", "--sev-high", "--sev-med", "--sev-low", "--live", "--scope",
-  "--ocean", "--land", "--border-geo", "--well",
-  "--font-display", "--font-body", "--font-mono",
-  "--radius", "--gutter",
+  "--bg",
+  "--panel",
+  "--panel-2",
+  "--line",
+  "--text",
+  "--muted",
+  "--faint",
+  "--sev-crit",
+  "--sev-high",
+  "--sev-med",
+  "--sev-low",
+  "--live",
+  "--scope",
+  "--ocean",
+  "--land",
+  "--border-geo",
+  "--well",
+  "--font-display",
+  "--font-body",
+  "--font-mono",
+  "--radius",
+  "--gutter",
 ];
 const THEMED = REQUIRED.filter((t) => !t.startsWith("--font") && t !== "--radius" && t !== "--gutter");
 
@@ -103,7 +120,11 @@ describe("globe legend hint contrast (text on the translucent legend backdrop)",
     const ch = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
     const o = ch(over);
     return `#${ch(under)
-      .map((u, i) => Math.round(u + (o[i] - u) * alpha).toString(16).padStart(2, "0"))
+      .map((u, i) =>
+        Math.round(u + (o[i] - u) * alpha)
+          .toString(16)
+          .padStart(2, "0"),
+      )
       .join("")}`;
   }
 

@@ -46,7 +46,10 @@ describe("Login form", () => {
       await waitFor(() => expect(document.activeElement).toBe(alert.closest("[aria-live]")));
     }
     expect(texts[0]).toBe(texts[1]);
-    expect(screen.getByText("Email or password is incorrect").closest("[aria-live]")).toHaveAttribute("aria-live", "assertive");
+    expect(screen.getByText("Email or password is incorrect").closest("[aria-live]")).toHaveAttribute(
+      "aria-live",
+      "assertive",
+    );
   });
 
   test("429 shows the retry time", async () => {

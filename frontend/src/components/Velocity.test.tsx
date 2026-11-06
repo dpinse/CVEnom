@@ -21,7 +21,11 @@ describe("sparkPath", () => {
     const s = [1, 4, 2, 8, 5];
     const p = sparkPath(s, 100, 40, 2);
     expect(points(p.line)).toBe(5);
-    const last = p.line.match(/-?\d+(\.\d+)?,-?\d+(\.\d+)?/g)!.pop()!.split(",").map(Number);
+    const last = p.line
+      .match(/-?\d+(\.\d+)?,-?\d+(\.\d+)?/g)!
+      .pop()!
+      .split(",")
+      .map(Number);
     expect(p.end.x).toBeCloseTo(last[0]);
     expect(p.end.y).toBeCloseTo(last[1]);
     expect(p.end.x).toBeCloseTo(98);
@@ -31,7 +35,10 @@ describe("sparkPath", () => {
     expect(p.area.endsWith("Z")).toBe(true);
   });
   test("all zeros and all equal give a flat middle line, no NaN", () => {
-    for (const s of [[0, 0, 0, 0], [7, 7, 7]]) {
+    for (const s of [
+      [0, 0, 0, 0],
+      [7, 7, 7],
+    ]) {
       const p = sparkPath(s, 100, 40, 2);
       expect(`${p.line}${p.area}${p.end.x}${p.end.y}`).not.toMatch(/NaN|Infinity/);
       expect(p.end.y).toBeCloseTo(20);

@@ -15,7 +15,8 @@ export function safeNext(raw: string | null | undefined): string {
   if (/[\\\u0000-\u001f\u007f]/.test(raw)) return "/";
   const path = raw.split(/[?#]/, 1)[0];
   if (/\s/.test(path) || path.includes("//") || /%2f|%5c/i.test(path)) return "/";
-  if (path.split("/").includes("..")) return "/";
+  // Browsers resolve %2e as ".", so "%2e%2e" is the same traversal as "..".
+  if (path.split("/").some((seg) => /^(\.|%2e){2}$/i.test(seg))) return "/";
   return raw;
 }
 

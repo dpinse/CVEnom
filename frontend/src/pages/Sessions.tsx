@@ -63,9 +63,7 @@ export default function Sessions() {
   return (
     <section className="page gutter">
       <h1>Sessions</h1>
-      <p className="form-hint">
-        Devices signed in to your account. Revoke any you do not recognize.
-      </p>
+      <p className="form-hint">Devices signed in to your account. Revoke any you do not recognize.</p>
       <div className="form-errors" aria-live="assertive">
         {error && <p>{error}</p>}
       </div>
@@ -89,11 +87,7 @@ export default function Sessions() {
               {list.data.map((s) => (
                 <tr key={s.id}>
                   <td>
-                    {s.user_agent ? (
-                      <Text value={s.user_agent} />
-                    ) : (
-                      "Unknown device"
-                    )}{" "}
+                    {s.user_agent ? <Text value={s.user_agent} /> : "Unknown device"}{" "}
                     {s.current && <span className="badge">This device</span>}
                   </td>
                   <td>{s.ip ? <Text value={s.ip} /> : "—"}</td>
@@ -102,11 +96,7 @@ export default function Sessions() {
                   <td>
                     {confirming === s.id ? (
                       <span className="confirm">
-                        <span>
-                          {s.current
-                            ? "Sign out of this device?"
-                            : "Revoke this session?"}
-                        </span>{" "}
+                        <span>{s.current ? "Sign out of this device?" : "Revoke this session?"}</span>{" "}
                         <button
                           ref={confirmRef}
                           type="button"
@@ -116,11 +106,7 @@ export default function Sessions() {
                         >
                           Confirm revoke
                         </button>{" "}
-                        <button
-                          type="button"
-                          className="btn"
-                          onClick={() => cancelConfirm(s.id)}
-                        >
+                        <button type="button" className="btn" onClick={() => cancelConfirm(s.id)}>
                           Cancel
                         </button>
                       </span>

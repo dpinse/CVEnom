@@ -165,7 +165,9 @@ export function describeGeo(items: readonly GeoSummaryItem[]): string {
   const parts: string[] = [];
   for (const kind of ["outage", "scan", "victim", "c2", "bgp"] as const) {
     const n = new Set(
-      valid.filter((it) => it.kind === kind && (kind !== "outage" || outageLevel(finite(it.magnitude)) > 0)).map((it) => it.country_code),
+      valid
+        .filter((it) => it.kind === kind && (kind !== "outage" || outageLevel(finite(it.magnitude)) > 0))
+        .map((it) => it.country_code),
     ).size;
     if (n > 0) parts.push(`${n} ${plural(n)} with ${KIND_PHRASE[kind]}`);
   }
@@ -186,7 +188,10 @@ function parseColor(c: string): [number, number, number] | null {
   return null;
 }
 
-const hex2 = (n: number) => Math.round(Math.min(255, Math.max(0, n))).toString(16).padStart(2, "0");
+const hex2 = (n: number) =>
+  Math.round(Math.min(255, Math.max(0, n)))
+    .toString(16)
+    .padStart(2, "0");
 
 /** `over` composited at `alpha` onto `base`, as #rrggbb. Unparseable `over` returns `base` unchanged. */
 export function mixColor(base: string, over: string, alpha: number): string {

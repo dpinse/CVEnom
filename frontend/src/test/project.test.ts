@@ -36,7 +36,10 @@ type Allow = string | { literal: string } | { comment: string };
  *  - the DB-IP attribution hyperlink required by DB-IP Lite's CC-BY 4.0 licence. It is an
  *    <a href> the user may click (a navigation in a new tab), never a request the page makes.
  */
-const ALLOWED: Allow[] = ["http://www.w3.org/2000/svg", "http://www.w3.org/1999/xlink", { literal: "https://db-ip.com" },
+const ALLOWED: Allow[] = [
+  "http://www.w3.org/2000/svg",
+  "http://www.w3.org/1999/xlink",
+  { literal: "https://db-ip.com" },
   // ransomware.live attribution hyperlink (src/lib/credits.ts): an <a href> only, exact literal.
   { literal: "https://www.ransomware.live" },
 ];
@@ -224,7 +227,9 @@ function initialChunks(dir: string, html: string): string[] {
     seen.add(rel);
     const code = readFileSync(join(dir, rel), "utf8");
     // static imports only: `import ... from "./x.js"` / `import "./x.js"` (dynamic import( ) is excluded)
-    for (const m of code.matchAll(/(?:^|[;\s}])(?:import|export)\s*(?:[\w${},*\s]+from\s*)?["'`]\.\/([^"'`]+\.js)["'`]/g)) {
+    for (const m of code.matchAll(
+      /(?:^|[;\s}])(?:import|export)\s*(?:[\w${},*\s]+from\s*)?["'`]\.\/([^"'`]+\.js)["'`]/g,
+    )) {
       queue.push(`assets/${m[1]}`);
     }
   }

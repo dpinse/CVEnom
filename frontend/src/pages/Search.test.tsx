@@ -42,7 +42,9 @@ const many = (n: number) => Array.from({ length: n }, (_, i) => item({ cve_id: `
 
 describe("parseFilters", () => {
   test("drops invalid values", () => {
-    const f = parseFilters(new URLSearchParams("lane=BOGUS&source=x&min_cvss=11&from=2026-13-45&to=nope&page=0&kev=maybe"));
+    const f = parseFilters(
+      new URLSearchParams("lane=BOGUS&source=x&min_cvss=11&from=2026-13-45&to=nope&page=0&kev=maybe"),
+    );
     expect(f).toEqual({ page: 1 });
     expect(parseFilters(new URLSearchParams("min_cvss=abc&page=1.5")).min_cvss).toBeUndefined();
     expect(parseFilters(new URLSearchParams("page=1.5")).page).toBe(1);
@@ -229,7 +231,13 @@ describe("Search page", () => {
   });
 
   test("422 shows a message and resets the page to 1", async () => {
-    api(() => new HttpResponse(JSON.stringify({ detail: "bad" }), { status: 422, headers: { "content-type": "application/json" } }));
+    api(
+      () =>
+        new HttpResponse(JSON.stringify({ detail: "bad" }), {
+          status: 422,
+          headers: { "content-type": "application/json" },
+        }),
+    );
     renderAt(ui, "/search?page=3");
     expect(await screen.findByText("Some filters aren't valid")).toBeInTheDocument();
     await waitFor(() => expect(lastUrl).not.toContain("page="));

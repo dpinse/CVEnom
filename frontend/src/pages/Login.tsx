@@ -54,11 +54,22 @@ export default function Login() {
 
   return (
     <AuthCard title="Sign in">
-      {notice && <p className="form-notice" role="status">{notice}</p>}
+      {notice && (
+        <p className="form-notice" role="status">
+          {notice}
+        </p>
+      )}
       <form className="authform" onSubmit={(e) => void onSubmit(e)} noValidate={false}>
         <ErrorSummary errors={errors} tick={tick} />
         <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" maxLength={320} />
-        <Field label="Password" type="password" value={password} onChange={setPassword} autoComplete="current-password" maxLength={1024} />
+        <Field
+          label="Password"
+          type="password"
+          value={password}
+          onChange={setPassword}
+          autoComplete="current-password"
+          maxLength={1024}
+        />
         <button type="submit" className="btn primary" disabled={pending}>
           {pending ? "Signing in…" : "Sign in"}
         </button>

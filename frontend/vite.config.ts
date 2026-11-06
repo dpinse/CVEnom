@@ -30,14 +30,19 @@ export default defineConfig(({ mode }) => {
       chunkSizeWarningLimit: 1300,
       rollupOptions: {
         input: harness
-          ? { main: resolve(import.meta.dirname, "index.html"), harness: resolve(import.meta.dirname, "globe-harness.html") }
+          ? {
+              main: resolve(import.meta.dirname, "index.html"),
+              harness: resolve(import.meta.dirname, "globe-harness.html"),
+            }
           : resolve(import.meta.dirname, "index.html"),
         output: {
           // MapLibre's worker is an .mjs asset (imported with ?url). Emit it as .js so any static
           // server (nginx's stock mime.types included) sends a JavaScript MIME type, which module
           // workers require.
           assetFileNames: (info) =>
-            (info.names ?? []).some((n) => n.endsWith(".mjs")) ? "assets/[name]-[hash].js" : "assets/[name]-[hash][extname]",
+            (info.names ?? []).some((n) => n.endsWith(".mjs"))
+              ? "assets/[name]-[hash].js"
+              : "assets/[name]-[hash][extname]",
         },
       },
     },

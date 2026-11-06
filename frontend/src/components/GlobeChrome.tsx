@@ -72,8 +72,8 @@ export function HotspotList({ items }: { items: readonly GeoSummaryItem[] }) {
     <ul className="sr-only" aria-label="Top threat hotspots">
       {top.map((it) => (
         <li key={`${it.country_code}:${it.kind}`}>
-          {countryName(it.country_code)}: {KIND_LABEL[it.kind as keyof typeof KIND_LABEL]}, magnitude {fmt(Number(it.magnitude))},{" "}
-          {fmt(Number(it.events))} events
+          {countryName(it.country_code)}: {KIND_LABEL[it.kind as keyof typeof KIND_LABEL]}, magnitude{" "}
+          {fmt(Number(it.magnitude))}, {fmt(Number(it.events))} events
         </li>
       ))}
     </ul>

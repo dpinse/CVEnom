@@ -137,7 +137,9 @@ describe("antimeridian handling", () => {
   it("Antarctica keeps its pole-encircling ring intact", () => {
     const aq = countries.features.find((f) => f.properties.iso2 === "AQ");
     expect(aq).toBeDefined();
-    const lons = rings(aq!.geometry).flat().map((p) => p[0]);
+    const lons = rings(aq!.geometry)
+      .flat()
+      .map((p) => p[0]);
     expect(Math.min(...lons)).toBe(-180);
     expect(Math.max(...lons)).toBe(180);
   });
@@ -255,15 +257,19 @@ describe("withShading", () => {
 });
 
 describe("rankCountries and describeGeo", () => {
-  const items = [g("US", "scan", 8, 300), g("US", "outage", 2), g("NL", "scan", 1), g("JP", "outage", 6), g(null, "scan", 99)];
+  const items = [
+    g("US", "scan", 8, 300),
+    g("US", "outage", 2),
+    g("NL", "scan", 1),
+    g("JP", "outage", 6),
+    g(null, "scan", 99),
+  ];
   it("ranks valid countries by total magnitude", () => {
     expect(rankCountries(items).map((r) => r.iso2)).toEqual(["US", "JP", "NL"]);
     expect(rankCountries(items, 1)).toHaveLength(1);
   });
   it("summarises the data for the globe's accessible name", () => {
-    expect(describeGeo(items)).toBe(
-      "Global threat map: 2 countries with outages, 2 countries with exploit scanning",
-    );
+    expect(describeGeo(items)).toBe("Global threat map: 2 countries with outages, 2 countries with exploit scanning");
     expect(describeGeo([])).toBe("Global threat map: no geolocated threat activity in the last 24 hours");
   });
 });
