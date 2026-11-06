@@ -21,7 +21,7 @@ from sqlalchemy import delete, func, select
 
 from cvenom import secretbox
 from cvenom.auth import totp
-from cvenom.auth.users import revoke_sessions
+from cvenom.auth.users import drop_mfa_tickets, revoke_sessions
 from cvenom.models import MfaRecoveryCode, MfaTicket, User
 
 log = logging.getLogger(__name__)
@@ -261,13 +261,7 @@ def reset_mfa(session, user_id: int, now: datetime) -> bool:
     """Forget the user's MFA, recovery codes and tickets; revoke every session.
 
     The user must enroll again at the next sign-in. Returns False if no such user."""
-    session.execute(
-        delete(MfaTicket).where(MfaTicket.user_id == user_id),
-        execution_options={"synchronize_session": False},
-    )
-    for obj in list(session.identity_map.values()):
-        if isinstance(obj, MfaTicket) and obj.user_id == user_id:
-            session.expunge(obj)
+    drop_mfa_tickets(session, user_id)  # before the user lock: ticket -> user order
     user = lock_user(session, user_id)
     if user is None:
         return False
