@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns="http://purl.org/rss/1.0/"
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns:dcterms="http://purl.org/dc/terms/"
+  xml:lang="en">
+
+ <channel rdf:about="https://jvn.jp/en/rss/jvn.rdf">
+  <title>JVNRSS Feed - Update Entry (sample)</title>
+  <link>https://jvn.jp/en/</link>
+  <description>Japan Vulnerability Notes new/updated information</description>
+  <dc:publisher>JVN</dc:publisher>
+  <items>
+   <rdf:Seq>
+    <rdf:li rdf:resource="https://jvn.jp/en/jp/JVN00000001/" />
+    <rdf:li rdf:resource="https://jvn.jp/en/jp/JVN00000002/" />
+   </rdf:Seq>
+  </items>
+ </channel>
+
+ <item rdf:about="https://jvn.jp/en/jp/JVN00000001/">
+  <title>Example product vulnerable to remote code execution (CVE-2026-21345)</title>
+  <link>https://jvn.jp/en/jp/JVN00000001/</link>
+  <description>Example product contains a remote code execution vulnerability.</description>
+  <dc:publisher>JVN</dc:publisher>
+  <dc:creator>jvn@jvn.jp</dc:creator>
+  <dc:identifier>JVN#00000001</dc:identifier>
+  <dc:date>2026-11-05T14:00:00+09:00</dc:date>
+  <dcterms:issued>2026-11-05T14:00:00+09:00</dcterms:issued>
+  <dcterms:modified>2026-11-05T14:00:00+09:00</dcterms:modified>
+ </item>
+
+ <item rdf:about="https://jvn.jp/en/jp/JVN00000002/">
+  <title>Hinemos vulnerable to incorrect privilege assignment</title>
+  <link>https://jvn.jp/en/jp/JVN00000002/</link>
+  <description>Hinemos contains an incorrect privilege assignment vulnerability.</description>
+  <dc:publisher>JVN</dc:publisher>
+  <dc:creator>jvn@jvn.jp</dc:creator>
+  <dc:identifier>JVN#00000002</dc:identifier>
+  <dc:date>2026-11-04T10:30:00+09:00</dc:date>
+  <dcterms:issued>2026-11-04T10:30:00+09:00</dcterms:issued>
+  <dcterms:modified>2026-11-04T10:30:00+09:00</dcterms:modified>
+ </item>
+</rdf:RDF>

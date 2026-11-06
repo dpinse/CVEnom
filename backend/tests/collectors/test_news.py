@@ -60,6 +60,17 @@ def test_rss_entries_map_to_stories_and_skip_bad_scheme():
     assert all("javascript" not in x.url for x in res.stories)
 
 
+def test_rdf_feed_parses():
+    res = _Feed().normalize(_fx("rdf_sample.xml"))
+    assert len(res.stories) == 2
+    cve_story, plain_story = res.stories
+    assert "CVE-2026-21345" in cve_story.title
+    assert "CVE" not in plain_story.title
+    assert cve_story.published == datetime(2026, 11, 5, 5, 0, tzinfo=UTC)
+    assert cve_story.published.utcoffset() == timedelta(0)
+    assert plain_story.published == datetime(2026, 11, 4, 1, 30, tzinfo=UTC)
+
+
 def test_atom_entries_map_to_stories_utc_with_updated_fallback():
     res = _Feed().normalize(_fx("atom_sample.xml"))
     assert len(res.stories) == 2
@@ -177,12 +188,29 @@ async def test_response_too_large_fails_cleanly(respx_mock):
     assert isinstance(c.last_error, base.ResponseTooLarge)
 
 
-def test_four_subclasses_registered_base_not():
+def test_news_subclasses_registered_base_not():
     expected = {
         "news_krebs": ("https://krebsonsecurity.com/feed/", "Krebs on Security"),
         "news_thn": ("https://feeds.feedburner.com/TheHackersNews", "The Hacker News"),
         "news_bleeping": ("https://www.bleepingcomputer.com/feed/", "BleepingComputer"),
         "news_securityweek": ("https://www.securityweek.com/feed/", "SecurityWeek"),
+        "news_talos": ("https://blog.talosintelligence.com/rss/", "Cisco Talos"),
+        "news_unit42": ("https://unit42.paloaltonetworks.com/feed/", "Palo Alto Unit 42"),
+        "news_checkpoint": ("https://research.checkpoint.com/feed/", "Check Point Research"),
+        "news_securelist": ("https://securelist.com/feed/", "Kaspersky Securelist"),
+        "news_msft_security": (
+            "https://www.microsoft.com/en-us/security/blog/feed/",
+            "Microsoft Security Blog",
+        ),
+        "news_zdi": ("https://www.zerodayinitiative.com/blog?format=rss", "Zero Day Initiative"),
+        "news_tenable": ("https://www.tenable.com/blog/feed", "Tenable Research"),
+        "news_certcc": ("https://kb.cert.org/vuls/atomfeed/", "CERT/CC"),
+        "news_ncsc_uk": (
+            "https://www.ncsc.gov.uk/api/1/services/v1/all-rss-feed.xml",
+            "NCSC UK",
+        ),
+        "news_jvn": ("https://jvn.jp/en/rss/jvn.rdf", "JVN"),
+        "news_sans_isc": ("https://isc.sans.edu/rssfeed_full.xml", "SANS ISC"),
     }
     for name, (url, src) in expected.items():
         cls = REGISTRY[name]

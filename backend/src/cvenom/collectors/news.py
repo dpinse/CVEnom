@@ -145,3 +145,80 @@ class SecurityWeekCollector(NewsFeedCollector):
     name = "news_securityweek"
     feed_url = "https://www.securityweek.com/feed/"
     source_name = "SecurityWeek"
+
+
+@register
+class TalosCollector(NewsFeedCollector):
+    name = "news_talos"
+    feed_url = "https://blog.talosintelligence.com/rss/"
+    source_name = "Cisco Talos"
+
+
+@register
+class Unit42Collector(NewsFeedCollector):
+    name = "news_unit42"
+    feed_url = "https://unit42.paloaltonetworks.com/feed/"
+    source_name = "Palo Alto Unit 42"
+
+
+@register
+class CheckPointResearchCollector(NewsFeedCollector):
+    name = "news_checkpoint"
+    feed_url = "https://research.checkpoint.com/feed/"
+    source_name = "Check Point Research"
+
+
+@register
+class SecurelistCollector(NewsFeedCollector):
+    name = "news_securelist"
+    feed_url = "https://securelist.com/feed/"
+    source_name = "Kaspersky Securelist"
+
+
+@register
+class MicrosoftSecurityCollector(NewsFeedCollector):
+    name = "news_msft_security"
+    feed_url = "https://www.microsoft.com/en-us/security/blog/feed/"
+    source_name = "Microsoft Security Blog"
+
+
+@register
+class ZeroDayInitiativeCollector(NewsFeedCollector):
+    name = "news_zdi"
+    feed_url = "https://www.zerodayinitiative.com/blog?format=rss"
+    source_name = "Zero Day Initiative"
+
+
+@register
+class TenableResearchCollector(NewsFeedCollector):
+    name = "news_tenable"
+    feed_url = "https://www.tenable.com/blog/feed"
+    source_name = "Tenable Research"
+
+
+@register
+class CertCCCollector(NewsFeedCollector):
+    name = "news_certcc"
+    feed_url = "https://kb.cert.org/vuls/atomfeed/"
+    source_name = "CERT/CC"
+
+
+@register
+class NcscUkCollector(NewsFeedCollector):
+    name = "news_ncsc_uk"
+    feed_url = "https://www.ncsc.gov.uk/api/1/services/v1/all-rss-feed.xml"
+    source_name = "NCSC UK"
+
+
+@register
+class JvnCollector(NewsFeedCollector):
+    name = "news_jvn"
+    feed_url = "https://jvn.jp/en/rss/jvn.rdf"
+    source_name = "JVN"
+
+
+@register
+class SansIscCollector(NewsFeedCollector):
+    name = "news_sans_isc"
+    feed_url = "https://isc.sans.edu/rssfeed_full.xml"
+    source_name = "SANS ISC"
