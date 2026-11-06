@@ -223,3 +223,9 @@ have the 24 hours, 7d, 14d, 30d." Model on offseq's Threats controls (take ideas
 - `/api/cves` gains `added`, `status`, `sort ∈ {newest, hot, trending, due}`; the `range`/`lane` params from Task 1 /
   the plan remain for the lanes endpoint only. `/api/stories` gains `added`.
 - Legacy `/history?kev=true` → `/threats?status=exploited` (added any).
+- **Severity filter (user, 12:22):** four colour-coded toggle chips — `Low` · `Medium` · `High` · `Critical` — each
+  with its severity dot/colour from the existing tokens (`--sev-low/med/high/crit`), multi-select (none selected =
+  any severity, unscored CVEs included). Bands use CVSS: Critical ≥ 9.0, High 7.0–8.9, Medium 4.0–6.9, Low 0.1–3.9.
+  URL/API param `sev=crit,high` (comma list of `low|med|high|crit`); invalid values → 422. Pressed state uses
+  `aria-pressed` and is visible without colour (filled vs outline). Replaces the "any / critical / high and up"
+  select. This severity control is always visible (not inside "All filters").
