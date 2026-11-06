@@ -37,6 +37,7 @@ dev = [
     "mmdb-writer>=0.2.7",
     "fakeredis[lua]>=2.26",
     "watchfiles>=1.0",
+    "ruff==0.17.4",
 ]
 
 [tool.setuptools.packages.find]
@@ -46,3 +47,17 @@ where = ["src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# E501: lint only, `ruff format` is not adopted; long lines are left to review.
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom: `x = Depends(...)` defaults are evaluated by design.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Body"]

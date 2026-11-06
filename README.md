@@ -101,6 +101,7 @@ Use `http://localhost` rather than `127.0.0.1`: the sign-in cookie is marked `Se
 
 ```sh
 cd backend  && python -m pytest -q              # needs the dev Postgres (uses the cvenom_test database)
+cd backend  && ruff check .                      # lint (config in backend/pyproject.toml)
 cd frontend && npm test                          # unit tests (Vitest)
 cd frontend && npm run lint && npm run typecheck
 cd frontend && npx playwright install && npm run e2e   # Chromium and Firefox, including a CSP check

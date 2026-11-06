@@ -67,4 +67,4 @@ cd ../frontend && npm ci && npm run dev                          # Vite on :5173
 
 Tests: `cd backend && python -m pytest -q` (uses the root compose Postgres; set
 `CVENOM_TEST_PG_PORT` to point at a different one) and, in `frontend/`, `npm test`, `npm run lint`,
-`npm run typecheck`.
+`npm run typecheck`. Backend lint: `cd backend && ruff check .` (lint only; `ruff format` is not used).
