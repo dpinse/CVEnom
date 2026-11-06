@@ -141,6 +141,7 @@ export function CveDetailBody({ d }: { d: CveDetail }) {
   const sevLabel = d.cvss_severity ?? (isNum(d.cvss) ? SEV_LABEL[sev] : null);
   const epss = isNum(d.epss_percentile) ? d.epss_percentile : null;
   const epssTone = epss === null ? "low" : epss >= 0.5 ? "live" : epss >= 0.15 ? "high" : "low";
+  const hasScores = isNum(d.cvss) || isNum(d.epss) || isNum(d.epss_percentile) || !!d.cvss_vector;
   const kevDate = fmtDate(d.kev_added);
   const dates = (
     [
@@ -223,31 +224,33 @@ export function CveDetailBody({ d }: { d: CveDetail }) {
           </p>
         </div>
       ) : null}
-      <div>
-        <div className="seclabel">Scores</div>
-        <div className="meters">
-          <Meter
-            name="CVSS"
-            value={isNum(d.cvss) ? d.cvss : null}
-            max={10}
-            text={isNum(d.cvss) ? d.cvss.toFixed(1) : ""}
-            tone={sev}
-          />
-          <Meter
-            name="EPSS percentile"
-            value={epss}
-            max={1}
-            text={epss === null ? "" : `p${Math.round(clamp(epss, 0, 1) * 100)}`}
-            tone={epssTone}
-          />
+      {hasScores && (
+        <div>
+          <div className="seclabel">Scores</div>
+          <div className="meters">
+            <Meter
+              name="CVSS"
+              value={isNum(d.cvss) ? d.cvss : null}
+              max={10}
+              text={isNum(d.cvss) ? d.cvss.toFixed(1) : ""}
+              tone={sev}
+            />
+            <Meter
+              name="EPSS percentile"
+              value={epss}
+              max={1}
+              text={epss === null ? "" : `p${Math.round(clamp(epss, 0, 1) * 100)}`}
+              tone={epssTone}
+            />
+          </div>
+          {d.cvss_vector ? (
+            <p className="dmuted mono" data-testid="cvss-vector">
+              <Text value={d.cvss_vector} />
+            </p>
+          ) : null}
+          {isNum(d.epss) ? <p className="dmuted mono">EPSS score {d.epss.toFixed(3)}</p> : null}
         </div>
-        {d.cvss_vector ? (
-          <p className="dmuted mono" data-testid="cvss-vector">
-            <Text value={d.cvss_vector} />
-          </p>
-        ) : null}
-        {isNum(d.epss) ? <p className="dmuted mono">EPSS score {d.epss.toFixed(3)}</p> : null}
-      </div>
+      )}
       {dates.length > 0 && (
         <div>
           <div className="seclabel">Key dates</div>

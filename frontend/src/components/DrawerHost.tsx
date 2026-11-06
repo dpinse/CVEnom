@@ -16,7 +16,7 @@ export function DrawerHost() {
   }
   if (selection.kind === "country") return null; // the country drawer arrives in Task 10
   return (
-    <Drawer heading="Story" onClose={clear} focusKey={`story:${selection.url}`}>
+    <Drawer heading="Story" onClose={clear} focusKey={`story:${selection.url ?? ""}`}>
       <StoryDetail url={selection.url} />
     </Drawer>
   );

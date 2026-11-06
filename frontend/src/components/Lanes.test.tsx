@@ -401,12 +401,12 @@ describe("selection", () => {
     const { result } = renderHook(() => useSelection(), { wrapper: wrap("/?cve=CVE-2026-1234") });
     expect(result.current.selection).toEqual({ kind: "cve", id: "CVE-2026-1234" });
   });
-  test("rejects a javascript: story url", () => {
+  test("a javascript: story url selects a not-found story (url null), never the URL", () => {
     const { result } = renderHook(() => useSelection(), {
       wrapper: wrap(`/?story=${encodeURIComponent("javascript:alert(1)")}`),
     });
-    expect(result.current.selection).toBeNull();
-    expect(parseSelection(new URLSearchParams({ story: "data:text/html,x" }))).toBeNull();
+    expect(result.current.selection).toEqual({ kind: "story", url: null });
+    expect(parseSelection(new URLSearchParams({ story: "data:text/html,x" }))).toEqual({ kind: "story", url: null });
   });
   test("accepts an https story url", () => {
     const { result } = renderHook(() => useSelection(), {

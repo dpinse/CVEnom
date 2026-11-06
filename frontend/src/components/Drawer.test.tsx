@@ -559,12 +559,20 @@ describe("CveDetail sections", () => {
         kev: false,
         kev_added: null,
         recent_story_count: 0,
+        cvss: null,
+        epss: null,
+        epss_percentile: null,
+        cwes: [],
+        references: null as unknown as CveDetail["references"],
       }),
     );
     renderHost(["/?cve=" + CVE]);
     const d = await dialog();
-    await screen.findByText("Scores");
-    expect(headings(d)).toEqual(["Scores", "Links"]);
+    await screen.findByText("Links");
+    expect(headings(d)).toEqual(["Links"]);
+    expect(within(d).queryByText("Scores")).toBeNull();
+    expect(within(d).queryByText("References")).toBeNull();
+    expect(within(d).queryByText("Weaknesses")).toBeNull();
     expect(within(d).queryByText("ransomware use")).toBeNull();
   });
 
@@ -739,8 +747,34 @@ describe("StoryDetail", () => {
     expect(screen.queryByText(/not found/)).toBeNull();
   });
 
-  test("an unsafe story param never opens a drawer", async () => {
-    renderHost(["/?story=" + encodeURIComponent("javascript:alert(1)")]);
-    expect(screen.queryByRole("dialog")).toBeNull();
+  test("empty references and cwes lists render no References or Weaknesses heading", async () => {
+    serveCve(detail({ references: [], cwes: [] }));
+    renderHost(["/?cve=" + CVE]);
+    const d = await dialog();
+    await screen.findByText("Scores");
+    expect(within(d).queryByText("References")).toBeNull();
+    expect(within(d).queryByText("Weaknesses")).toBeNull();
   });
+
+  for (const bad of ["javascript:alert(1)", "http://abcdef.onion/old-story"]) {
+    test(`an unsafe ?story= (${bad.slice(0, 10)}) shows not-found: no fetch, no anchor, no echo; Esc clears it`, async () => {
+      let calls = 0;
+      server.use(
+        http.get("http://localhost/api/story", () => {
+          calls++;
+          return HttpResponse.json({ error: "not_found" }, { status: 404 });
+        }),
+      );
+      renderHost(["/?story=" + encodeURIComponent(bad)]);
+      const d = await dialog();
+      expect(within(d).getByText("Story not found (it may have been removed)")).toBeInTheDocument();
+      expect(d.querySelector("a")).toBeNull();
+      expect(d.innerHTML).not.toMatch(/onion|javascript/i);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(calls).toBe(0);
+      fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(screen.getByTestId("search")).toHaveTextContent("");
+    });
+  }
 });

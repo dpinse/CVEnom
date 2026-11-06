@@ -142,10 +142,10 @@ function StoryBody({ story }: { story: StoryDetailOut }) {
 }
 
 /** A story drawer body, read through GET /api/story?url= (any stored story, not just the loud feed). */
-export function StoryDetail({ url }: { url: string }) {
-  const q = useStory(url);
-  if (q.isError) {
-    if (q.error instanceof ApiError && q.error.status === 404) {
+export function StoryDetail({ url }: { url: string | null }) {
+  const q = useStory(url ?? undefined); // disabled (no request) for an unsafe link
+  if (url === null || q.isError) {
+    if (url === null || (q.error instanceof ApiError && q.error.status === 404)) {
       // The URL came from the address bar: never echo it, and never as a link. For anonymous callers a restricted
       // story is indistinguishable from a missing one, so the copy says only "not found".
       return (
