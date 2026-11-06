@@ -35,6 +35,7 @@ from cvenom.schemas import (
     contains_onion,
     validate_http_url,
 )
+from cvenom.textutil import sanitize_text
 
 log = logging.getLogger(__name__)
 
@@ -128,8 +129,11 @@ def _press(value: object) -> list[str]:
 def _story_details(rec: dict, group: str, victim: str) -> dict:
     """Allow-listed story details. Never post_url/screenshot/ransom/data_size/infostealer."""
     website = _str_or_none(rec.get("website"))
-    # Overlong values are rejected before contains_onion runs NFKC over them.
-    if website is not None and (len(website) > MAX_SCAN_LEN or contains_onion(website)):
+    # Overlong values are rejected before any scan. The scan runs on the value as ingest stores
+    # it (sanitize_text strips markup), so markup cannot split ".onion" past the check.
+    if website is not None and (
+        len(website) > MAX_SCAN_LEN or contains_onion(sanitize_text(website))
+    ):
         website = None  # text only, but a leak-site address must never reach any output
     return {
         "group": group,

@@ -44,6 +44,17 @@ _IDNA_DOTS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
 
 
 _NORMALISE_MAX_ROUNDS = 10
+MAX_URL_LEN = 2048
+_URL_MARKUP_CHARS = frozenset('<>"`')
+# Default-ignorable code points a browser/renderer drops: Cf (soft hyphen, ZWSP, ...), CGJ,
+# Mongolian free variation selectors and variation selectors.
+_IGNORABLE_EXTRA = frozenset([0x034F, *range(0x180B, 0x1810), *range(0xFE00, 0xFE10)])
+
+
+def _strip_ignorables(text: str) -> str:
+    return "".join(
+        ch for ch in text if ord(ch) not in _IGNORABLE_EXTRA and unicodedata.category(ch) != "Cf"
+    )
 
 
 def normalize_onion_text(value: str) -> str:
@@ -56,7 +67,8 @@ def normalize_onion_text(value: str) -> str:
     text = value
     for _ in range(_NORMALISE_MAX_ROUNDS):
         prev = text
-        text = unicodedata.normalize("NFKC", unquote(html.unescape(text))).translate(_IDNA_DOTS)
+        text = _strip_ignorables(unicodedata.normalize("NFKC", unquote(html.unescape(text))))
+        text = text.translate(_IDNA_DOTS)
         if text == prev:
             break
     return text.lower()
@@ -80,6 +92,8 @@ def _is_onion_host(hostname: str) -> bool:
 def _check_http_url(url: str) -> None:
     if not url or _BAD_URL_CHARS.search(url):
         raise ValueError("url is empty or contains whitespace/control characters")
+    if _URL_MARKUP_CHARS.intersection(url):
+        raise ValueError("url contains markup characters")
     try:
         parts = urlsplit(url)
     except ValueError as exc:
@@ -113,6 +127,8 @@ def validate_http_url(value: object) -> str:
     """
     if not isinstance(value, str):
         raise ValueError("url must be a string")
+    if len(value) > MAX_URL_LEN:  # before any normalisation: NFKC is super-linear
+        raise ValueError("url is too long")
     url = value.strip()
     _check_http_url(url)
     decoded = _entity_decoded(url)

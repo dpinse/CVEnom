@@ -208,6 +208,45 @@ def test_validate_http_url_rejects_entity_obfuscated_onion(url):
         validate_http_url(url)
 
 
+# R10: markup in a URL can split ".onion" past every check once sanitize_text strips it at ingest.
+@pytest.mark.parametrize("url", [
+    "http://x.onion&lt;b&gt;/", "http://x&lt;b&gt;.onion&lt;/b&gt;/", "http://x.on&lt;i&gt;ion&lt;/i&gt;/",
+    "http://x<b>.onion</b>/", "http://x.onion<!---->/", "http://x.on<i>ion</i>/a", "https://x.on<b>ion/",
+    "x.oni&lt;b&gt;on", 'https://example.com/a"b', "https://example.com/a`b", "https://example.com/a&quot;b",
+    "https://example.com/" + "a" * 2048,
+])
+def test_validate_http_url_rejects_markup_and_overlong(url):
+    from cvenom.schemas import validate_http_url
+
+    with pytest.raises(ValueError):
+        validate_http_url(url)
+
+
+def test_validate_http_url_overlong_nfkc_host_rejected_fast():
+    import time
+
+    from cvenom.schemas import validate_http_url
+
+    start = time.perf_counter()
+    with pytest.raises(ValueError):
+        validate_http_url("https://" + "ﷺ" * 1_000_000 + "/")
+    assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.parametrize("url", ["https://example.com/?x=1&amp;y=2", "https://münchen.de/"])
+def test_validate_http_url_still_accepts_legit(url):
+    from cvenom.schemas import validate_http_url
+
+    assert validate_http_url(url) == url
+
+
+@pytest.mark.parametrize("text", ["x.on­ion", "x.on​ion", "x.on͏ion", "x.on️ion"])
+def test_contains_onion_ignores_default_ignorables(text):
+    from cvenom.schemas import contains_onion
+
+    assert contains_onion(text)
+
+
 @pytest.mark.parametrize("url", [
     "https://onion.example.com/", "https://example.com/x.onion", "https://example.com/?u=a.onion",
     "https://example.com/a?x=1&amp;y=2", "https://example.com/#frag&#46;onion",
@@ -261,6 +300,15 @@ def test_normalized_cve_drops_bad_references_and_caps_20():
 def test_references_drop_entity_obfuscated_onion():
     c = NormalizedCve(cve_id="CVE-2026-1001", references=[
         {"url": "http://x.onion&#46;/", "tags": []},
+        {"url": "https://ok.example/", "tags": []},
+    ])
+    assert [r.url for r in c.references] == ["https://ok.example/"]
+
+
+def test_references_drop_markup_split_onion():
+    c = NormalizedCve(cve_id="CVE-2026-1001", references=[
+        {"url": "http://x.on<i>ion</i>/a", "tags": []},
+        {"url": "http://x.onion&lt;b&gt;/", "tags": []},
         {"url": "https://ok.example/", "tags": []},
     ])
     assert [r.url for r in c.references] == ["https://ok.example/"]

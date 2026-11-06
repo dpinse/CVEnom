@@ -418,6 +418,7 @@ def test_details_fields_and_press_filtering():
         (["https://a.example/", 5, None, {"u": "https://b.example/"}], ["https://a.example/"]),
         (["http://x.onion/", "https://xn--abc.onion./", "https://ok.example/"], ["https://ok.example/"]),
         (["http://x.onion&#46;/", "http://x&#46;onion/", "https://ok.example/"], ["https://ok.example/"]),
+        (["http://x.on<i>ion</i>/a", "http://x.onion&lt;b&gt;/", "https://ok.example/"], ["https://ok.example/"]),
         (42, []),
     ],
 )
@@ -525,3 +526,14 @@ def test_ingest_stores_permalink_and_details(db_session):
     ev = db_session.scalars(select(GeoEvent).where(GeoEvent.source == "ransomware_live")).one()
     assert ev.story_url == PERMA
     assert ".onion" not in repr(story.details) and ".onion" not in (story.summary or "")
+
+
+@pytest.mark.parametrize("website", ["x.on<b>ion", "x.oni&lt;b&gt;on", "x.on­ion", "x.on​ion"])
+def test_markup_or_ignorable_split_onion_website_dropped(website):
+    res = RansomwareLiveCollector().normalize([_rec(website=website)])
+    assert res.stories[0].details["website"] is None
+
+
+def test_normal_website_kept():
+    res = RansomwareLiveCollector().normalize([_rec(website="victim.example")])
+    assert res.stories[0].details["website"] == "victim.example"
