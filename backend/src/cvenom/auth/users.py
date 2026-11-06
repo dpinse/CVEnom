@@ -185,7 +185,11 @@ def revoke_sessions(session: Session, user_id: int, now: datetime, *,
 
     Pending MFA tickets die too: every caller is a credential or access change
     (password change/reset, admin revoke, deactivation, MFA reset), and a ticket
-    minted under the old state must not be able to finish a sign-in afterwards."""
+    minted under the old state must not be able to finish a sign-in afterwards.
+
+    Lock order: the user row first (a no-op for callers that already hold it), then
+    the tickets, matching the MFA sign-in flows, so the two never deadlock."""
+    session.execute(select(User.id).where(User.id == user_id).with_for_update())
     drop_mfa_tickets(session, user_id)
     stmt = update(UserSession).where(
         UserSession.user_id == user_id, UserSession.revoked_at.is_(None)

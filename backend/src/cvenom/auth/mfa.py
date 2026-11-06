@@ -4,8 +4,10 @@ Every failure raises the one generic `MfaFailed` (no reason attached), so the
 HTTP layer can answer every failed second factor with the same bytes. Nothing
 here logs a secret, ticket or code. Time is injected (`now`).
 
-Locking order (deadlock-free): ticket row, then user row. `reset_mfa` deletes
-the user's tickets before it locks the user, matching that order.
+Locking order (deadlock-free): the USER row first, then ticket row(s), the same
+order as `users.revoke_sessions` (password change/reset, admin revoke,
+deactivation) and `reset_mfa`. `load_ticket` therefore reads the ticket's owner
+without a lock, locks the user, and only then locks and re-checks the ticket.
 
 Functions flush but never commit; the caller owns the transaction.
 """
@@ -79,24 +81,27 @@ def issue_ticket(session, user: User, now: datetime) -> str:
 
 
 def load_ticket(session, raw: str, now: datetime) -> tuple[MfaTicket, User]:
-    """Lock and return a live ticket and its (active) user, or raise MfaFailed."""
+    """Lock and return a live ticket and its (active) user, or raise MfaFailed.
+
+    Lock order is user row, then ticket row (see module docstring). The ticket is
+    re-checked after both locks are held: a concurrent password reset, revoke or MFA
+    reset that committed meanwhile has deleted it, which is the generic failure."""
     if not isinstance(raw, str) or not raw:
+        raise MfaFailed()
+    token_hash = _sha256(raw)
+    owner = session.scalar(select(MfaTicket.user_id).where(MfaTicket.token_hash == token_hash))
+    if owner is None:
+        raise MfaFailed()
+    user = lock_user(session, owner)
+    if user is None or not user.is_active:
         raise MfaFailed()
     ticket = session.scalars(
         select(MfaTicket)
-        .where(MfaTicket.token_hash == _sha256(raw))
+        .where(MfaTicket.token_hash == token_hash)
         .with_for_update()
         .execution_options(populate_existing=True)
     ).first()
-    if ticket is None or ticket.expires_at <= now:
-        raise MfaFailed()
-    user = session.scalars(
-        select(User)
-        .where(User.id == ticket.user_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).first()
-    if user is None or not user.is_active:
+    if ticket is None or ticket.user_id != user.id or ticket.expires_at <= now:
         raise MfaFailed()
     return ticket, user
 
@@ -261,10 +266,10 @@ def reset_mfa(session, user_id: int, now: datetime) -> bool:
     """Forget the user's MFA, recovery codes and tickets; revoke every session.
 
     The user must enroll again at the next sign-in. Returns False if no such user."""
-    drop_mfa_tickets(session, user_id)  # before the user lock: ticket -> user order
-    user = lock_user(session, user_id)
+    user = lock_user(session, user_id)  # user row first, then tickets
     if user is None:
         return False
+    drop_mfa_tickets(session, user_id)
     user.mfa_secret_enc = None
     user.mfa_enabled_at = None
     user.mfa_last_step = None
