@@ -19,7 +19,9 @@ const openMenu = (email: RegExp) => fireEvent.click(screen.getByRole("button", {
 
 describe("Situation readout", () => {
   test("renders the level and an accessible gauge label from the Exploited lane", async () => {
-    handlers({ lanes: lanes([1, 2, 3, 4].map((n) => item({ cve_id: `CVE-2020-${n}`, kev_added: "2020-01-01" }))) });
+    // the readout uses the real clock: 4 listings 4 days ago (UTC) are in the 7-day span, none recent
+    const added = new Date(Date.now() - 4 * 86_400_000).toISOString().slice(0, 10);
+    handlers({ lanes: lanes([1, 2, 3, 4].map((n) => item({ cve_id: `CVE-2020-${n}`, kev_added: added }))) });
     guest();
     bar();
     expect(await screen.findByRole("img", { name: "Situation: High" })).toBeInTheDocument();

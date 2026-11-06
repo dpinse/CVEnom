@@ -58,7 +58,18 @@ export function safeHref(u: string): string | null {
   } catch {
     return null;
   }
-  return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  return isOnionHost(url.hostname) ? null : url.href;
+}
+
+/**
+ * True for `onion` or any `*.onion` host. `URL.hostname` is already WHATWG-normalised
+ * (percent-decoded, NFKC, IDNA dots U+3002/FF0E/FF61 mapped to ".", lower-cased), which mirrors
+ * the backend's validate_http_url; trailing dots are stripped here.
+ */
+function isOnionHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/\.+$/, "");
+  return h === "onion" || h.endsWith(".onion");
 }
 
 /** An external link: an anchor only when the URL passes safeHref, else plain text. */

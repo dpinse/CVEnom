@@ -39,6 +39,11 @@ type Allow = string | { literal: string } | { comment: string };
 const ALLOWED: Allow[] = ["http://www.w3.org/2000/svg", "http://www.w3.org/1999/xlink", { literal: "https://db-ip.com" },
   // ransomware.live attribution hyperlink (src/lib/credits.ts): an <a href> only, exact literal.
   { literal: "https://www.ransomware.live" },
+  // CVE drawer reference links (src/lib/refLinks.ts): each an <a href> prefix only, never fetched.
+  { literal: "https://nvd.nist.gov/vuln/detail/" }, // NVD detail page, <a href> only
+  { literal: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=" }, // CISA KEV catalog search, <a href> only
+  { literal: "https://www.cve.org/CVERecord?id=" }, // cve.org record page, <a href> only
+  { literal: "https://cwe.mitre.org/data/definitions/" }, // MITRE CWE definition page, <a href> only
 ];
 
 const HOST_CHAR = /[A-Za-z0-9.-]/;

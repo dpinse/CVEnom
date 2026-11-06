@@ -91,11 +91,26 @@ export interface GeoEventOut {
   observed_at: string;
   details: Record<string, unknown>;
 }
+export interface CveReference {
+  url: string;
+  tags: string[];
+}
 export interface CveDetail extends CveItem {
   epss: number | null;
   affected: unknown[];
   stories: StoryRef[];
   geo_events: GeoEventOut[];
+  kev_name: string | null;
+  kev_action: string | null;
+  kev_notes: string | null;
+  /** "YYYY-MM-DD" */
+  kev_due: string | null;
+  kev_ransomware: boolean | null;
+  cvss_vector: string | null;
+  cvss_severity: string | null;
+  cwes: string[];
+  references: CveReference[];
+  last_modified: string | null;
 }
 export interface VelocityPoint {
   day: string;
@@ -113,13 +128,57 @@ export interface GeoSummaryItem {
   events: number;
   last_seen: string;
 }
-export interface LoudStory {
+/** One story (feed item). `/stories/loud` returns a bare list of these; `/stories` pages them. */
+export interface StoryItem {
   title: string;
   summary: string;
   url: string;
   source: string;
   published: string;
   cve_ids: string[];
+}
+export type LoudStory = StoryItem;
+export interface StoryListOut {
+  items: StoryItem[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+/** GET /story?url=: a story plus its ingest `details` ({} when none). Details strings are entity-escaped. */
+export interface StoryDetailOut extends StoryItem {
+  details: Record<string, unknown>;
+}
+export interface StoryQuery {
+  q?: string;
+  source?: string;
+  /** "YYYY-MM-DD", inclusive */
+  from?: string;
+  to?: string;
+  page?: number;
+  page_size?: number;
+}
+
+/** GET /geo/{cc}. `trend` is display-only: never assume sum(trend) equals the counts. */
+export interface CountryEvent {
+  source: string;
+  kind: string;
+  label: string | null;
+  magnitude: number;
+  observed_at: string;
+  asn: number | null;
+  story_url: string | null;
+  details: Record<string, unknown>;
+}
+export interface CountryActivity {
+  country_code: string;
+  window_hours: number;
+  counts: { kind: string; events: number; magnitude: number }[];
+  /** at most 5 */
+  top_sources: { source: string; events: number }[];
+  /** exactly window_hours hourly buckets, oldest first */
+  trend: { bucket: string; events: number }[];
+  /** newest first, at most 50; null for anonymous callers */
+  events: CountryEvent[] | null;
 }
 export interface CveQuery {
   q?: string;
@@ -129,6 +188,10 @@ export interface CveQuery {
   kev?: boolean;
   from?: string;
   to?: string;
+  /** KEV added on/after this "YYYY-MM-DD" */
+  kev_from?: string;
+  kev_to?: string;
+  sort?: string;
   page?: number;
   page_size?: number;
 }

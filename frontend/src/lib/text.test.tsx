@@ -17,6 +17,27 @@ test("safeHref allows only http(s)", () => {
     expect(safeHref(bad)).toBeNull();
 });
 
+test("safeHref rejects .onion hosts", () => {
+  for (const bad of [
+    "http://abcdef.onion/",
+    "https://ABC.ONION/x",
+    "http://abc.onion.:80/",
+    "http://a.b.onion",
+    "http://onion/",
+    "http://x%2Eonion/",
+    "http://x。onion/",
+    "http://x．onion/",
+    "http://x｡onion/",
+    "http://abc.onion../",
+  ])
+    expect(safeHref(bad), bad).toBeNull();
+  expect(safeHref("https://onion.example.com/")).toBe("https://onion.example.com/");
+  expect(safeHref("https://example.com/x.onion")).toBe("https://example.com/x.onion");
+  expect(safeHref("https://notonion.com/")).toBe("https://notonion.com/");
+  expect(safeHref("https://x.onions.com/")).toBe("https://x.onions.com/");
+  expect(safeHref("https://example.com/?u=a.onion")).toBe("https://example.com/?u=a.onion");
+});
+
 describe("decodeEntities edge cases", () => {
   test("all supported named and numeric forms", () => {
     expect(decodeEntities("&amp; &lt; &gt; &quot; &#39; &#x27; &#65; &#x41; &#X41;")).toBe(`& < > " ' ' A A A`);

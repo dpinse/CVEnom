@@ -9,7 +9,20 @@ import {
 import { useSyncExternalStore } from "react";
 import { ApiError, AuthError, RateLimited, api, authStore } from "./api";
 import type { AuthSnapshot } from "./tokenStore";
-import type { CveDetail, CveListOut, CveQuery, GeoSummaryItem, Health, LanesOut, LoudStory, VelocityOut } from "./types";
+import type {
+  CountryActivity,
+  CveDetail,
+  CveListOut,
+  CveQuery,
+  GeoSummaryItem,
+  Health,
+  LanesOut,
+  LoudStory,
+  StoryDetailOut,
+  StoryListOut,
+  StoryQuery,
+  VelocityOut,
+} from "./types";
 
 /** Query keys. Shared with the live-update invalidation map (live.ts) and later tasks. */
 export const qk = {
@@ -19,6 +32,9 @@ export const qk = {
   loud: (limit: number) => ["loud", limit] as const,
   cve: (id: string) => ["cve", id] as const,
   cves: (params: CveQuery) => ["cves", params] as const,
+  stories: (params: StoryQuery) => ["stories", params] as const,
+  story: (url: string) => ["story", url] as const,
+  country: (cc: string, windowHours: number) => ["geo", "country", cc, windowHours] as const,
   health: () => ["health"] as const,
   sessions: () => ["sessions"] as const,
   alerts: () => ["alerts"] as const,
@@ -213,6 +229,42 @@ export function useCveSearch(params: CveQuery) {
     queryKey: qk.cves(params),
     queryFn: ({ signal }) => api<CveListOut>(cveSearchPath(params), { signal }),
     placeholderData: keepPreviousData,
+  });
+}
+
+export function storySearchPath(params: StoryQuery): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    sp.set(k, String(v));
+  }
+  const qs = sp.toString();
+  return qs ? `/stories?${qs}` : "/stories";
+}
+
+export function useStorySearch(params: StoryQuery) {
+  return useRead({
+    queryKey: qk.stories(params),
+    queryFn: ({ signal }) => api<StoryListOut>(storySearchPath(params), { signal }),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useStory(url: string | undefined) {
+  return useRead({
+    queryKey: qk.story(url ?? ""),
+    queryFn: ({ signal }) => api<StoryDetailOut>(`/story?url=${encodeURIComponent(url ?? "")}`, { signal }),
+    enabled: !!url,
+  });
+}
+
+/** Disabled while `cc` is undefined. */
+export function useCountry(cc: string | undefined, windowHours = 24) {
+  return useRead({
+    queryKey: qk.country(cc ?? "", windowHours),
+    queryFn: ({ signal }) =>
+      api<CountryActivity>(`/geo/${encodeURIComponent(cc ?? "")}?window_hours=${windowHours}`, { signal }),
+    enabled: !!cc,
   });
 }
 

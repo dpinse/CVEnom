@@ -21,12 +21,26 @@ export function isRecentKevDate(kevAdded: string | null, now: Date): boolean {
   return kevAdded === isoDate(now) || kevAdded === isoDate(new Date(now.getTime() - DAY_MS));
 }
 
-/** Calm 0, Elevated 1-2, High 3-5, Severe >= 6 or any KEV added within the window. */
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * By `kev_added` (UTC dates; the lane is already the 30-day EXPLOITED window):
+ * Severe = any listing today/yesterday (isRecentKevDate) or >= 6 in the last 7 days;
+ * High = >= 3 in the last 7 days; Elevated = any listing; Calm = none.
+ * A malformed date never counts toward the 7-day span (lexical comparison would let junk through).
+ */
 export function situationLevel(exploited: CveItem[], now: Date): Situation {
-  const n = exploited.length;
-  if (n >= 6 || exploited.some((c) => isRecentKevDate(c.kev_added, now))) return { level: "Severe", lit: 4 };
-  if (n >= 3) return { level: "High", lit: 3 };
-  if (n >= 1) return { level: "Elevated", lit: 2 };
+  const weekStart = isoDate(new Date(now.getTime() - 7 * DAY_MS));
+  let week = 0;
+  let recent = false;
+  for (const c of exploited) {
+    const d = c.kev_added;
+    if (isRecentKevDate(d, now)) recent = true;
+    if (d && ISO_DAY_RE.test(d) && d >= weekStart) week++;
+  }
+  if (recent || week >= 6) return { level: "Severe", lit: 4 };
+  if (week >= 3) return { level: "High", lit: 3 };
+  if (exploited.length >= 1) return { level: "Elevated", lit: 2 };
   return { level: "Calm", lit: 1 };
 }
 

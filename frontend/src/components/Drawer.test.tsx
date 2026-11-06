@@ -34,6 +34,16 @@ const detail = (o: Partial<CveDetail> = {}): CveDetail => ({
   affected: ["Acme Widget 1.0"],
   stories: [],
   geo_events: [],
+  kev_name: null,
+  kev_action: null,
+  kev_notes: null,
+  kev_due: null,
+  kev_ransomware: null,
+  cvss_vector: null,
+  cvss_severity: null,
+  cwes: [],
+  references: [],
+  last_modified: null,
   ...o,
 });
 const ev = (o: Partial<GeoEventOut> = {}): GeoEventOut => ({

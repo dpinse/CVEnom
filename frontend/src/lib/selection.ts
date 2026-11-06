@@ -1,8 +1,12 @@
 import { useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
+import { isIso3166Alpha2 } from "./iso3166";
 import { safeHref } from "./text";
 
-export type Selection = { kind: "cve"; id: string } | { kind: "story"; url: string };
+export type Selection =
+  | { kind: "cve"; id: string }
+  | { kind: "story"; url: string }
+  | { kind: "country"; cc: string };
 
 export const CVE_ID_RE = /^CVE-\d{4}-\d{4,7}$/;
 
@@ -15,6 +19,8 @@ export function parseSelection(sp: URLSearchParams): Selection | null {
     const url = safeHref(story);
     if (url !== null) return { kind: "story", url };
   }
+  const country = sp.get("country");
+  if (country !== null && isIso3166Alpha2(country)) return { kind: "country", cc: country };
   return null;
 }
 
@@ -28,11 +34,12 @@ export function useSelection() {
         const next = new URLSearchParams(prev);
         next.delete("cve");
         next.delete("story");
+        next.delete("country");
         if (s?.kind === "cve" && CVE_ID_RE.test(s.id)) next.set("cve", s.id);
         else if (s?.kind === "story") {
           const url = safeHref(s.url);
           if (url !== null) next.set("story", url);
-        }
+        } else if (s?.kind === "country" && isIso3166Alpha2(s.cc)) next.set("country", s.cc);
         return next;
       }, opts?.replace ? { replace: true } : undefined);
     },

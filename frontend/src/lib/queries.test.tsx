@@ -15,7 +15,11 @@ import {
   retryAfterOf,
   shouldRetry,
   useCve,
+  useCountry,
   useCveSearch,
+  useStory,
+  useStorySearch,
+  storySearchPath,
   useGeo,
   useLanes,
   useLoudStories,
@@ -280,5 +284,52 @@ describe("I3: error-state polling", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("history and country hooks", () => {
+  test("useStory requests /api/story?url=<encoded>; disabled without a url", async () => {
+    fresh();
+    const url = "https://x.test/a?b=1&c=2";
+    let seen = "";
+    server.use(
+      http.get(`${B}/story`, ({ request }) => {
+        seen = new URL(request.url).search;
+        return HttpResponse.json({ title: "t", summary: "", url, source: "s", published: "2026-11-01T00:00:00Z", cve_ids: [], details: {} });
+      }),
+    );
+    const off = renderHook(() => useStory(undefined), { wrapper });
+    expect(off.result.current.fetchStatus).toBe("idle");
+    const { result } = renderHook(() => useStory(url), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(seen).toBe(`?url=${encodeURIComponent(url)}`);
+  });
+
+  test("story search keys and path; empty params are omitted", async () => {
+    fresh();
+    expect(storySearchPath({})).toBe("/stories");
+    expect(storySearchPath({ q: "a b", source: "", page: 2 })).toBe("/stories?q=a+b&page=2");
+    expect(qk.stories({ q: "x" })).toEqual(["stories", { q: "x" }]);
+    expect(qk.story("u")).toEqual(["story", "u"]);
+    expect(qk.country("DE", 24)).toEqual(["geo", "country", "DE", 24]);
+    server.use(http.get(`${B}/stories`, () => HttpResponse.json({ items: [], page: 1, page_size: 25, total: 0 })));
+    const { result } = renderHook(() => useStorySearch({ q: "x" }), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+
+  test("useCountry requests /api/geo/DE?window_hours=; disabled without a cc", async () => {
+    fresh();
+    let seen = "";
+    server.use(
+      http.get(`${B}/geo/DE`, ({ request }) => {
+        seen = new URL(request.url).search;
+        return HttpResponse.json({ country_code: "DE", window_hours: 48, counts: [], top_sources: [], trend: [], events: null });
+      }),
+    );
+    const off = renderHook(() => useCountry(undefined), { wrapper });
+    expect(off.result.current.fetchStatus).toBe("idle");
+    const { result } = renderHook(() => useCountry("DE", 48), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(seen).toBe("?window_hours=48");
   });
 });

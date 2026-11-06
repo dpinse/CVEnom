@@ -93,6 +93,9 @@ function setup(o: { publicRead?: boolean; token?: string | null; refresh?: () =>
     loud: qk.loud(50),
     cve: qk.cve("CVE-2025-1"),
     cves: qk.cves({ q: "x" }),
+    stories: qk.stories({ q: "x" }),
+    story: qk.story("https://x.test/a"),
+    country: qk.country("DE", 24),
   };
   for (const [name, queryKey] of Object.entries(keys)) {
     counts[name] = 0;
@@ -210,6 +213,19 @@ describe("messages and invalidation", () => {
     r.ctl.stop();
   });
 
+  test("stories -> loud, stories and story; geo -> geo and country", async () => {
+    const r = await live({ publicRead: true });
+    const before = { ...r.counts };
+    last().msg({ type: "updated", what: ["stories"] });
+    await vi.advanceTimersByTimeAsync(600);
+    for (const k of ["loud", "stories", "story"]) expect(r.counts[k]).toBe(before[k] + 1);
+    for (const k of ["lanes", "geo", "country"]) expect(r.counts[k]).toBe(before[k]);
+    last().msg({ type: "updated", what: ["geo"] });
+    await vi.advanceTimersByTimeAsync(600);
+    for (const k of ["geo", "country"]) expect(r.counts[k]).toBe(before[k] + 1);
+    r.ctl.stop();
+  });
+
   test("stories -> loud only; geo -> geo only", async () => {
     const r = await live({ publicRead: true });
     const before = { ...r.counts };
@@ -234,7 +250,8 @@ describe("messages and invalidation", () => {
     await vi.advanceTimersByTimeAsync(200);
     last().msg({ type: "updated", what: ["stories"] });
     await vi.advanceTimersByTimeAsync(1000);
-    for (const k of ["lanes", "velocity", "cve", "cves", "geo", "loud"]) expect(r.counts[k]).toBe(before[k] + 1);
+    for (const k of ["lanes", "velocity", "cve", "cves", "geo", "loud", "stories", "story", "country"])
+      expect(r.counts[k]).toBe(before[k] + 1);
     r.ctl.stop();
   });
 
