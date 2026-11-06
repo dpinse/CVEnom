@@ -2,7 +2,7 @@ import { ApiError } from "../lib/api";
 import { useStory } from "../lib/queries";
 import { relTime } from "../lib/relTime";
 import { CVE_ID_RE, useSelection } from "../lib/selection";
-import { decodeEntities, ExternalLink, safeHref, Text } from "../lib/text";
+import { decodeEntities, ExternalLink, LinkRemoved, safeHref, Text } from "../lib/text";
 import type { StoryDetailOut } from "../lib/types";
 import { useNow } from "../lib/useNow";
 import { countryName, isIso2 } from "./geoSummary";
@@ -23,7 +23,6 @@ function RansomDetails({ details }: { details: Record<string, unknown> }) {
   ];
   const shown = rows.filter(([, v]) => v !== "");
   const website = str(details.website); // plain text, never an anchor; null when the backend dropped it
-  const description = str(details.description);
   const press = Array.isArray(details.press) ? details.press.filter((p): p is string => typeof p === "string") : [];
   return (
     <>
@@ -50,36 +49,30 @@ function RansomDetails({ details }: { details: Record<string, unknown> }) {
           </dl>
         </div>
       )}
-      {description && (
-        <div>
-          <div className="seclabel">Description</div>
-          <p className="sum isolate">
-            <Text value={description} />
-          </p>
-        </div>
-      )}
       {press.length > 0 && (
         <div>
           <div className="seclabel">Press</div>
           <ul className="refs">
-            {press.map((p, i) => (
-              <li key={`${p}#${i}`} className="ref">
-                <ExternalLink href={decodeEntities(p)} className="dlink">
-                  <Text value={safeHostOrText(p)} />
-                </ExternalLink>
-              </li>
-            ))}
+            {press.map((p, i) => {
+              // Stored URLs are entity-escaped: decode exactly once, then validate. An unsafe URL is never shown.
+              const safe = safeHref(decodeEntities(p));
+              return (
+                <li key={`${p}#${i}`} className="ref">
+                  {safe ? (
+                    <ExternalLink href={safe} className="dlink">
+                      {new URL(safe).hostname}
+                    </ExternalLink>
+                  ) : (
+                    <LinkRemoved />
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
     </>
   );
-}
-
-/** Link text for a press URL: its hostname when it is a safe URL, else the decoded text itself. */
-function safeHostOrText(p: string): string {
-  const safe = safeHref(decodeEntities(p));
-  return safe ? new URL(safe).hostname : p;
 }
 
 function StoryBody({ story }: { story: StoryDetailOut }) {

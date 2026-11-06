@@ -406,6 +406,7 @@ describe("CVEs tab: KEV range and sort", () => {
     api(() => list([], 120, 40));
     renderAt(ui, "/history?page=40&q=x");
     expect(await screen.findByText("No results on this page")).toBeInTheDocument();
+    expect(screen.getByText("120 results in total")).toBeInTheDocument(); // the real total stays visible
     const link = screen.getByRole("link", { name: "Go to page 1" });
     expect(link.getAttribute("href")).toBe("/history?q=x");
   });
@@ -459,6 +460,7 @@ describe("Stories tab", () => {
     storiesApi(() => sList([], 120, 40));
     renderAt(ui, "/history?tab=stories&page=40");
     expect(await screen.findByText("No results on this page")).toBeInTheDocument();
+    expect(screen.getByText("120 results in total")).toBeInTheDocument(); // the real total stays visible
     expect(screen.getByRole("link", { name: "Go to page 1" }).getAttribute("href")).toBe("/history?tab=stories");
   });
 

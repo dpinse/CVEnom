@@ -5,7 +5,7 @@ import { isIso3166Alpha2 } from "../lib/iso3166";
 import { relTime } from "../lib/relTime";
 import { cveOrgUrl, cweUrl, kevUrl, nvdUrl } from "../lib/refLinks";
 import { useSelection } from "../lib/selection";
-import { decodeEntities, ExternalLink, safeHref, Text } from "../lib/text";
+import { decodeEntities, ExternalLink, LinkRemoved, safeHref, Text } from "../lib/text";
 import type { CveDetail, GeoEventOut } from "../lib/types";
 import { useAuth } from "../lib/useAuth";
 import { useNow } from "../lib/useNow";
@@ -319,9 +319,8 @@ export function CveDetailBody({ d }: { d: CveDetail }) {
           <div className="seclabel">References</div>
           <ul className="refs">
             {refs.map((r, i) => {
-              // Stored URLs are entity-escaped: decode exactly once, then validate. An unsafe URL is plain text.
-              const decoded = decodeEntities(r.url);
-              const safe = safeHref(decoded);
+              // Stored URLs are entity-escaped: decode exactly once, then validate. An unsafe URL is never shown.
+              const safe = safeHref(decodeEntities(r.url));
               return (
                 <li key={`${r.url}#${i}`} className="ref">
                   {safe ? (
@@ -329,7 +328,7 @@ export function CveDetailBody({ d }: { d: CveDetail }) {
                       {new URL(safe).hostname}
                     </ExternalLink>
                   ) : (
-                    <span>{decoded}</span>
+                    <LinkRemoved />
                   )}
                   {(r.tags ?? []).map((t, j) => (
                     <span key={`${t}#${j}`} className="chip quiet">

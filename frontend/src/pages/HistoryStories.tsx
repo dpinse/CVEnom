@@ -165,7 +165,7 @@ export default function HistoryStories() {
           ? total === 0
             ? "0 results"
             : outOfRange
-              ? ""
+              ? `${total} results in total`
               : `Showing ${first}–${last} of ${total}`
           : isFetching
             ? "Loading…"

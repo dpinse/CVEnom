@@ -20,6 +20,33 @@ test("iso3166 set", () => {
   expect(isIso3166Alpha2("us")).toBe(false);
 });
 
+// I1: the backend exact-matches the stored Story.url, so the drawer must keep the original string, never URL.href.
+const NON_CANONICAL = [
+  "https://Example.com",
+  "https://news.example/Sicherheitslücke-1.html",
+  "https://example.com:443/a",
+  "https://example.com/a{b}",
+];
+
+test("a safe but non-canonical ?story= parses to the original string, not its normalised href", () => {
+  for (const raw of NON_CANONICAL) {
+    expect(parseSelection(new URLSearchParams({ story: raw })), raw).toEqual({ kind: "story", url: raw });
+  }
+  for (const bad of ["javascript:alert(1)", "http://abcdef.onion/x", "data:text/html,x"])
+    expect(parseSelection(new URLSearchParams({ story: bad })), bad).toEqual({ kind: "story", url: null });
+});
+
+test("select() writes a safe non-canonical story url unchanged; an unsafe one is never written", () => {
+  const wrapper = ({ children }: { children: ReactNode }) => createElement(MemoryRouter, null, children);
+  const { result } = renderHook(() => useSelection(), { wrapper });
+  for (const raw of NON_CANONICAL) {
+    act(() => result.current.select({ kind: "story", url: raw }));
+    expect(result.current.selection, raw).toEqual({ kind: "story", url: raw });
+  }
+  act(() => result.current.select({ kind: "story", url: "javascript:alert(1)" }));
+  expect(result.current.selection).toBeNull();
+});
+
 test("select() clears cve, story and country before setting one", () => {
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(

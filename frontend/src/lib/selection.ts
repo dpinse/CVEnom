@@ -14,9 +14,10 @@ export function parseSelection(sp: URLSearchParams): Selection | null {
   if (cve !== null && CVE_ID_RE.test(cve)) return { kind: "cve", id: cve };
   const story = sp.get("story");
   if (story !== null) {
-    const url = safeHref(story);
-    // An unsafe `?story=` (.onion, javascript:, malformed) still opens the drawer, in its not-found state (url null).
-    return { kind: "story", url };
+    // safeHref is only a gate: the backend exact-matches the stored Story.url, so keep the original string (URL.href
+    // would normalise case, ports and percent-encoding). An unsafe `?story=` (.onion, javascript:, malformed) still
+    // opens the drawer, in its not-found state (url null).
+    return { kind: "story", url: safeHref(story) !== null ? story : null };
   }
   const country = sp.get("country");
   if (country !== null && isIso3166Alpha2(country)) return { kind: "country", cc: country };
@@ -37,8 +38,8 @@ export function useSelection() {
           next.delete("country");
           if (s?.kind === "cve" && CVE_ID_RE.test(s.id)) next.set("cve", s.id);
           else if (s?.kind === "story") {
-            const url = s.url === null ? null : safeHref(s.url);
-            if (url !== null) next.set("story", url);
+            // Write the original string (see parseSelection); safeHref only decides whether it is written at all.
+            if (s.url !== null && safeHref(s.url) !== null) next.set("story", s.url);
           } else if (s?.kind === "country" && isIso3166Alpha2(s.cc)) next.set("country", s.cc);
           return next;
         },

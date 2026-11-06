@@ -72,6 +72,14 @@ function isOnionHost(hostname: string): boolean {
   return h === "onion" || h.endsWith(".onion");
 }
 
+/**
+ * Stands in for a stored URL that fails safeHref (.onion, javascript:, malformed): a neutral label, never the URL
+ * text itself. Used by the CVE references and the ransomware press list so both drawers treat unsafe links alike.
+ */
+export function LinkRemoved() {
+  return <span className="chip quiet">link removed</span>;
+}
+
 /** An external link: an anchor only when the URL passes safeHref, else plain text. */
 export function ExternalLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
   const safe = safeHref(href);

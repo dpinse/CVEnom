@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createQueryClient } from "../lib/queries";
+import { useSelection } from "../lib/selection";
 import type { CountryActivity, CountryEvent, CveDetail, GeoEventOut, LoudStory, StoryDetailOut } from "../lib/types";
 import { guest, member, server, setupMsw, signIn } from "../test/shell";
 import { authStore } from "../lib/api";
@@ -601,8 +602,10 @@ describe("CveDetail sections", () => {
     expect(within(d).getByText("Patch")).toBeInTheDocument();
     const refs = d.querySelector(".refs")!;
     expect(refs.querySelectorAll("a")).toHaveLength(1);
-    expect(within(d).getByText("javascript:alert(1)").closest("a")).toBeNull();
-    expect(within(d).getByText("http://abcdef.onion/x").closest("a")).toBeNull();
+    // I2: an unsafe reference keeps its slot as a neutral label; its URL is never echoed as text.
+    expect(within(refs as HTMLElement).getAllByText("link removed")).toHaveLength(2);
+    expect(d.textContent).not.toMatch(/onion|javascript/i);
+    expect(d.innerHTML).not.toMatch(/onion|javascript/i);
   });
 
   test("NVD and cve.org links are always present, CISA KEV only for KEV; all carry rel and target", async () => {
@@ -656,8 +659,7 @@ describe("StoryDetail", () => {
         attackdate: "2026-10-30",
         discovered: "2026-11-01",
         website: "victim.example",
-        description: "Desc &amp;amp; more",
-        press: ["https://press.example/a?x=1&amp;y=2", "http://abcdef.onion/p"],
+        press: ["https://press.example/a?x=1&amp;y=2", "http://abcdef.onion/p", "javascript:alert(1)"],
       },
       ...o,
     });
@@ -677,7 +679,7 @@ describe("StoryDetail", () => {
     expect(await screen.findByText("A summary")).toBeInTheDocument();
   });
 
-  test("ransomware details render; the website is text, not a link; the .onion press link is plain text; no img", async () => {
+  test("ransomware details render; the website is text, not a link; unsafe press links are removed, never echoed; no img", async () => {
     serveStory(ransom(), RURL);
     renderHost(["/?story=" + encodeURIComponent(RURL)]);
     const d = await dialog();
@@ -693,11 +695,15 @@ describe("StoryDetail", () => {
     ])
       expect(within(block).getByText(k).nextElementSibling).toHaveTextContent(v);
     expect(block.querySelector("a")).toBeNull();
-    expect(within(d).getByText("Desc &amp; more")).toBeInTheDocument();
     const press = await within(d).findByRole("link", { name: "press.example" });
     expect(press).toHaveAttribute("href", "https://press.example/a?x=1&y=2");
     expect(press).toHaveAttribute("rel", "noopener noreferrer");
-    expect(within(d).getByText("http://abcdef.onion/p").closest("a")).toBeNull();
+    // I2: the .onion and javascript: press entries render a neutral label: no anchor, no URL text.
+    const pressList = press.closest("ul")!;
+    expect(pressList.querySelectorAll("a")).toHaveLength(1);
+    expect(within(pressList).getAllByText("link removed")).toHaveLength(2);
+    expect(d.textContent).not.toMatch(/onion|javascript/i);
+    expect(d.innerHTML).not.toMatch(/onion|javascript/i);
     expect(within(d).getByRole("link", { name: "View on ransomware.live" })).toHaveAttribute("href", RURL);
     expect(within(d).getByTestId("ransomware-credit")).toBeInTheDocument();
     expect(d.querySelector("img")).toBeNull();
@@ -755,6 +761,38 @@ describe("StoryDetail", () => {
     expect(within(d).queryByText("References")).toBeNull();
     expect(within(d).queryByText("Weaknesses")).toBeNull();
   });
+
+  for (const raw of ["https://Example.com", "https://news.example/Sicherheitslücke-1.html"]) {
+    test(`I1: a non-canonical stored url (${raw}) is written and requested unchanged, and the drawer loads it`, async () => {
+      serveStory(sd({ url: raw, title: "Stored as-is" }), raw);
+      function Opener() {
+        const { select } = useSelection();
+        return (
+          <button type="button" onClick={() => select({ kind: "story", url: raw })}>
+            open-story
+          </button>
+        );
+      }
+      const qc = createQueryClient();
+      qc.setDefaultOptions({ queries: { ...qc.getDefaultOptions().queries, retry: false } });
+      render(
+        <QueryClientProvider client={qc}>
+          <MemoryRouter>
+            <Opener />
+            <Probe />
+            <DrawerHost />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "open-story" }));
+      await waitFor(() =>
+        expect(new URLSearchParams(screen.getByTestId("search").textContent ?? "").get("story")).toBe(raw),
+      );
+      const d = await dialog();
+      expect(await within(d).findByText("Stored as-is")).toBeInTheDocument();
+      expect(within(d).queryByText(/not found/)).toBeNull();
+    });
+  }
 
   for (const bad of ["javascript:alert(1)", "http://abcdef.onion/old-story"]) {
     test(`an unsafe ?story= (${bad.slice(0, 10)}) shows not-found: no fetch, no anchor, no echo; Esc clears it`, async () => {
