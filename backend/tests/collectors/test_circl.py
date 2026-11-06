@@ -230,3 +230,54 @@ async def test_circl_story_title_sanitized_end_to_end(db_session):
     assert "<" not in story.title and "script" not in story.title.lower()
     assert "Evil" in story.title
     assert story.summary == "Vulnerabilities: CVE-2026-5001"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "bad",
+    [
+        httpx.Response(404),
+        httpx.Response(200, content=b"not json{"),
+        httpx.Response(200, json=["not", "an", "object"]),
+    ],
+    ids=["404", "invalid-json", "non-dict"],
+)
+async def test_circl_poison_event_skipped_and_state_advances(bad):
+    now = int(datetime.now(UTC).timestamp())
+    manifest = {_uuid(1): {"timestamp": now - 10}, _uuid(2): {"timestamp": now - 5}}
+    _mock_manifest(manifest)
+    respx.get(EVENT_URL.format(uuid=_uuid(1))).mock(return_value=bad)
+    _mock_events({_uuid(2): _event(_uuid(2), now - 5)})
+    col = CirclOsintCollector()
+    res = await col.run()
+    assert col.last_error is None
+    assert [s.url for s in res.stories] == [EVENT_URL.format(uuid=_uuid(2))]
+    assert col.state["last_ts"] == now - 5
+
+
+@respx.mock
+async def test_circl_poison_event_alone_still_advances_state():
+    now = int(datetime.now(UTC).timestamp())
+    _mock_manifest({_uuid(1): {"timestamp": now - 10}})
+    respx.get(EVENT_URL.format(uuid=_uuid(1))).mock(return_value=httpx.Response(404))
+    col = CirclOsintCollector()
+    assert (await col.run()).stories == []
+    assert col.last_error is None and col.state["last_ts"] == now - 10
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.Response(503), httpx.ConnectError("boom")],
+    ids=["5xx", "transport"],
+)
+async def test_circl_server_or_transport_error_fails_run(failure):
+    now = int(datetime.now(UTC).timestamp())
+    _mock_manifest({_uuid(1): {"timestamp": now - 10}})
+    route = respx.get(EVENT_URL.format(uuid=_uuid(1)))
+    route.mock(side_effect=failure) if isinstance(failure, Exception) else route.mock(return_value=failure)
+    state = {"last_ts": now - 100, "seen_at_last_ts": []}
+    col = CirclOsintCollector(state=state)
+    res = await col.run()
+    assert col.last_error is not None
+    assert res.stories == [] and col.state == state

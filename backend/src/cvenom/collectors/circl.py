@@ -10,6 +10,7 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from pydantic import ValidationError
 
 from cvenom.collectors import base
@@ -108,7 +109,21 @@ class CirclOsintCollector(Collector):
                 log.warning("%s: event %s exceeds size cap; skipped", self.name, uuid)
                 self._ts[uuid] = ts
                 continue
-            self._ts[uuid] = ts
+            except httpx.HTTPStatusError as exc:
+                if not 400 <= exc.response.status_code < 500:
+                    raise  # 5xx: the server is unwell, fail the run and retry later
+                log.warning("%s: event %s returned %s; skipped", self.name, uuid,
+                            exc.response.status_code)
+                self._ts[uuid] = ts
+                continue
+            except ValueError:
+                log.warning("%s: event %s is not valid JSON; skipped", self.name, uuid)
+                self._ts[uuid] = ts
+                continue
+            self._ts[uuid] = ts  # a poison event must never block the oldest-first queue
+            if not isinstance(event, dict):
+                log.warning("%s: event %s is not an object; skipped", self.name, uuid)
+                continue
             out.append((uuid, event))
         return out
 
