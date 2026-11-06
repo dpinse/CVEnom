@@ -537,3 +537,20 @@ def test_markup_or_ignorable_split_onion_website_dropped(website):
 def test_normal_website_kept():
     res = RansomwareLiveCollector().normalize([_rec(website="victim.example")])
     assert res.stories[0].details["website"] == "victim.example"
+
+
+# R11: invisible fillers / VS supplement split ".onion"; bidi controls make other text display as one.
+@pytest.mark.parametrize("website", [
+    "xㅤ.onion", "exam\U000E0100ple.onion", "x.onﾠion", "x.oni឴on", "x.ᅟonion",
+    "‮noino.elpmaxe", "x.‮noino", "exa⁧mple.com", "victim‏.example",
+    "exa&#x202E;mple.com",
+])
+def test_filler_or_bidi_website_dropped(website):
+    res = RansomwareLiveCollector().normalize([_rec(website=website)])
+    assert res.stories[0].details["website"] is None
+
+
+@pytest.mark.parametrize("website", ["example.com", "bücher.de", "https://bücher.de/"])
+def test_legit_and_idn_website_kept(website):
+    res = RansomwareLiveCollector().normalize([_rec(website=website)])
+    assert res.stories[0].details["website"] == website

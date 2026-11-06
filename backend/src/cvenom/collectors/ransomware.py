@@ -32,6 +32,7 @@ from cvenom.config import get_settings
 from cvenom.schemas import (
     NormalizedGeoEvent,
     NormalizedStory,
+    contains_bidi_control,
     contains_onion,
     validate_http_url,
 )
@@ -130,9 +131,12 @@ def _story_details(rec: dict, group: str, victim: str) -> dict:
     """Allow-listed story details. Never post_url/screenshot/ransom/data_size/infostealer."""
     website = _str_or_none(rec.get("website"))
     # Overlong values are rejected before any scan. The scan runs on the value as ingest stores
-    # it (sanitize_text strips markup), so markup cannot split ".onion" past the check.
+    # it (sanitize_text strips markup), so markup cannot split ".onion" past the check. Bidi
+    # controls are rejected outright: reordering can make other text display as ".onion".
     if website is not None and (
-        len(website) > MAX_SCAN_LEN or contains_onion(sanitize_text(website))
+        len(website) > MAX_SCAN_LEN
+        or contains_onion(clean := sanitize_text(website))
+        or contains_bidi_control(clean)
     ):
         website = None  # text only, but a leak-site address must never reach any output
     return {

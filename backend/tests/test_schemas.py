@@ -247,6 +247,48 @@ def test_contains_onion_ignores_default_ignorables(text):
     assert contains_onion(text)
 
 
+# R11: variation-selector supplement and Hangul/Khmer fillers render as nothing.
+@pytest.mark.parametrize("text", [
+    "x.on\U000E0100ion", "x.onion\U000E01EF", "xㅤ.onion", "x.ᅟonion", "x.oᅠnion",
+    "x.onﾠion", "x.oni឴on", "x.onio឵n", "exam\U000E0100ple.onion",
+])
+def test_contains_onion_ignores_fillers_and_vs_supplement(text):
+    from cvenom.schemas import contains_onion
+
+    assert contains_onion(text)
+
+
+# R11: bidi controls reorder text visually; stripping cannot make that safe, so they are detected.
+@pytest.mark.parametrize("text", [
+    "‮noino.elpmaxe", "x.‮noino", "exa‪mple.com", "exa‫mple.com", "exa‬mple.com",
+    "exa‭mple.com", "exa⁦mple.com", "exa⁧mple.com", "exa⁨mple.com",
+    "exa⁩mple.com", "exa‎mple.com", "exa‏mple.com", "exa؜mple.com",
+    "exa&#x202E;mple.com", "exa%E2%80%AEmple.com",
+])
+def test_contains_bidi_control_detects(text):
+    from cvenom.schemas import contains_bidi_control
+
+    assert contains_bidi_control(text)
+
+
+@pytest.mark.parametrize("text", ["example.com", "bücher.de", "https://münchen.de/", "", "مثال.إختبار"])
+def test_contains_bidi_control_negatives(text):
+    from cvenom.schemas import contains_bidi_control
+
+    assert not contains_bidi_control(text)
+
+
+@pytest.mark.parametrize("url", [
+    "https://‮noino.elpmaxe/", "https://exa⁧mple.com/", "https://example.com/a‮b",
+    "https://example.com/a&#x202E;b", "https://xㅤ.onion/", "https://x.on\U000E0100ion/",
+])
+def test_validate_http_url_rejects_bidi_and_filler_onion(url):
+    from cvenom.schemas import validate_http_url
+
+    with pytest.raises(ValueError):
+        validate_http_url(url)
+
+
 @pytest.mark.parametrize("url", [
     "https://onion.example.com/", "https://example.com/x.onion", "https://example.com/?u=a.onion",
     "https://example.com/a?x=1&amp;y=2", "https://example.com/#frag&#46;onion",

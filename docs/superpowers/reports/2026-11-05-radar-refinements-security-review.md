@@ -168,3 +168,13 @@ The follow-up is about 3 lines: extend `_IGNORABLE_EXTRA`, and reject or strip b
 **Info items left as-is:** I1 (CountryDetail decodes the raw `story_url` column; no security effect), I2 (an OSV backlog beyond the budget can persist, though bounded), I3 (no total stream deadline), I4 (unindexed story search), I5 (an `id` of `..` normalises to the same-host root).
 
 **Final result: 0 High, 0 Medium open, 0 Low open, 1 accepted Low residual (R11), 5 Info.**
+
+## Follow-up (2026-11-06): R11 resolved
+
+Fixed on `fix/followups` in `fix(security): strip invisible fillers and reject bidi controls in victim website text (R11)`:
+- `_IGNORABLE_EXTRA` now also strips the variation-selector supplement U+E0100–E01EF, the Hangul fillers U+115F, U+1160, U+3164, U+FFA0 and the Khmer inherent vowels U+17B4, U+17B5 before the `.onion` check.
+- New `contains_bidi_control` detects U+202A–202E, U+2066–2069, U+200E, U+200F and U+061C in the raw text and in its decoded forms (HTML entities, percent-escapes, NFKC). The ransomware `website` guard nulls text that contains any of them.
+- `validate_http_url` shares these helpers, so press, reference and permalink URLs strip the same characters and reject bidi controls too.
+- Legitimate text is unaffected: `example.com`, `bücher.de` and Arabic IDN text without control characters are kept.
+
+R11 is closed. **Updated result: 0 High, 0 Medium, 0 Low open, 0 accepted residuals, 5 Info.**

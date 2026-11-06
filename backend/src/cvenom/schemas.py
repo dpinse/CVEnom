@@ -46,15 +46,42 @@ _IDNA_DOTS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
 _NORMALISE_MAX_ROUNDS = 10
 MAX_URL_LEN = 2048
 _URL_MARKUP_CHARS = frozenset('<>"`')
-# Default-ignorable code points a browser/renderer drops: Cf (soft hyphen, ZWSP, ...), CGJ,
-# Mongolian free variation selectors and variation selectors.
-_IGNORABLE_EXTRA = frozenset([0x034F, *range(0x180B, 0x1810), *range(0xFE00, 0xFE10)])
+# Default-ignorable or blank-rendering code points a browser/renderer drops: Cf (soft hyphen,
+# ZWSP, ...), CGJ, Mongolian free variation selectors, variation selectors (and the supplement
+# U+E0100-E01EF), Hangul fillers and Khmer inherent vowels (R11).
+_IGNORABLE_EXTRA = frozenset([
+    0x034F, *range(0x180B, 0x1810), *range(0xFE00, 0xFE10), *range(0xE0100, 0xE01F0),
+    0x115F, 0x1160, 0x3164, 0xFFA0, 0x17B4, 0x17B5,
+])
+# Bidi embeddings/overrides/isolates and marks (R11). They reorder how text displays (an RLO
+# shows `x.noino` as `x.onion`), so stripping them cannot make text safe: callers reject it.
+_BIDI_CONTROLS = frozenset([
+    0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A),
+])
 
 
 def _strip_ignorables(text: str) -> str:
     return "".join(
         ch for ch in text if ord(ch) not in _IGNORABLE_EXTRA and unicodedata.category(ch) != "Cf"
     )
+
+
+def _has_bidi(text: str) -> bool:
+    return any(ord(ch) in _BIDI_CONTROLS for ch in text)
+
+
+def contains_bidi_control(value: str) -> bool:
+    """True if `value`, raw or decoded like normalize_onion_text (entities, percent, NFKC), holds a
+    bidi control character."""
+    text = value
+    for _ in range(_NORMALISE_MAX_ROUNDS):
+        if _has_bidi(text):
+            return True
+        prev = text
+        text = unicodedata.normalize("NFKC", unquote(html.unescape(text)))
+        if text == prev:
+            return False
+    return _has_bidi(text)
 
 
 def normalize_onion_text(value: str) -> str:
@@ -94,6 +121,8 @@ def _check_http_url(url: str) -> None:
         raise ValueError("url is empty or contains whitespace/control characters")
     if _URL_MARKUP_CHARS.intersection(url):
         raise ValueError("url contains markup characters")
+    if contains_bidi_control(url):
+        raise ValueError("url contains bidi control characters")
     try:
         parts = urlsplit(url)
     except ValueError as exc:
