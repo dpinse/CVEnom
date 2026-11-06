@@ -268,8 +268,8 @@ async def test_circl_poison_event_alone_still_advances_state():
 @respx.mock
 @pytest.mark.parametrize(
     "failure",
-    [httpx.Response(503), httpx.ConnectError("boom")],
-    ids=["5xx", "transport"],
+    [httpx.Response(503), httpx.Response(429), httpx.Response(408), httpx.ConnectError("boom")],
+    ids=["5xx", "429", "408", "transport"],
 )
 async def test_circl_server_or_transport_error_fails_run(failure):
     now = int(datetime.now(UTC).timestamp())

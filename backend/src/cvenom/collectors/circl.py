@@ -110,8 +110,9 @@ class CirclOsintCollector(Collector):
                 self._ts[uuid] = ts
                 continue
             except httpx.HTTPStatusError as exc:
-                if not 400 <= exc.response.status_code < 500:
-                    raise  # 5xx: the server is unwell, fail the run and retry later
+                code = exc.response.status_code
+                if code in (408, 429) or not 400 <= code < 500:
+                    raise  # transient (timeout, rate limit, 5xx): fail the run, retry later
                 log.warning("%s: event %s returned %s; skipped", self.name, uuid,
                             exc.response.status_code)
                 self._ts[uuid] = ts
