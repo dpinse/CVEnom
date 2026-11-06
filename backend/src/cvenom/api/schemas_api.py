@@ -27,6 +27,8 @@ class CveItem(BaseModel):
     published: UtcDatetime | None
     summary: str
     recent_story_count: int
+    product: str | None
+    last_seen: UtcDatetime | None
 
 
 class LaneOut(BaseModel):
@@ -46,6 +48,10 @@ class CveListOut(BaseModel):
     page: int
     page_size: int
     total: int
+    # q was an exact CVE id (all other filters ignored); filtered_out = it exists but the
+    # other filters would have hidden it.
+    exact_match: bool = False
+    exact_match_filtered_out: bool = False
 
 
 class StoryRef(BaseModel):

@@ -8,7 +8,7 @@ from urllib.parse import unquote_to_bytes
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import String, any_, func, literal, or_, select
+from sqlalchemy import String, any_, func, literal, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
@@ -16,12 +16,20 @@ from cvenom.config import get_settings
 from cvenom.models import Cve, GeoEvent, Story, StoryCveLink, User
 from cvenom.pipeline import lane_views
 from cvenom.readmodels import (
-    _escape_like,
+    ADDED_DAYS,
+    SEV_KEYS,
+    AddedKey,
+    SortKey,
+    StatusKey,
     country_activity,
+    cve_search_filters,
+    cve_search_order,
     cve_velocity,
     cve_volume,
     geo_summary,
+    last_seen_map,
     loud_stories,
+    product_label,
     search_stories,
     story_detail,
     summary_counts,
@@ -58,7 +66,7 @@ CACHE_PATHS: dict[str, frozenset[str]] = {
     "/api/geo": frozenset({"window_hours", "range"}),
     "/api/stories/loud": frozenset({"limit", "range"}),
     # free-text `q` is not allowed: it bypasses the cache so arbitrary strings cannot fill Redis
-    "/api/stories": frozenset({"source", "from", "to", "page", "page_size"}),
+    "/api/stories": frozenset({"source", "from", "to", "added", "page", "page_size"}),
 }
 
 def _utf8_query(request: Request) -> None:
@@ -88,7 +96,16 @@ def _loud_since() -> datetime:
     return _now() - timedelta(hours=get_settings().loud_window_hours)
 
 
-def _item(c: Cve, story_count: int) -> dict:
+def _parse_sev(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    if not keys or any(k not in SEV_KEYS for k in keys):
+        raise HTTPException(status_code=422, detail={"error": "validation_error"})
+    return tuple(dict.fromkeys(keys))
+
+
+def _item(c: Cve, story_count: int, last_seen: datetime | None) -> dict:
     return {
         "cve_id": c.cve_id,
         "cvss": c.cvss,
@@ -101,6 +118,8 @@ def _item(c: Cve, story_count: int) -> dict:
         "published": c.published,
         "summary": c.summary,
         "recent_story_count": story_count,
+        "product": product_label(c),
+        "last_seen": last_seen,
     }
 
 
@@ -129,39 +148,33 @@ def lanes(
     rows: dict[str, Cve] = {}
     if ids:  # ONE query for the fields CveView lacks
         rows = {c.cve_id: c for c in session.scalars(select(Cve).where(Cve.cve_id.in_(ids)))}
+    # The lanes response is cached for everyone: last_seen always uses the anonymous view.
+    seen = last_seen_map(session, ids, restricted_sources(None))
     out: dict[str, dict] = {}
     for lane in Lane:
         items = []
         for v in capped.get(lane, []):
             c = rows.get(v.cve_id)
             if c is not None:
-                items.append(_item(c, v.recent_story_count))
+                items.append(_item(c, v.recent_story_count, seen.get(c.cve_id)))
         out[lane.value] = {"total": len(views.get(lane, [])), "items": items}
     return out
 
 
-@router.get("/cves", response_model=CveListOut)
-def search_cves(
-    q: Annotated[str | None, Query(max_length=200)] = None,
-    source: Literal["cisa", "vulncheck"] | None = None,
-    lane: Lane | None = None,
-    min_cvss: Annotated[float | None, Query(ge=0, le=10)] = None,
-    kev: bool | None = None,
-    from_: Annotated[date | None, Query(alias="from")] = None,
-    to: date | None = None,
-    kev_from: date | None = None,
-    kev_to: date | None = None,
-    sort: Literal["kev_added", "published", "cvss"] | None = None,
-    page: Annotated[int, Query(ge=1, le=10000)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
-    session: Session = SessionDep,
-) -> dict:
+def _legacy_conds(
+    session: Session,
+    *,
+    source: str | None,
+    lane: Lane | None,
+    min_cvss: float | None,
+    kev: bool | None,
+    from_: date | None,
+    to: date | None,
+    kev_from: date | None,
+    kev_to: date | None,
+) -> list:
+    """History-page params, kept until the Threats page replaces it."""
     conds = []
-    if q:
-        pat = f"%{_escape_like(q)}%"
-        conds.append(
-            or_(Cve.cve_id.ilike(pat, escape="\\"), Cve.summary.ilike(pat, escape="\\"))
-        )
     if source is not None:
         conds.append(Cve.kev_source == source)
     if min_cvss is not None:
@@ -179,16 +192,85 @@ def search_cves(
     if lane is not None:
         members = [v.cve_id for v in lane_views(session, _now())[lane]]
         conds.append(Cve.cve_id == any_(literal(members, ARRAY(String))))
+    return conds
 
-    # lane= keeps its published-desc order unless sort is passed explicitly.
-    if sort is None:
-        sort = "kev_added" if kev is True and lane is None else "published"
-    if sort == "kev_added":
-        order = (Cve.kev_added.desc().nulls_last(), Cve.cve_id)
-    elif sort == "cvss":
-        order = (Cve.cvss.desc().nulls_last(), Cve.published.desc().nulls_last(), Cve.cve_id)
+
+@router.get("/cves", response_model=CveListOut)
+def search_cves(
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    added: AddedKey = "any",
+    status: StatusKey = "all",
+    exclude_kev: bool = False,
+    sev: Annotated[str | None, Query(max_length=40)] = None,
+    poc: bool | None = None,
+    nopatch: bool | None = None,
+    due: Literal["7d"] | None = None,
+    source: Literal["cisa", "vulncheck"] | None = None,
+    lane: Lane | None = None,
+    min_cvss: Annotated[float | None, Query(ge=0, le=10)] = None,
+    kev: bool | None = None,
+    from_: Annotated[date | None, Query(alias="from")] = None,
+    to: date | None = None,
+    kev_from: date | None = None,
+    kev_to: date | None = None,
+    sort: SortKey | None = None,
+    page: Annotated[int, Query(ge=1, le=10000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+    session: Session = SessionDep,
+    user: User | None = Depends(current_user),  # gated by the router-level public_or_user
+) -> dict:
+    now = _now()
+    hidden = restricted_sources(user)
+    sev_keys = _parse_sev(sev)
+
+    exact_id = None
+    if q and CVE_ID_RE.fullmatch(q.strip().upper()):
+        exact_id = q.strip().upper()
+
+    def filters(*, with_q: bool) -> list:
+        return [
+            *cve_search_filters(
+                now,
+                added=added,
+                status=status,
+                exclude_kev=exclude_kev,
+                sev=sev_keys,
+                poc=poc,
+                nopatch=nopatch,
+                due=due is not None,
+                q=q if with_q else None,
+                hidden=hidden,
+            ),
+            *_legacy_conds(
+                session,
+                source=source,
+                lane=lane,
+                min_cvss=min_cvss,
+                kev=kev,
+                from_=from_,
+                to=to,
+                kev_from=kev_from,
+                kev_to=kev_to,
+            ),
+        ]
+
+    filtered_out = False
+    if exact_id is not None:  # R15: an exact CVE id ignores every other filter
+        conds = [Cve.cve_id == exact_id]
+        if session.scalar(select(func.count()).select_from(Cve).where(*conds)):
+            filtered_out = not session.scalar(
+                select(func.count()).select_from(Cve).where(*conds, *filters(with_q=False))
+            )
     else:
-        order = (Cve.published.desc().nulls_last(), Cve.cve_id)
+        conds = filters(with_q=True)
+
+    if sort is None:
+        sort = "kev_added" if kev is True and lane is None else "newest"
+    if due is not None and sort == "newest":
+        sort = "due"
+    if sort == "due" and exact_id is None:  # soonest deadline first, KEV only
+        conds += [Cve.kev.is_(True), Cve.kev_due.is_not(None)]
+    order = cve_search_order(now, sort, status=status, hidden=hidden)
 
     total = session.scalar(select(func.count()).select_from(Cve).where(*conds)) or 0
     rows = session.scalars(
@@ -198,12 +280,16 @@ def search_cves(
         .limit(page_size)
         .offset((page - 1) * page_size)
     ).all()
-    counts = _recent_counts(session, [r.cve_id for r in rows], _loud_since())
+    ids = [r.cve_id for r in rows]
+    counts = _recent_counts(session, ids, _loud_since())
+    seen = last_seen_map(session, ids, hidden)
     return {
-        "items": [_item(r, counts.get(r.cve_id, 0)) for r in rows],
+        "items": [_item(r, counts.get(r.cve_id, 0), seen.get(r.cve_id)) for r in rows],
         "page": page,
         "page_size": page_size,
         "total": total,
+        "exact_match": exact_id is not None,
+        "exact_match_filtered_out": filtered_out,
     }
 
 
@@ -241,8 +327,9 @@ def cve_detail(
         .limit(100)
     ).all()
     counts = _recent_counts(session, [cve_id], _loud_since())
+    seen = last_seen_map(session, [cve_id], hidden)
     return {
-        **_item(c, counts.get(cve_id, 0)),
+        **_item(c, counts.get(cve_id, 0), seen.get(cve_id)),
         "epss": c.epss,
         "affected": c.affected,
         "kev_name": c.kev_name,
@@ -336,12 +423,16 @@ def stories_search(
     source: Annotated[str | None, Query(max_length=64)] = None,
     from_: Annotated[date | None, Query(alias="from")] = None,
     to: date | None = None,
+    added: AddedKey = "any",
     page: Annotated[int, Query(ge=1, le=10000)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
     session: Session = SessionDep,
     user: User | None = Depends(current_user),  # gated by the router-level public_or_user
 ) -> dict:
     start = datetime.combine(from_, time.min, tzinfo=UTC) if from_ is not None else None
+    if added != "any":  # story published within the window; combines with `from` (later wins)
+        window = _now() - timedelta(days=ADDED_DAYS[added])
+        start = window if start is None else max(start, window)
     end = None
     if to is not None and to < date.max:
         end = datetime.combine(to + timedelta(days=1), time.min, tzinfo=UTC)

@@ -51,7 +51,7 @@ def bearer(db, user):
 NOW = datetime.now(UTC)
 LANE_KEYS = {
     "cve_id", "cvss", "epss_percentile", "kev", "kev_added", "kev_source", "poc_badge",
-    "patch_available", "published", "summary", "recent_story_count",
+    "patch_available", "published", "summary", "recent_story_count", "product", "last_seen",
 }
 GEO_EVENT_KEYS = {"kind", "country_code", "label", "magnitude", "observed_at", "details"}
 
@@ -315,7 +315,9 @@ async def test_search_basic_and_filters(db_session):
     assert await ids(f"?to={to}") == ["CVE-2024-0002"]
     r = await get(db_session, "/api/cves")
     b = r.json()
-    assert set(b) == {"items", "page", "page_size", "total"} and b["total"] == 3
+    assert set(b) == {
+        "items", "page", "page_size", "total", "exact_match", "exact_match_filtered_out",
+    } and b["total"] == 3
     assert set(b["items"][0]) == LANE_KEYS
     assert b["items"][0]["recent_story_count"] == 1
 
