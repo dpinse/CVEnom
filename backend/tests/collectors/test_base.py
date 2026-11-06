@@ -399,3 +399,49 @@ async def test_http_post_json_does_not_retry_4xx_and_caps_size(respx_mock):
     respx_mock.post("https://api.test/big").mock(return_value=httpx.Response(200, content=b"x" * 50))
     with pytest.raises(base.ResponseTooLarge):
         await http_post_json("https://api.test/big", json_body={}, max_bytes=10)
+
+
+# --- http_stream_lines ---
+
+
+@pytest.mark.asyncio
+async def test_http_stream_lines_yields_lines(respx_mock):
+    respx_mock.get("https://s.test/a").mock(return_value=httpx.Response(200, text="a\nb\r\nc"))
+    out = [line async for line in base.http_stream_lines("https://s.test/a")]
+    assert out == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_http_stream_lines_budget_raises_after_yielding_prefix(respx_mock):
+    async def body():
+        for _ in range(100):
+            yield b"aa\n"
+
+    respx_mock.get("https://s.test/a").mock(return_value=httpx.Response(200, content=body()))
+    got = []
+    with pytest.raises(base.ResponseTooLarge):
+        async for line in base.http_stream_lines("https://s.test/a", max_bytes=30):
+            got.append(line)
+    assert 0 < len(got) < 100
+
+
+@pytest.mark.asyncio
+async def test_http_stream_lines_does_not_follow_redirect_to_private(respx_mock):
+    respx_mock.get("https://s.test/a").mock(
+        return_value=httpx.Response(302, headers={"Location": "http://169.254.169.254/x"})
+    )
+    private = respx_mock.get("http://169.254.169.254/x").mock(
+        return_value=httpx.Response(200, text="x")
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        async for _ in base.http_stream_lines("https://s.test/a"):
+            pass
+    assert private.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_http_stream_lines_retries_5xx_before_streaming(respx_mock):
+    respx_mock.get("https://s.test/a").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, text="ok\n")]
+    )
+    assert [x async for x in base.http_stream_lines("https://s.test/a")] == ["ok"]

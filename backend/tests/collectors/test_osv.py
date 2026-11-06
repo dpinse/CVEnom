@@ -286,3 +286,99 @@ async def test_invalid_ids_skipped_with_warning_and_valid_ids_quoted(respx_mock,
     assert len(raw) == 1
     invalid_msgs = [r.getMessage() for r in caplog.records if "invalid" in r.getMessage()]
     assert len(invalid_msgs) == len(bad)
+
+
+# --- streaming index (task 11) ---
+
+CAP = 25_000_000
+FILLER = "2026-10-01T00:00:00Z,Go/GO-FILLER-1\n"
+
+
+def _streamed(head: str, tail_line: str, tail_bytes: int, consumed: list[int]):
+    """Async body: head, then tail_line repeated to ~tail_bytes, in 64 KiB chunks."""
+
+    async def gen():
+        data = head.encode()
+        consumed[0] += len(data)
+        yield data
+        chunk = (tail_line * (65536 // len(tail_line))).encode()
+        sent = 0
+        while sent < tail_bytes:
+            consumed[0] += len(chunk)
+            sent += len(chunk)
+            yield chunk
+
+    return gen()
+
+
+@pytest.mark.asyncio
+async def test_index_larger_than_cap_still_collects_recent_ids(respx_mock):
+    consumed = [0]
+    head = _index("GO-2026-1", "GO-2026-2")
+    body = _streamed(head, FILLER, CAP + 5_000_000, consumed)
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, content=body))
+    for i in ("GO-2026-1", "GO-2026-2"):
+        respx_mock.get(VULN_URL.format(id=i)).mock(return_value=httpx.Response(200, json=OWN_CVE))
+    raw = await OsvCollector(since=SINCE).fetch()
+    assert len(raw) == 2
+
+
+@pytest.mark.asyncio
+async def test_stops_reading_at_cutoff(respx_mock):
+    consumed = [0]
+    body = _streamed(_index("GO-2026-1"), FILLER, 20_000_000, consumed)
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, content=body))
+    respx_mock.get(VULN_URL.format(id="GO-2026-1")).mock(return_value=httpx.Response(200, json=OWN_CVE))
+    await OsvCollector(since=SINCE).fetch()
+    assert consumed[0] < 1_000_000  # nowhere near the 20 MB body
+
+
+@pytest.mark.asyncio
+async def test_byte_budget_exhausted_logs_and_processes_partial(respx_mock, monkeypatch, caplog):
+    monkeypatch.setattr(osv, "INDEX_MAX_BYTES", 100_000)
+    consumed = [0]
+    recent = "2026-11-04T10:00:00Z,Go/GO-RECENT-1\n"
+    body = _streamed(_index("GO-2026-1"), recent, 5_000_000, consumed)
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, content=body))
+    respx_mock.get(url__startswith="https://api.osv.dev/v1/vulns/").mock(
+        return_value=httpx.Response(200, json=OWN_CVE)
+    )
+    with caplog.at_level(logging.WARNING, logger="cvenom.collectors.osv"):
+        raw = await OsvCollector(since=SINCE).fetch()
+    assert len(raw) == 2  # GO-2026-1 plus the repeated GO-RECENT-1 (deduped)
+    assert any("byte budget" in r.getMessage() for r in caplog.records)
+    assert consumed[0] < 1_000_000
+
+
+@pytest.mark.asyncio
+async def test_max_ids_cap_still_applies(respx_mock, monkeypatch):
+    monkeypatch.setattr(osv, "MAX_IDS", 3)
+    consumed = [0]
+    lines = "".join(f"2026-11-04T10:00:00Z,Go/GO-N-{n}\n" for n in range(10_000))
+    body = _streamed(lines, FILLER, 1_000_000, consumed)
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, content=body))
+    route = respx_mock.get(url__startswith="https://api.osv.dev/v1/vulns/").mock(
+        return_value=httpx.Response(200, json=OWN_CVE)
+    )
+    raw = await OsvCollector(since=SINCE).fetch()
+    assert len(raw) == 3 and route.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_malformed_and_out_of_order_rows_tolerated(respx_mock):
+    text = (
+        "2026-11-04T10:00:00Z,Go/GO-A-1\n"
+        "garbage\n"
+        ",Go/GO-NOTS-1\n"
+        "2026-11-03T10:00:00Z,\n"
+        "2026-11-02T10:00:00Z,Go/GO-B-1\n"
+        "2026-11-03T10:00:00Z,Go/GO-C-1\n"  # newer after older: still read
+        "2026-10-01T00:00:00Z,Go/GO-OLD-1\n"
+        "2026-11-04T10:00:00Z,Go/GO-AFTER-CUTOFF-1\n"  # after the cutoff row: not read
+    )
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=text))
+    route = respx_mock.get(url__startswith="https://api.osv.dev/v1/vulns/").mock(
+        return_value=httpx.Response(200, json=OWN_CVE)
+    )
+    raw = await OsvCollector(since=SINCE).fetch()
+    assert len(raw) == 3 and route.call_count == 3

@@ -7,6 +7,7 @@ import copy
 import logging
 import math
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -202,6 +203,61 @@ async def http_get_text(
         url, headers=headers, params=params, retries=retries, timeout=timeout, max_bytes=max_bytes
     )
     return resp.text
+
+
+async def http_stream_lines(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    retries: int = 3,
+    timeout: float = 20,
+    max_bytes: int = 25_000_000,
+) -> AsyncIterator[str]:
+    """GET url and yield its body line by line without buffering the whole body.
+
+    Same client settings as _request (no redirects, same user agent/timeout) and the
+    same 429/5xx/transport retry, which applies only until the first byte is read.
+    The body is never fully held: once more than max_bytes have been read, the
+    lines read so far have been yielded and ResponseTooLarge is raised. Callers
+    may stop early (use contextlib.aclosing) to avoid reading the rest.
+    """
+    hdrs = {"User-Agent": USER_AGENT, **(headers or {})}
+    attempts = max(retries, 1)
+    async with httpx.AsyncClient(timeout=timeout, headers=hdrs, follow_redirects=False) as client:
+        for attempt in range(attempts):
+            last = attempt == attempts - 1
+            delay = BACKOFF_BASE * (2**attempt)
+            try:
+                async with client.stream("GET", url, params=params) as resp:
+                    status = resp.status_code
+                    if status == 429 or status >= 500:
+                        if last:
+                            resp.raise_for_status()
+                        wait = _retry_after(resp) if status == 429 else None
+                        retry_delay = delay if wait is None else wait
+                    else:
+                        resp.raise_for_status()
+                        total = 0
+                        pending = b""
+                        async for chunk in resp.aiter_bytes():
+                            total += len(chunk)
+                            pending += chunk
+                            *lines, pending = pending.split(b"\n")
+                            for raw in lines:
+                                yield raw.decode("utf-8", "replace").rstrip("\r")
+                            if total > max_bytes:
+                                raise ResponseTooLarge(f"stream exceeds budget of {max_bytes} bytes")
+                        if pending:
+                            yield pending.decode("utf-8", "replace").rstrip("\r")
+                        return
+            except (httpx.TimeoutException, httpx.TransportError):
+                if last:
+                    raise
+                await _sleep(delay)
+                continue
+            await _sleep(retry_delay)
+    raise RuntimeError("unreachable")  # pragma: no cover
 
 
 async def http_get_bytes(

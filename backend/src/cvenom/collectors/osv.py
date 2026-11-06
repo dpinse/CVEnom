@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
@@ -12,7 +13,8 @@ from cvenom.collectors.base import (
     Collector,
     CollectorResult,
     http_get_json,
-    http_get_text,
+    ResponseTooLarge,
+    http_stream_lines,
     register,
 )
 from cvenom.schemas import CVE_ID_RE, NormalizedCve
@@ -22,6 +24,8 @@ log = logging.getLogger(__name__)
 INDEX_URL = "https://osv-vulnerabilities.storage.googleapis.com/modified_id.csv"
 VULN_URL = "https://api.osv.dev/v1/vulns/{id}"
 MAX_IDS = 1000
+# Byte budget for the streamed index (same as the shared 25 MB response cap).
+INDEX_MAX_BYTES = 25_000_000
 DEFAULT_WINDOW = timedelta(days=7)
 REQUEST_DELAY = 0.1
 # A run with more than this share of per-id fetch failures fails as a whole.
@@ -44,36 +48,73 @@ def _valid_id(vuln_id: str) -> bool:
     return bool(_ID_RE.fullmatch(vuln_id)) and bool(vuln_id.strip("."))
 
 
-def parse_index(text: str, since: datetime) -> list[str]:
-    """Return unique OSV ids modified at/after since (index is newest first)."""
-    if since.tzinfo is None:
-        since = since.replace(tzinfo=UTC)
-    ids: list[str] = []
-    seen: set[str] = set()
-    malformed = 0
-    for line in text.splitlines():
+class _IndexScan:
+    """Incremental parser for modified_id.csv rows (newest first).
+
+    Ordering assumption: reading stops at the first row older than the cutoff.
+    A newer row after that point is never seen (no tolerance window); rows that
+    are out of order before it are simply read and kept.
+    """
+
+    def __init__(self, since: datetime) -> None:
+        self.since = since if since.tzinfo else since.replace(tzinfo=UTC)
+        self.ids: list[str] = []
+        self.malformed = 0
+        self._seen: set[str] = set()
+
+    def feed(self, line: str) -> bool:
+        """Consume one row; return False when no further rows are needed."""
         ts_text, sep, key = line.partition(",")
         if not sep or not key.strip():
-            malformed += 1
-            continue
+            self.malformed += 1
+            return True
         try:
             ts = _parse_ts(ts_text)
         except ValueError:
-            malformed += 1
-            continue
-        if ts < since:
-            break
+            self.malformed += 1
+            return True
+        if ts < self.since:
+            return False
         vuln_id = key.strip().rsplit("/", 1)[-1]
-        if not vuln_id or vuln_id in seen:
-            continue
-        if len(ids) >= MAX_IDS:
+        if not vuln_id or vuln_id in self._seen:
+            return True
+        if len(self.ids) >= MAX_IDS:
             log.warning("osv: capped at %d ids; older ids not processed this run", MAX_IDS)
+            return False
+        self._seen.add(vuln_id)
+        self.ids.append(vuln_id)
+        return True
+
+    def finish(self) -> list[str]:
+        if self.malformed:
+            log.warning("osv: skipped %d malformed index line(s)", self.malformed)
+        return self.ids
+
+
+def parse_index(text: str, since: datetime) -> list[str]:
+    """Return unique OSV ids modified at/after since (index is newest first)."""
+    scan = _IndexScan(since)
+    for line in text.splitlines():
+        if not scan.feed(line):
             break
-        seen.add(vuln_id)
-        ids.append(vuln_id)
-    if malformed:
-        log.warning("osv: skipped %d malformed index line(s)", malformed)
-    return ids
+    return scan.finish()
+
+
+async def read_index(since: datetime) -> list[str]:
+    """Stream the index, stopping at the cutoff, MAX_IDS or the byte budget."""
+    scan = _IndexScan(since)
+    try:
+        async with aclosing(http_stream_lines(INDEX_URL, max_bytes=INDEX_MAX_BYTES)) as lines:
+            async for line in lines:
+                if not scan.feed(line):
+                    break
+    except ResponseTooLarge:
+        log.warning(
+            "osv: index byte budget (%d) exhausted before the cutoff; processing the %d ids read",
+            INDEX_MAX_BYTES,
+            len(scan.ids),
+        )
+    return scan.finish()
 
 
 @register
@@ -86,7 +127,7 @@ class OsvCollector(Collector):
     async def fetch(self, since: datetime | None = None) -> list[dict]:
         cutoff = since or self.since or datetime.now(UTC) - DEFAULT_WINDOW
         ids = []
-        for vuln_id in parse_index(await http_get_text(INDEX_URL), cutoff):
+        for vuln_id in await read_index(cutoff):
             if _valid_id(vuln_id):
                 ids.append(vuln_id)
             else:
