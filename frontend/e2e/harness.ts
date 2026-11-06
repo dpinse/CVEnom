@@ -30,6 +30,15 @@ function json(body: string, status = 200) {
   return { status, contentType: "application/json", body };
 }
 
+/** GET /api/story?url=: the loud-feed stories (no details) plus the ransomware.live fixture; anything else is the backend's 404. */
+function storyByUrl(url: string | null) {
+  const loud = JSON.parse(fixture("loud")) as { url: string }[];
+  const found = [...loud.map((s) => ({ ...s, details: {} })), JSON.parse(fixture("story")) as { url: string }].find(
+    (s) => s.url === url,
+  );
+  return found ? json(JSON.stringify(found)) : json('{"error":"not_found"}', 404);
+}
+
 async function mockApi(page: Page, unexpected: string[]) {
   await page.route("**/api/**", (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -40,6 +49,7 @@ async function mockApi(page: Page, unexpected: string[]) {
     if (path === "/api/stories/loud") return route.fulfill(json(fixture("loud")));
     if (path === "/api/cves") return route.fulfill(json(fixture("cves")));
     if (path === "/api/stories") return route.fulfill(json(fixture("stories")));
+    if (path === "/api/story") return route.fulfill(storyByUrl(new URL(route.request().url()).searchParams.get("url")));
     if (path === `/api/cves/${CVE_ID}`) return route.fulfill(json(fixture(`cve-${CVE_ID}`)));
     if (path === "/api/auth/refresh") return route.fulfill(json('{"error":"unauthorized"}', 401)); // stays a guest
     unexpected.push(`${route.request().method()} ${path}`);

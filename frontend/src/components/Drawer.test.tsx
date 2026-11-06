@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createQueryClient } from "../lib/queries";
-import type { CveDetail, GeoEventOut, LoudStory } from "../lib/types";
+import type { CveDetail, GeoEventOut, LoudStory, StoryDetailOut } from "../lib/types";
 import { guest, member, server, setupMsw, signIn } from "../test/shell";
 import { authStore } from "../lib/api";
 import { BACKEND_STORIES_CAP } from "./CveDetail";
@@ -72,10 +72,6 @@ function serveCve(d: CveDetail | number) {
     ),
   );
 }
-function serveStories(list: LoudStory[]) {
-  server.use(http.get("http://localhost/api/stories/loud", () => HttpResponse.json(list)));
-}
-
 function Probe() {
   const loc = useLocation();
   const nav = useNavigate();
@@ -152,7 +148,8 @@ describe("DrawerHost", () => {
     const d = await dialog();
     await screen.findByText("Acme Widget 1.0");
     const close = within(d).getByRole("button", { name: "Close" });
-    const link = within(d).getByRole("link");
+    const links = within(d).getAllByRole("link");
+    const link = links[links.length - 1]; // the last focusable element
     link.focus();
     fireEvent.keyDown(link, { key: "Tab" });
     expect(close).toHaveFocus();
@@ -321,9 +318,9 @@ describe("CveDetail", () => {
     const d = await dialog();
     await screen.findByText("Good");
     expect(screen.getByText("Bad")).toBeInTheDocument();
-    const links = d.querySelectorAll("a");
+    const links = d.querySelectorAll(".slinks a"); // the standard NVD / KEV / cve.org links are covered below
     expect(links).toHaveLength(1);
-    links.forEach((a) => {
+    d.querySelectorAll("a").forEach((a) => {
       expect(a).toHaveAttribute("rel", "noopener noreferrer");
       expect(a).toHaveAttribute("target", "_blank");
     });
@@ -340,7 +337,7 @@ describe("CveDetail", () => {
     );
     renderHost(["/?cve=" + CVE]);
     await screen.findByText("Newer");
-    const titles = screen.getAllByRole("link").map((a) => a.textContent);
+    const titles = Array.from(document.querySelectorAll(".slinks a")).map((a) => a.textContent);
     expect(titles).toEqual(["Newer", "Older"]);
   });
 
@@ -497,12 +494,168 @@ describe("anonymous story-count note and ransomware credit (CveDetail)", () => {
   });
 });
 
+const full = (): CveDetail =>
+  detail({
+    kev_name: "Acme Gateway Auth Bypass",
+    kev_action: "Apply the vendor patch.",
+    kev_notes: "See the advisory.",
+    kev_due: "2026-10-22",
+    kev_ransomware: true,
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    cvss_severity: "CRITICAL",
+    cwes: ["CWE-79", "NVD-CWE-Other"],
+    references: [
+      { url: "https://vendor.example/advisory?a=1&amp;b=2", tags: ["Vendor Advisory", "Patch"] },
+      { url: "javascript:alert(1)", tags: [] },
+      { url: "http://abcdef.onion/x", tags: [] },
+    ],
+    last_modified: "2026-10-05T00:00:00Z",
+    stories: [{ title: "Story A", url: "https://news.example/a", source: "S", published: "2026-11-05T10:00:00Z" }],
+    geo_events: [ev()],
+  });
+
+describe("CveDetail sections", () => {
+  const SECTIONS = [
+    "Summary",
+    "Scores",
+    "Key dates",
+    "Required action",
+    "Affected products",
+    "Weaknesses",
+    "References",
+    "Related stories",
+    "Geo events",
+    "Links",
+  ];
+  const headings = (d: HTMLElement) => Array.from(d.querySelectorAll(".seclabel")).map((e) => e.textContent);
+
+  test("a full fixture renders every section in order, with the header chips", async () => {
+    serveCve(full());
+    renderHost(["/?cve=" + CVE]);
+    const d = await dialog();
+    await screen.findByText("Required action");
+    expect(headings(d)).toEqual(SECTIONS);
+    expect(within(d).getByText("Acme Gateway Auth Bypass")).toBeInTheDocument();
+    expect(within(d).getByText("CRITICAL")).toBeInTheDocument();
+    expect(within(d).getByText("ransomware use")).toBeInTheDocument();
+    expect(within(d).getByTestId("cvss-vector")).toHaveTextContent("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H");
+    expect(within(d).getByText("EPSS score 0.500")).toBeInTheDocument();
+    for (const [k, v] of [
+      ["Published", "2026-09-30"],
+      ["Last modified", "2026-10-05"],
+      ["KEV added", "2026-10-01"],
+      ["CISA due", "2026-10-22"],
+    ])
+      expect(within(d).getByText(k).nextElementSibling).toHaveTextContent(v);
+    expect(within(d).getByText("Apply the vendor patch.")).toBeInTheDocument();
+  });
+
+  test("NULL and empty data render no empty section headings", async () => {
+    serveCve(
+      detail({
+        summary: "",
+        affected: [],
+        published: null as unknown as string,
+        kev: false,
+        kev_added: null,
+        recent_story_count: 0,
+      }),
+    );
+    renderHost(["/?cve=" + CVE]);
+    const d = await dialog();
+    await screen.findByText("Scores");
+    expect(headings(d)).toEqual(["Scores", "Links"]);
+    expect(within(d).queryByText("ransomware use")).toBeNull();
+  });
+
+  test("a severity chip is derived from the CVSS score when cvss_severity is null", async () => {
+    serveCve(detail({ cvss: 9.8, cvss_severity: null }));
+    renderHost(["/?cve=" + CVE]);
+    expect(await within(await dialog()).findByText("Critical")).toBeInTheDocument();
+  });
+
+  test("a CWE links to cwe.mitre.org; a non-numeric one is plain text", async () => {
+    serveCve(full());
+    renderHost(["/?cve=" + CVE]);
+    const d = await dialog();
+    const a = await within(d).findByRole("link", { name: "CWE-79" });
+    expect(a).toHaveAttribute("href", "https://cwe.mitre.org/data/definitions/79.html");
+    expect(within(d).getByText("NVD-CWE-Other").closest("a")).toBeNull();
+  });
+
+  test("a reference shows its hostname (decoded once) and tags; unsafe and .onion references render no anchor", async () => {
+    serveCve(full());
+    renderHost(["/?cve=" + CVE]);
+    const d = await dialog();
+    const a = await within(d).findByRole("link", { name: "vendor.example" });
+    expect(a).toHaveAttribute("href", "https://vendor.example/advisory?a=1&b=2");
+    expect(within(d).getByText("Vendor Advisory")).toBeInTheDocument();
+    expect(within(d).getByText("Patch")).toBeInTheDocument();
+    const refs = d.querySelector(".refs")!;
+    expect(refs.querySelectorAll("a")).toHaveLength(1);
+    expect(within(d).getByText("javascript:alert(1)").closest("a")).toBeNull();
+    expect(within(d).getByText("http://abcdef.onion/x").closest("a")).toBeNull();
+  });
+
+  test("NVD and cve.org links are always present, CISA KEV only for KEV; all carry rel and target", async () => {
+    serveCve(detail({ kev: false }));
+    const first = renderHost(["/?cve=" + CVE]);
+    let d = await dialog();
+    await within(d).findByText("Links");
+    expect(within(d).getByRole("link", { name: "NVD" })).toHaveAttribute(
+      "href",
+      `https://nvd.nist.gov/vuln/detail/${CVE}`,
+    );
+    expect(within(d).getByRole("link", { name: "cve.org" })).toHaveAttribute(
+      "href",
+      `https://www.cve.org/CVERecord?id=${CVE}`,
+    );
+    expect(within(d).queryByRole("link", { name: "CISA KEV" })).toBeNull();
+    first.unmount();
+    serveCve(detail({ kev: true }));
+    renderHost(["/?cve=" + CVE]);
+    d = await dialog();
+    const kev = await within(d).findByRole("link", { name: "CISA KEV" });
+    expect(kev.getAttribute("href")).toContain("cisa.gov/known-exploited-vulnerabilities-catalog");
+    d.querySelectorAll("a").forEach((a) => {
+      expect(a).toHaveAttribute("rel", "noopener noreferrer");
+      expect(a).toHaveAttribute("target", "_blank");
+    });
+  });
+});
+
 describe("StoryDetail", () => {
   const url = "https://news.example/a";
   const open = () => renderHost(["/?story=" + encodeURIComponent(url)]);
+  const serveStory = (s: StoryDetailOut | number, u = url) =>
+    server.use(
+      http.get("http://localhost/api/story", ({ request }) => {
+        expect(new URL(request.url).searchParams.get("url")).toBe(u);
+        return typeof s === "number" ? HttpResponse.json({ error: "not_found" }, { status: s }) : HttpResponse.json(s);
+      }),
+    );
+  const sd = (o: Partial<StoryDetailOut> = {}): StoryDetailOut => ({ ...story(), details: {}, ...o });
+  const RURL = "https://www.ransomware.live/id/x";
+  const ransom = (o: Partial<StoryDetailOut> = {}): StoryDetailOut =>
+    sd({
+      url: RURL,
+      source: "ransomware.live",
+      details: {
+        victim: "Victim &amp; Co",
+        group: "grp",
+        activity: "Manufacturing",
+        country: "DE",
+        attackdate: "2026-10-30",
+        discovered: "2026-11-01",
+        website: "victim.example",
+        description: "Desc &amp;amp; more",
+        press: ["https://press.example/a?x=1&amp;y=2", "http://abcdef.onion/p"],
+      },
+      ...o,
+    });
 
-  test("shows the story with Open article link and CVE chips that select ?cve=", async () => {
-    serveStories([story({ title: "Big &amp; loud", summary: "&amp;lt;b&amp;gt;", cve_ids: [CVE] })]);
+  test("a story outside the loud feed loads through /api/story, with Open article and CVE chips that select ?cve=", async () => {
+    serveStory(sd({ title: "Big &amp; loud", summary: "&amp;lt;b&amp;gt;", cve_ids: [CVE] }));
     serveCve(detail());
     open();
     const d = await dialog();
@@ -516,34 +669,62 @@ describe("StoryDetail", () => {
     expect(await screen.findByText("A summary")).toBeInTheDocument();
   });
 
-  test("a ransomware.live story shows the credit", async () => {
-    serveStories([story({ source: "ransomware.live" })]);
-    open();
-    await dialog();
-    expect(await screen.findByTestId("ransomware-credit")).toHaveTextContent("Ransomware data: ransomware.live");
+  test("ransomware details render; the website is text, not a link; the .onion press link is plain text; no img", async () => {
+    serveStory(ransom(), RURL);
+    renderHost(["/?story=" + encodeURIComponent(RURL)]);
+    const d = await dialog();
+    const block = await within(d).findByTestId("ransom-details");
+    for (const [k, v] of [
+      ["Victim", "Victim & Co"],
+      ["Group", "grp"],
+      ["Sector", "Manufacturing"],
+      ["Country", "Germany"],
+      ["Attack date", "2026-10-30"],
+      ["Discovered", "2026-11-01"],
+      ["Website", "victim.example"],
+    ])
+      expect(within(block).getByText(k).nextElementSibling).toHaveTextContent(v);
+    expect(block.querySelector("a")).toBeNull();
+    expect(within(d).getByText("Desc &amp; more")).toBeInTheDocument();
+    const press = await within(d).findByRole("link", { name: "press.example" });
+    expect(press).toHaveAttribute("href", "https://press.example/a?x=1&y=2");
+    expect(press).toHaveAttribute("rel", "noopener noreferrer");
+    expect(within(d).getByText("http://abcdef.onion/p").closest("a")).toBeNull();
+    expect(within(d).getByRole("link", { name: "View on ransomware.live" })).toHaveAttribute("href", RURL);
+    expect(within(d).getByTestId("ransomware-credit")).toBeInTheDocument();
+    expect(d.querySelector("img")).toBeNull();
   });
 
-  test("other sources show no credit", async () => {
-    serveStories([story()]);
+  test("a null website omits that line", async () => {
+    serveStory(ransom({ details: { victim: "V", website: null } }), RURL);
+    renderHost(["/?story=" + encodeURIComponent(RURL)]);
+    const d = await dialog();
+    await within(d).findByTestId("ransom-details");
+    expect(within(d).queryByText("Website")).toBeNull();
+  });
+
+  test("other sources show no credit and no details block", async () => {
+    serveStory(sd());
     open();
     await dialog();
     await screen.findByText("Big news");
     expect(screen.queryByTestId("ransomware-credit")).toBeNull();
+    expect(screen.queryByTestId("ransom-details")).toBeNull();
   });
 
-  test("I2: an unknown ?story= URL renders a neutral not-found state with no anchor and no URL", async () => {
+  test("a 404 shows the not-found copy with no anchor and never the URL", async () => {
     const evil = "https://evil.example/login";
-    serveStories([story()]);
+    serveStory(404, evil);
     renderHost(["/?story=" + encodeURIComponent(evil)]);
     const d = await dialog();
-    expect(await within(d).findByText("Story not found (it may have aged out of the feed).")).toBeInTheDocument();
+    expect(await within(d).findByText("Story not found (it may have been removed)")).toBeInTheDocument();
     expect(d.querySelector("a")).toBeNull();
     expect(d).not.toHaveTextContent("evil.example");
   });
 
   test("M7: duplicate CVE ids on a story render without React key warnings", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    serveStories([story({ cve_ids: [CVE, CVE, "junk", "junk"] })]);
+    serveStory(sd({ cve_ids: [CVE, CVE, "junk", "junk"] }));
     open();
     await dialog();
     expect(await screen.findAllByRole("button", { name: CVE })).toHaveLength(2);
@@ -551,15 +732,14 @@ describe("StoryDetail", () => {
     errors.mockRestore();
   });
 
-  test("a failed loud-stories query says it could not load, not that the story is gone", async () => {
-    server.use(http.get("http://localhost/api/stories/loud", () => new HttpResponse(null, { status: 500 })));
+  test("a server error says it could not load, not that the story is gone", async () => {
+    server.use(http.get("http://localhost/api/story", () => new HttpResponse(null, { status: 500 })));
     open();
-    expect(await screen.findByText("Couldn't load stories — try again")).toBeInTheDocument();
-    expect(screen.queryByText("Story not found (it may have aged out of the feed).")).toBeNull();
+    expect(await screen.findByText("Couldn't load this story")).toBeInTheDocument();
+    expect(screen.queryByText(/not found/)).toBeNull();
   });
 
   test("an unsafe story param never opens a drawer", async () => {
-    serveStories([story({ url: "javascript:alert(1)" })]);
     renderHost(["/?story=" + encodeURIComponent("javascript:alert(1)")]);
     expect(screen.queryByRole("dialog")).toBeNull();
   });

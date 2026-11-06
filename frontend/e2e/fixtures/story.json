@@ -1,0 +1,19 @@
+{
+  "title": "Victim Corp listed by e2e-group",
+  "summary": "Victim Corp appeared on a leak site.",
+  "url": "https://www.ransomware.live/id/e2e",
+  "source": "ransomware.live",
+  "published": "2026-11-05T09:00:00Z",
+  "cve_ids": ["CVE-2026-1001"],
+  "details": {
+    "victim": "Victim Corp",
+    "group": "e2e-group",
+    "activity": "Manufacturing",
+    "country": "US",
+    "attackdate": "2026-11-01",
+    "discovered": "2026-11-04",
+    "website": "victim.example",
+    "description": "A description of the incident.",
+    "press": ["https://press.example/a"]
+  }
+}
