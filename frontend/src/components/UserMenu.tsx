@@ -81,6 +81,9 @@ export function UserMenu() {
           <Link to="/account/password" onClick={close}>
             Change password
           </Link>
+          <Link to="/account/two-factor" onClick={close}>
+            Two-factor
+          </Link>
           {user.role === "admin" && (
             <>
               <hr />

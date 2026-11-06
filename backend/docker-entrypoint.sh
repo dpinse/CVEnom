@@ -1,5 +1,5 @@
 #!/bin/sh
-# One image, several roles: api | worker | beat | migrate | create-admin
+# One image, several roles: api | worker | beat | migrate | create-admin | reset-mfa
 set -eu
 
 cmd="${1:-api}"
@@ -23,8 +23,12 @@ case "$cmd" in
   create-admin)
     exec python -m cvenom.cli create-admin "$@"
     ;;
+  reset-mfa)
+    # Break-glass: forget a user's MFA (lost device); revokes their sessions.
+    exec python -m cvenom.cli reset-mfa "$@"
+    ;;
   *)
-    echo "usage: docker-entrypoint.sh api|worker|beat|migrate|create-admin" >&2
+    echo "usage: docker-entrypoint.sh api|worker|beat|migrate|create-admin|reset-mfa" >&2
     exit 64
     ;;
 esac

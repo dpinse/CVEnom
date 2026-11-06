@@ -2,7 +2,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,7 +14,7 @@ from cvenom.auth.passwords import (
     validate_password,
     verify_password,
 )
-from cvenom.models import Invite, User, UserSession
+from cvenom.models import Invite, MfaTicket, User, UserSession
 
 _ROLES = ("admin", "member")
 _PURPOSES = ("invite", "reset")
@@ -168,9 +168,29 @@ def create_reset(session: Session, admin: User, user: User, ttl_hours: int = 24,
     return raw, now + timedelta(hours=ttl_hours)
 
 
+def drop_mfa_tickets(session: Session, user_id: int) -> None:
+    """Delete the user's pending MFA sign-in tickets (and their pending enrollment secrets)."""
+    session.execute(
+        delete(MfaTicket).where(MfaTicket.user_id == user_id),
+        execution_options={"synchronize_session": False},
+    )
+    for obj in list(session.identity_map.values()):
+        if isinstance(obj, MfaTicket) and obj.user_id == user_id:
+            session.expunge(obj)
+
+
 def revoke_sessions(session: Session, user_id: int, now: datetime, *,
                     except_sid=None) -> int:
-    """Revoke the user's live sessions (all, or all but `except_sid`)."""
+    """Revoke the user's live sessions (all, or all but `except_sid`).
+
+    Pending MFA tickets die too: every caller is a credential or access change
+    (password change/reset, admin revoke, deactivation, MFA reset), and a ticket
+    minted under the old state must not be able to finish a sign-in afterwards.
+
+    Lock order: the user row first (a no-op for callers that already hold it), then
+    the tickets, matching the MFA sign-in flows, so the two never deadlock."""
+    session.execute(select(User.id).where(User.id == user_id).with_for_update())
+    drop_mfa_tickets(session, user_id)
     stmt = update(UserSession).where(
         UserSession.user_id == user_id, UserSession.revoked_at.is_(None)
     )

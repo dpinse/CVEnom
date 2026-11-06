@@ -29,6 +29,28 @@ export interface TokenResponse {
   token_type: "bearer";
   expires_in: number;
 }
+/** POST /auth/login (and invite accept): step one of sign-in. Never a session. */
+export interface MfaChallenge {
+  /** short-lived, single-use; held only in component memory */
+  ticket: string;
+  enroll_required: boolean;
+  expires_in: number;
+}
+/** POST /auth/mfa/enroll/start: shown once, never stored or cached */
+export interface MfaEnrollStart {
+  secret: string;
+  otpauth_uri: string;
+}
+/** POST /auth/mfa/enroll/finish */
+export interface MfaEnrolled extends TokenResponse {
+  recovery_codes: string[];
+}
+/** GET /auth/mfa */
+export interface MfaStatus {
+  enabled: boolean;
+  enrolled_at: string | null;
+  recovery_codes_remaining: number;
+}
 export interface Me {
   id: number;
   email: string;
@@ -205,6 +227,7 @@ export interface UserAdmin {
   is_active: boolean;
   created_at: string;
   active_sessions: number;
+  mfa_enabled: boolean;
 }
 export interface UserPatch {
   role?: Role;

@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRoutes } from "../routes";
-import { fill } from "../test/authpages";
+import { fill, passCode } from "../test/authpages";
 import { makeHub } from "../test/coord";
 import { server, setupMsw } from "../test/shell";
 import { authStore, createApiClient } from "./api";
@@ -50,10 +50,19 @@ describe("I1: the query cache is identity-scoped", () => {
         if (auth === "Bearer tok-B") return HttpResponse.json([session("b1", "203.0.113.2")]);
         return HttpResponse.json({ error: "unauthorized" }, { status: 401 });
       }),
+      // two-step sign-in: the ticket names the user, the session comes from the second factor
       http.post("http://localhost/api/auth/login", async ({ request }) => {
         const { email } = (await request.json()) as { email: string };
         return HttpResponse.json({
-          access_token: email === A.email ? "tok-A" : "tok-B",
+          ticket: email === A.email ? "tk-A" : "tk-B",
+          enroll_required: false,
+          expires_in: 300,
+        });
+      }),
+      http.post("http://localhost/api/auth/mfa/verify", async ({ request }) => {
+        const { ticket } = (await request.json()) as { ticket: string };
+        return HttpResponse.json({
+          access_token: ticket === "tk-A" ? "tok-A" : "tok-B",
           token_type: "bearer",
           expires_in: 900,
         });
@@ -77,6 +86,7 @@ describe("I1: the query cache is identity-scoped", () => {
       fill("Email", u.email);
       fill("Password", "correct horse battery");
       fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      await passCode();
     };
 
     await screen.findByLabelText("Email");

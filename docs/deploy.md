@@ -29,6 +29,13 @@ command aborts.
 
   Export `ADMIN_PASSWORD` in your shell first (or pipe it on stdin with `-T`). Do not put it in
   `.env`: that file is handed to every app container.
+- Every account must use an authenticator app (TOTP MFA); the admin enrolls at the first sign-in.
+  If the last admin loses their device, this break-glass command forgets their MFA and revokes
+  their sessions. They enroll again at the next sign-in:
+
+  ```sh
+  docker compose --env-file ./.env -f deploy/docker-compose.prod.yml run --rm api reset-mfa --email you@example.com
+  ```
 - DB and Redis passwords must be URL-safe (`openssl rand -hex 24`): compose builds `DATABASE_URL`
   and `REDIS_URL` from them without escaping.
 - Sign in as the admin and invite further users from the admin UI (Admin → Invites). Invite and
@@ -230,6 +237,19 @@ same-origin module worker; React and MapLibre set styles through the CSSOM, whic
 - `API_DOCS` (default `false`): enables `/docs`, `/redoc` and `/openapi.json` on the api. Keep off in
   production. They are not reachable through nginx (see "Content Security Policy" above).
 
+## MFA
+
+- Two-factor sign-in (an authenticator app, TOTP) is mandatory for every account; there is no
+  opt-out. The upgrade that introduces it signs everyone out, and **every account must enroll at
+  its next sign-in**.
+- **Enroll the admin first**, right after upgrading.
+- **Deactivate dormant accounts** (Admin → Users). Until an account has enrolled, whoever knows its
+  password can bind their own authenticator to it. The same applies after an MFA reset.
+- The admin **Users** page shows each account's **Two-factor** status ("On" / "Not set up") and
+  offers "Reset MFA" (signs the user out everywhere; they enroll again at the next sign-in).
+- Lost device: sign in with a recovery code, then generate new ones (Account → Two-factor). If the
+  last admin has neither, use `reset-mfa --email` (see "First run").
+
 ## Alert rules
 
 - Rules fire only on **KEV additions** (CISA KEV or VulnCheck KEV), by design: that keeps alerts
@@ -252,6 +272,10 @@ same-origin module worker; React and MapLibre set styles through the CSSOM, whic
   - **Webhook URLs and secrets** become unreadable. The API masks them as "(unavailable)", and
     their deliveries are deferred (retried hourly, no attempts burned) until they expire after 7
     days. An admin must delete and re-add those recipients.
+  - **Every TOTP (two-factor) secret** becomes unreadable, so no authenticator code works for
+    anyone. Recovery codes still work (they are hashes, not encrypted). The way back is an admin's
+    "Reset MFA" on the Users page, or `reset-mfa --email` (see "First run") for the admins
+    themselves; each reset user enrolls again at the next sign-in.
 
   Back the key up; do not change it casually.
 

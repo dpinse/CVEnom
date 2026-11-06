@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     rate_login_per_15min_ip: int = 10
     rate_login_per_15min_email: int = 10
     rate_authed_per_min: int = 300
+    # Failed MFA codes: 5 per 15 minutes, per user AND per IP (fail closed).
+    rate_mfa_per_15min_user: int = 5
+    rate_mfa_per_15min_ip: int = 5
     rate_alert_test_per_min: int = 5
     smtp_host: str | None = None
     smtp_port: int = 587

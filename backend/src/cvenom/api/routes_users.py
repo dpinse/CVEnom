@@ -1,4 +1,4 @@
-"""Admin user management, own-password change, reset tokens and invite administration."""
+"""Admin user management (incl. MFA reset), own-password change, reset tokens and invites."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from cvenom.auth.mfa import is_enrolled, reset_mfa
 from cvenom.auth.passwords import WeakPassword, hash_password, verify_password
 from cvenom.auth.users import (
     LastAdmin,
@@ -55,6 +56,7 @@ def _user_json(u: User, active_sessions: int) -> dict:
         "is_active": u.is_active,
         "created_at": u.created_at,
         "active_sessions": active_sessions,
+        "mfa_enabled": is_enrolled(u),
     }
 
 
@@ -132,6 +134,19 @@ def create_user_reset(
         _error(409, "user_inactive")
     raw, expires_at = create_reset(session, admin, target, RESET_TTL_HOURS)
     return {"token": raw, "expires_at": expires_at}
+
+
+@router.post("/users/{user_id}/mfa/reset", status_code=204)
+def reset_user_mfa(
+    user_id: int, admin: User = Depends(require_admin), session: Session = SessionDep
+) -> Response:
+    """Forget another user's MFA: every session is revoked and they enroll again at
+    their next sign-in. Never for yourself (that would drop your own second factor)."""
+    target = _get_user(session, user_id)
+    if target.id == admin.id:
+        _error(409, "cannot_modify_self")
+    reset_mfa(session, target.id, _now())
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------- own password

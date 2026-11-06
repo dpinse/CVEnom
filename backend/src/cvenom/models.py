@@ -143,6 +143,12 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Mandatory TOTP MFA. The secret is secretbox-encrypted (AES-256-GCM) and never
+    # returned after enrollment. NULL mfa_enabled_at = must enroll at next sign-in.
+    mfa_secret_enc: Mapped[str | None] = mapped_column(Text)
+    mfa_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Last accepted TOTP time step: that step and every earlier one are rejected (replay).
+    mfa_last_step: Mapped[int | None] = mapped_column(BigInteger)
 
     __table_args__ = (
         CheckConstraint("role in ('admin','member')", name="ck_app_user_role"),
@@ -219,6 +225,49 @@ class UserSessionUsedRefresh(Base):
     )
     used_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class MfaTicket(Base):
+    """Short-lived, single-use proof that the password step passed.
+
+    Only the SHA-256 of the ticket is stored. A ticket never grants a session by
+    itself: it is exchanged, together with a TOTP or recovery code, for one.
+    `enroll_secret_enc` holds the pending (not yet confirmed) TOTP secret during
+    enrollment, encrypted with the secret box."""
+
+    __tablename__ = "mfa_ticket"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id", ondelete="CASCADE"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    enroll_secret_enc: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_mfa_ticket_user_id", "user_id"),
+        Index("ix_mfa_ticket_expires_at", "expires_at"),
+    )
+
+
+class MfaRecoveryCode(Base):
+    """One-time recovery code, stored as SHA-256 of its normalized form (80-bit codes)."""
+
+    __tablename__ = "mfa_recovery_code"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id", ondelete="CASCADE"))
+    code_hash: Mapped[str] = mapped_column(String(64))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "code_hash", name="uq_mfa_recovery_code_user_hash"),
+        Index("ix_mfa_recovery_code_user_id", "user_id"),
     )
 
 

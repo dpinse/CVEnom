@@ -37,11 +37,47 @@ function meHandler() {
   );
 }
 
+/** Step one of sign-in answers with an MFA challenge; the session only comes from step two. */
+const challenge = (ticket = "tk", enroll_required = false) =>
+  HttpResponse.json({ ticket, enroll_required, expires_in: 300 });
+/** /auth/mfa/verify issuing `token` (or a token derived from the ticket). */
+const verifyGives = (token: string | ((ticket: string) => string)) =>
+  http.post(`${B}/auth/mfa/verify`, async ({ request }) => {
+    const { ticket } = (await request.json()) as { ticket: string };
+    return HttpResponse.json({
+      access_token: typeof token === "string" ? token : token(ticket),
+      token_type: "bearer",
+      expires_in: 900,
+    });
+  });
+/** Both steps: password, then a TOTP code. */
+async function signInFully(auth: ReturnType<typeof createAuth>, email: string, pw: string) {
+  const c = await auth.login(email, pw);
+  return auth.verifyMfa(c.ticket, "123456");
+}
+
 describe("auth store", () => {
-  test("login posts credentials then loads /me; token stays out of storage", async () => {
+  test("login posts credentials and returns the MFA challenge, with no session yet", async () => {
     let body: unknown;
     server.use(
       http.post(`${B}/auth/login`, async ({ request }) => {
+        body = await request.json();
+        return challenge("ticket-secret", true);
+      }),
+    );
+    const { auth } = mk();
+    const c = await auth.login("a@b.co", "pw");
+    expect(body).toEqual({ email: "a@b.co", password: "pw" });
+    expect(c).toEqual({ ticket: "ticket-secret", enroll_required: true, expires_in: 300 });
+    expect(auth.getToken()).toBeNull();
+    expect(auth.getSnapshot().user).toBeNull();
+  });
+
+  test("verifyMfa posts ticket and code, then loads /me; token and ticket stay out of storage", async () => {
+    let body: unknown;
+    server.use(
+      http.post(`${B}/auth/login`, () => challenge("ticket-secret")),
+      http.post(`${B}/auth/mfa/verify`, async ({ request }) => {
         body = await request.json();
         return HttpResponse.json({ access_token: "tok-login-secret", token_type: "bearer", expires_in: 900 });
       }),
@@ -50,17 +86,67 @@ describe("auth store", () => {
     const { auth } = mk();
     const fn = vi.fn();
     auth.subscribe(fn);
-    await auth.login("a@b.co", "pw");
-    expect(body).toEqual({ email: "a@b.co", password: "pw" });
+    const c = await auth.login("a@b.co", "pw");
+    await auth.verifyMfa(c.ticket, "123456");
+    expect(body).toEqual({ ticket: "ticket-secret", code: "123456" });
     expect(auth.getToken()).toBe("tok-login-secret");
     expect(auth.getSnapshot().user).toEqual(me);
     expect(fn).toHaveBeenCalled();
     for (const st of [localStorage, sessionStorage])
       for (let i = 0; i < st.length; i++) {
         const k = st.key(i) as string;
-        expect(k).not.toContain("tok-login-secret");
-        expect(st.getItem(k) ?? "").not.toContain("tok-login-secret");
+        for (const secret of ["tok-login-secret", "ticket-secret"]) {
+          expect(k).not.toContain(secret);
+          expect(st.getItem(k) ?? "").not.toContain(secret);
+        }
       }
+  });
+
+  test("a rejected code surfaces as ApiError 401 and leaves a guest (no refresh attempted)", async () => {
+    let refreshes = 0;
+    server.use(
+      http.post(`${B}/auth/mfa/verify`, () => HttpResponse.json({ error: "invalid_mfa" }, { status: 401 })),
+      http.post(`${B}/auth/refresh`, () => {
+        refreshes++;
+        return HttpResponse.json({ error: "x" }, { status: 401 });
+      }),
+    );
+    const { auth } = mk();
+    await expect(auth.verifyMfa("tk", "000000")).rejects.toMatchObject({ status: 401, code: "invalid_mfa" });
+    expect(auth.getToken()).toBeNull();
+    expect(refreshes).toBe(0);
+  });
+
+  test("enrollment: start returns the secret; finish signs in and returns the recovery codes", async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      http.post(`${B}/auth/mfa/enroll/start`, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({
+          secret: "JBSWY3DPEHPK3PXP",
+          otpauth_uri: "otpauth://totp/CVEnom:a%40b.co?secret=JBSWY3DPEHPK3PXP",
+        });
+      }),
+      http.post(`${B}/auth/mfa/enroll/finish`, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({
+          access_token: "tok-enrolled",
+          token_type: "bearer",
+          expires_in: 900,
+          recovery_codes: ["aaaa-bbbb-cccc-dddd"],
+        });
+      }),
+      meHandler(),
+    );
+    const { auth } = mk();
+    const s = await auth.startEnrollment("tk");
+    expect(s.secret).toBe("JBSWY3DPEHPK3PXP");
+    expect(auth.getToken()).toBeNull();
+    const done = await auth.finishEnrollment("tk", "123456");
+    expect(bodies).toEqual([{ ticket: "tk" }, { ticket: "tk", code: "123456" }]);
+    expect(done).toEqual({ me, recoveryCodes: ["aaaa-bbbb-cccc-dddd"] });
+    expect(auth.getToken()).toBe("tok-enrolled");
+    expect(auth.getSnapshot().user).toEqual(me);
   });
 
   test("bad credentials surface as ApiError and leave the user a guest", async () => {
@@ -75,14 +161,13 @@ describe("auth store", () => {
 
   test("logout clears memory even if the server call fails; unsubscribe stops notifications", async () => {
     server.use(
-      http.post(`${B}/auth/login`, () =>
-        HttpResponse.json({ access_token: "t", token_type: "bearer", expires_in: 900 }),
-      ),
+      http.post(`${B}/auth/login`, () => challenge()),
+      verifyGives("t"),
       meHandler(),
       http.post(`${B}/auth/logout`, () => HttpResponse.error()),
     );
     const { auth } = mk();
-    await auth.login("a@b.co", "pw");
+    await signInFully(auth, "a@b.co", "pw");
     const fn = vi.fn();
     const off = auth.subscribe(fn);
     await auth.logout();
@@ -91,7 +176,7 @@ describe("auth store", () => {
     expect(fn).toHaveBeenCalled();
     fn.mockClear();
     off();
-    await auth.login("a@b.co", "pw");
+    await signInFully(auth, "a@b.co", "pw");
     expect(fn).not.toHaveBeenCalled();
   });
 
@@ -150,9 +235,9 @@ function identityServer(opts: { refreshAs?: () => number; failLogout?: boolean }
     }),
     http.post(`${B}/auth/login`, async ({ request }) => {
       const { email } = (await request.json()) as { email: string };
-      const n = Number(/^u(\d+)@/.exec(email)?.[1]);
-      return HttpResponse.json({ access_token: jwt(n), token_type: "bearer", expires_in: 900 });
+      return challenge(`t-${Number(/^u(\d+)@/.exec(email)?.[1])}`);
     }),
+    verifyGives((ticket) => jwt(Number(ticket.slice(2)))),
     http.post(`${B}/auth/refresh`, () => {
       calls.refresh++;
       return HttpResponse.json({ access_token: jwt(opts.refreshAs?.() ?? 1), token_type: "bearer", expires_in: 900 });
@@ -189,8 +274,8 @@ describe("cross-tab identity", () => {
     const {
       tabs: [a, b],
     } = tabs();
-    await a.auth.login("u1@x.co", "pw");
-    await b.auth.login("u1@x.co", "pw"); // same user: both signed in
+    await signInFully(a.auth, "u1@x.co", "pw");
+    await signInFully(b.auth, "u1@x.co", "pw"); // same user: both signed in
     await tick();
     expect(b.store.getToken()).not.toBeNull();
     await a.auth.logout();
@@ -205,7 +290,7 @@ describe("cross-tab identity", () => {
       tabs: [a],
       hub,
     } = tabs();
-    await a.auth.login("u1@x.co", "pw");
+    await signInFully(a.auth, "u1@x.co", "pw");
     hub.channel().postMessage({ type: "logout", sub: "2" });
     await tick();
     expect(a.store.getToken()).not.toBeNull();
@@ -230,7 +315,7 @@ describe("cross-tab identity", () => {
       tabs: [a],
       hub,
     } = tabs();
-    await a.auth.login("u1@x.co", "pw");
+    await signInFully(a.auth, "u1@x.co", "pw");
     await a.auth.logout(); // server call fails, local state still cleared
     expect(a.store.getToken()).toBeNull();
     hub.channel().postMessage({ type: "refreshed", access_token: jwt(1), expires_in: 900, sub: "1" });
@@ -244,7 +329,7 @@ describe("cross-tab identity", () => {
     const {
       tabs: [a],
     } = tabs();
-    await a.auth.login("u2@x.co", "pw"); // shows user 2, token jwt(2): /cves 401s
+    await signInFully(a.auth, "u2@x.co", "pw"); // shows user 2, token jwt(2): /cves 401s
     expect(a.auth.getSnapshot().user?.id).toBe(2);
     await a.client.api("/cves"); // 401 -> refresh returns user 1's token -> retry ok
     await vi.waitFor(() => expect(a.auth.getSnapshot().user?.id).toBe(1));
@@ -256,7 +341,7 @@ describe("cross-tab identity", () => {
       tabs: [a],
       hub,
     } = tabs();
-    await a.auth.login("u2@x.co", "pw");
+    await signInFully(a.auth, "u2@x.co", "pw");
     hub.channel().postMessage({ type: "refreshed", access_token: jwt(1), expires_in: 900, sub: "1" });
     await vi.waitFor(() => expect(a.auth.getSnapshot().user?.id).toBe(1));
     expect(a.store.getToken()).toBe(jwt(1));
@@ -268,7 +353,7 @@ describe("cross-tab identity", () => {
       tabs: [a],
       hub,
     } = tabs();
-    await a.auth.login("u2@x.co", "pw");
+    await signInFully(a.auth, "u2@x.co", "pw");
     const peer = hub.channel();
     peer.postMessage({ type: "login", sub: "2", access_token: jwt(55), expires_in: 900 });
     await tick();
@@ -283,8 +368,8 @@ describe("cross-tab identity", () => {
     const {
       tabs: [a, b],
     } = tabs();
-    await a.auth.login("u2@x.co", "pw");
-    await b.auth.login("u1@x.co", "pw");
+    await signInFully(a.auth, "u2@x.co", "pw");
+    await signInFully(b.auth, "u1@x.co", "pw");
     await vi.waitFor(() => expect(a.auth.getSnapshot().user?.id).toBe(1));
   });
 
@@ -310,7 +395,7 @@ describe("cross-tab identity", () => {
     hub.channel().postMessage({ type: "refreshed", access_token: jwt(1), expires_in: 900, sub: "1" }); // starts the slow /me
     await vi.waitFor(() => expect(meCalls).toBe(1));
     await a.auth.logout();
-    await a.auth.login("u1@x.co", "pw"); // its own /me answers at once
+    await signInFully(a.auth, "u1@x.co", "pw"); // its own /me answers at once
     expect(a.auth.getSnapshot().user).toEqual(userFor(1));
     await new Promise((r) => setTimeout(r, 200)); // the stale /me has resolved by now
     expect(meCalls).toBe(2);
@@ -346,9 +431,8 @@ describe("cross-tab identity", () => {
   test("if /me fails after login the server session is logged out before local state clears", async () => {
     const calls = { logout: 0 };
     server.use(
-      http.post(`${B}/auth/login`, () =>
-        HttpResponse.json({ access_token: "t", token_type: "bearer", expires_in: 900 }),
-      ),
+      http.post(`${B}/auth/login`, () => challenge()),
+      verifyGives("t"),
       http.get(`${B}/auth/me`, () => HttpResponse.json({ error: "boom" }, { status: 500 })),
       http.post(`${B}/auth/logout`, () => {
         calls.logout++;
@@ -356,7 +440,7 @@ describe("cross-tab identity", () => {
       }),
     );
     const { auth, store } = mk();
-    await expect(auth.login("a@b.co", "pw")).rejects.toMatchObject({ status: 500 });
+    await expect(signInFully(auth, "a@b.co", "pw")).rejects.toMatchObject({ status: 500 });
     expect(calls.logout).toBe(1);
     expect(store.getToken()).toBeNull();
   });
@@ -386,14 +470,14 @@ describe("logout -> login while the old session's refresh is in flight", () => {
         }),
       );
       const { auth, store, client } = mk();
-      await auth.login("u2@x.co", "pw"); // jwt(2): /cves answers 401, so the next call refreshes
+      await signInFully(auth, "u2@x.co", "pw"); // jwt(2): /cves answers 401, so the next call refreshes
       const old = client.api("/cves").then(
         () => "resolved",
         (e: unknown) => e,
       );
       await vi.waitFor(() => expect(calls.refresh).toBe(1));
       await auth.logout();
-      await auth.login("u2@x.co", "pw");
+      await signInFully(auth, "u2@x.co", "pw");
       expect(store.getToken()).toBe(jwt(2));
       expect(await old).toBeInstanceOf(AuthError); // the old session's caller, settled after the late reply
       await tick();

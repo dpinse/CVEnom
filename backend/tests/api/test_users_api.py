@@ -22,6 +22,7 @@ from cvenom.auth.users import (
 )
 from cvenom.config import get_settings
 from cvenom.models import Invite, User
+from mfa_helpers import full_login
 
 PW = "correct horse battery"
 NEW_PW = "another long passphrase"
@@ -115,7 +116,7 @@ async def test_list_users_shape_and_active_sessions(ctx):
     assert r.status_code == 200
     rows = {u["email"]: u for u in r.json()}
     assert set(rows["m@example.com"]) == {
-        "id", "email", "role", "is_active", "created_at", "active_sessions"}
+        "id", "email", "role", "is_active", "created_at", "active_sessions", "mfa_enabled"}
     assert rows["m@example.com"]["active_sessions"] == 2
     assert rows["a@example.com"]["active_sessions"] == 1
     assert "password" not in r.text
@@ -142,7 +143,7 @@ async def test_deactivate_revokes_sessions_and_tokens_die(ctx):
 
 async def test_deactivated_users_refresh_token_fails(ctx):
     async with client(ctx["app"]) as c:
-        r = await c.post("/api/auth/login", json={"email": "m@example.com", "password": PW})
+        r = await full_login(c, "m@example.com", PW)
         assert r.status_code == 200
         cookie = r.headers["set-cookie"].split(";", 1)[0]
         await c.patch(f"/api/auth/users/{ctx['member'].id}", json={"is_active": False},
@@ -312,13 +313,16 @@ async def test_admin_reset_flow_single_use_sets_password_and_revokes(ctx):
         r = await c.post("/api/auth/invites/accept",
                          json={"token": body["token"], "password": NEW_PW})
         assert r.status_code == 201
-        assert r.json() == {"id": member.id, "email": "m@example.com", "role": "member"}
+        acc = r.json()
+        assert {k: acc[k] for k in ("id", "email", "role")} == {
+            "id": member.id, "email": "m@example.com", "role": "member"}
+        assert "set-cookie" not in r.headers and "access_token" not in r.text
         # single use
         r = await c.post("/api/auth/invites/accept",
                          json={"token": body["token"], "password": "yet another passphrase"})
         assert r.status_code == 400 and r.json() == {"error": "invalid_invite"}
         assert (await c.get("/api/auth/me", headers=ctx["mh"])).status_code == 401
-        r = await c.post("/api/auth/login", json={"email": "m@example.com", "password": NEW_PW})
+        r = await full_login(c, "m@example.com", NEW_PW)
         assert r.status_code == 200
     assert db.scalars(select(User).where(User.email == "m@example.com")).one().id == member.id
     assert len(db.scalars(select(User)).all()) == 2  # no account created

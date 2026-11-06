@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { at, fill, loginOk, renderRoute } from "../test/authpages";
+import { CODES, SECRET, at, fill, loginOk, passCode, renderRoute } from "../test/authpages";
+import { authStore } from "../lib/api";
 import { guest, member, server, setupMsw, signIn } from "../test/shell";
 import Login from "./Login";
 
@@ -98,6 +99,7 @@ describe("Login form", () => {
     fill("Email", "member@example.com");
     fill("Password", "correct horse battery");
     fireEvent.submit(screen.getByLabelText("Password").closest("form")!);
+    await passCode();
     await waitFor(() => expect(at()).toBe("/"));
   });
 
@@ -123,6 +125,7 @@ describe("Login redirects", () => {
     fill("Email", "member@example.com");
     fill("Password", "correct horse battery");
     submit();
+    await passCode();
     await waitFor(() => expect(at()).toBe("/search?q=x"));
   });
 
@@ -133,6 +136,7 @@ describe("Login redirects", () => {
     fill("Email", "member@example.com");
     fill("Password", "correct horse battery");
     submit();
+    await passCode();
     await waitFor(() => expect(at()).toBe("/"));
   });
 
@@ -148,5 +152,148 @@ describe("Login redirects", () => {
   test("shows the form (not a redirect) for a guest only after ready", () => {
     open();
     expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+  });
+});
+
+const verifyFails = (status = 401, body: Record<string, unknown> = { error: "invalid_mfa" }) =>
+  server.use(http.post("http://localhost/api/auth/mfa/verify", () => HttpResponse.json(body, { status })));
+
+async function toCodeStep(enroll = false) {
+  guest();
+  open();
+  loginOk({ enroll });
+  fill("Email", "member@example.com");
+  fill("Password", "correct horse battery");
+  submit();
+}
+
+describe("Login second factor", () => {
+  test("the password step creates no session: a code step follows, the password is dropped", async () => {
+    await toCodeStep();
+    const code = await screen.findByLabelText(/authentication code/i, { selector: "input" });
+    expect(code).toHaveAttribute("autocomplete", "one-time-code");
+    expect(code).toHaveAttribute("maxlength", "64");
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    expect(screen.getByText(/recovery code/i)).toBeInTheDocument();
+    expect(authStore.getToken()).toBeNull();
+  });
+
+  test("the ticket and code are posted; success signs in and navigates", async () => {
+    let body: unknown;
+    await toCodeStep();
+    server.use(
+      http.post("http://localhost/api/auth/mfa/verify", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ access_token: "tok", token_type: "bearer", expires_in: 900 });
+      }),
+    );
+    await passCode(" 123456 ");
+    await waitFor(() => expect(at()).toBe("/"));
+    expect(body).toEqual({ ticket: "tk-1", code: "123456" });
+  });
+
+  test("a recovery code is accepted in the same field", async () => {
+    let body: unknown;
+    await toCodeStep();
+    server.use(
+      http.post("http://localhost/api/auth/mfa/verify", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ access_token: "tok", token_type: "bearer", expires_in: 900 });
+      }),
+    );
+    await passCode("abcd-efgh-jkmn-pqrs");
+    await waitFor(() => expect(at()).toBe("/"));
+    expect(body).toEqual({ ticket: "tk-1", code: "abcd-efgh-jkmn-pqrs" });
+  });
+
+  test("a rejected code shows one generic message, clears the field, and keeps the code step", async () => {
+    await toCodeStep();
+    verifyFails();
+    await passCode("000000");
+    expect(await screen.findByText(/code was not accepted/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/authentication code/i, { selector: "input" })).toHaveValue("");
+    expect(authStore.getToken()).toBeNull();
+  });
+
+  test("Start over returns to the password step", async () => {
+    await toCodeStep();
+    await screen.findByLabelText(/authentication code/i, { selector: "input" });
+    fireEvent.click(screen.getByRole("button", { name: "Start over" }));
+    expect(await screen.findByLabelText("Password")).toHaveValue("");
+  });
+
+  test("429 on the code step shows the retry time", async () => {
+    await toCodeStep();
+    server.use(
+      http.post("http://localhost/api/auth/mfa/verify", () =>
+        HttpResponse.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": "600" } }),
+      ),
+    );
+    await passCode("000000");
+    expect(await screen.findByText(/too many attempts/i)).toBeInTheDocument();
+  });
+
+  test("never logs the code or ticket", async () => {
+    const spies = (["log", "error", "warn", "info", "debug"] as const).map((m) => vi.spyOn(console, m));
+    await toCodeStep();
+    verifyFails();
+    await passCode("918273");
+    await screen.findByText(/code was not accepted/i);
+    for (const sp of spies) {
+      const calls = JSON.stringify(sp.mock.calls);
+      expect(calls).not.toContain("918273");
+      expect(calls).not.toContain("tk-1");
+    }
+    vi.restoreAllMocks();
+  });
+});
+
+describe("Login enrollment (account without MFA)", () => {
+  test("shows a local QR, the secret for manual entry, then the recovery codes once", async () => {
+    await toCodeStep(true);
+    expect(await screen.findByRole("heading", { name: /set up two-factor/i })).toBeInTheDocument();
+    const qr = await screen.findByRole("img", { name: /qr code/i });
+    expect(qr.tagName.toLowerCase()).toBe("svg");
+    expect(qr.querySelector("path")).not.toBeNull();
+    expect(qr.outerHTML).not.toMatch(/https?:|style=/);
+    expect(screen.getByText(SECRET.replace(/(.{4})/g, "$1 ").trim())).toBeInTheDocument();
+    expect(authStore.getToken()).toBeNull();
+    await passCode();
+    const panel = await screen.findByRole("region", { name: /recovery codes/i });
+    for (const c of CODES) expect(panel).toHaveTextContent(c);
+    expect(panel).toHaveTextContent(/won.t be shown again/i);
+    // the enrollment secret is gone once enrolled
+    expect(screen.queryByText(SECRET.replace(/(.{4})/g, "$1 ").trim())).not.toBeInTheDocument();
+    // still on the sign-in page (no redirect away from the one-time codes)
+    expect(screen.queryByTestId("at")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(at()).toBe("/"));
+  });
+
+  test("a wrong first code keeps the enrollment step", async () => {
+    await toCodeStep(true);
+    await screen.findByRole("img", { name: /qr code/i });
+    server.use(
+      http.post("http://localhost/api/auth/mfa/enroll/finish", () =>
+        HttpResponse.json({ error: "invalid_mfa" }, { status: 401 }),
+      ),
+    );
+    await passCode("000000");
+    expect(await screen.findByText(/code was not accepted/i)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /qr code/i })).toBeInTheDocument();
+  });
+
+  test("secret, ticket and recovery codes never reach web storage or the URL", async () => {
+    await toCodeStep(true);
+    await screen.findByRole("img", { name: /qr code/i });
+    await passCode();
+    await screen.findByRole("region", { name: /recovery codes/i });
+    const needles = [SECRET, "tk-1", ...CODES];
+    for (const st of [localStorage, sessionStorage])
+      for (let i = 0; i < st.length; i++) {
+        const k = st.key(i) as string;
+        for (const n of needles) expect(k + (st.getItem(k) ?? "")).not.toContain(n);
+      }
+    for (const n of needles) expect(window.location.href + document.title).not.toContain(n);
   });
 });

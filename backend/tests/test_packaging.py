@@ -173,7 +173,7 @@ def test_entrypoint_api_line():
     api = next(line for line in text.splitlines() if "uvicorn" in line)
     assert "--ws-max-size 8192" in api and "--proxy-headers" in api
     assert "cvenom.api.app:create_app --factory" in api
-    for cmd in ("worker", "beat", "migrate", "create-admin"):
+    for cmd in ("worker", "beat", "migrate", "create-admin", "reset-mfa"):
         assert re.search(rf"(?m)^\s*{cmd}\)", text), cmd
 
 

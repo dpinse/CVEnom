@@ -87,7 +87,15 @@ const CHANNEL_NAME = "cvenom-auth";
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 const PEER_TOKEN_WINDOW_MS = 15_000;
 /** 401 on these never triggers refresh or logout: the error belongs to the form. */
-const REFRESH_EXEMPT = new Set(["/auth/login", "/auth/password", "/auth/refresh", "/auth/invites/accept"]);
+const REFRESH_EXEMPT = new Set([
+  "/auth/login",
+  "/auth/password",
+  "/auth/refresh",
+  "/auth/invites/accept",
+  "/auth/mfa/verify",
+  "/auth/mfa/enroll/start",
+  "/auth/mfa/enroll/finish",
+]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;

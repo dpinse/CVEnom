@@ -2,7 +2,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { Route, Routes, useLocation, useNavigationType } from "react-router-dom";
 import { afterEach, describe, expect, test } from "vitest";
-import { at, fill, loginOk } from "../test/authpages";
+import { SECRET, at, fill, loginOk, passCode } from "../test/authpages";
 import { Where } from "../test/authpages";
 import { authStore } from "../lib/api";
 import { admin, guest, member, renderAt, server, setupMsw, signIn } from "../test/shell";
@@ -108,37 +108,52 @@ describe("AcceptInvite form", () => {
     expect(await screen.findByText(/only whitespace/)).toBeInTheDocument();
   });
 
-  test("invite mode: posts token in body, auto-logs in, goes to / with token stripped from history", async () => {
+  test("invite mode: posts token in body, continues straight into enrollment, then goes to /", async () => {
     guest();
     let sent: unknown;
-    accept(201, { id: 5, email: "new@example.com", role: "member" }, (b) => (sent = b));
-    let loginBody: unknown;
-    loginOk();
+    const tickets: unknown[] = [];
+    accept(
+      201,
+      { id: 5, email: "new@example.com", role: "member", ticket: "tk-inv", enroll_required: true, expires_in: 300 },
+      (b) => (sent = b),
+    );
+    let loginCalled = false;
+    loginOk({ enroll: true });
     server.use(
-      http.post("http://localhost/api/auth/login", async ({ request }) => {
-        loginBody = await request.json();
-        return HttpResponse.json({ access_token: "tok", token_type: "bearer", expires_in: 900 });
+      http.post("http://localhost/api/auth/login", () => {
+        loginCalled = true;
+        return HttpResponse.json({ error: "x" }, { status: 500 });
+      }),
+      http.post("http://localhost/api/auth/mfa/enroll/start", async ({ request }) => {
+        tickets.push(await request.json());
+        return HttpResponse.json({
+          secret: SECRET,
+          otpauth_uri: "otpauth://totp/CVEnom:new%40example.com?secret=" + SECRET,
+        });
       }),
     );
     app(`/invite#${TOKEN}`);
     fill("New password", GOOD);
     fill("Confirm password", GOOD);
     submit();
+    // no session yet: enrollment comes first
+    await screen.findByRole("img", { name: /qr code/i });
+    expect(authStore.getToken()).toBeNull();
+    expect(screen.queryByLabelText("New password")).not.toBeInTheDocument();
+    await passCode();
+    await screen.findByRole("region", { name: /recovery codes/i });
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(at()).toBe("/"));
     expect(sent).toEqual({ token: TOKEN, password: GOOD });
-    expect(loginBody).toEqual({ email: "new@example.com", password: GOOD });
+    expect(tickets).toEqual([{ ticket: "tk-inv" }]);
+    expect(loginCalled).toBe(false);
     expect(authStore.getSnapshot().user).not.toBeNull();
     expect(at()).not.toContain(TOKEN);
   });
 
-  test("invite mode: failed auto-login goes to /login with a notice", async () => {
+  test("invite mode: a response without a ticket goes to /login with a notice", async () => {
     guest();
     accept(201, { id: 5, email: "new@example.com", role: "member" });
-    server.use(
-      http.post("http://localhost/api/auth/login", () =>
-        HttpResponse.json({ error: "invalid_credentials" }, { status: 401 }),
-      ),
-    );
     app(`/invite#${TOKEN}`);
     fill("New password", GOOD);
     fill("Confirm password", GOOD);
@@ -241,10 +256,20 @@ describe("AcceptInvite hardening", () => {
 
   test("success REPLACES the history entry (invite and reset)", async () => {
     guest();
-    accept(201, { id: 5, email: "new@example.com", role: "member" });
-    loginOk();
+    accept(201, {
+      id: 5,
+      email: "new@example.com",
+      role: "member",
+      ticket: "tk-inv",
+      enroll_required: true,
+      expires_in: 300,
+    });
+    loginOk({ enroll: true });
     app(`/invite#${TOKEN}`);
     await go();
+    await passCode();
+    await screen.findByRole("region", { name: /recovery codes/i });
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(at()).toBe("/"));
     expect(screen.getByTestId("navtype")).toHaveTextContent("REPLACE");
     cleanup();

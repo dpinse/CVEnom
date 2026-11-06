@@ -35,6 +35,7 @@ const adminUser: UserAdmin = {
   is_active: true,
   created_at: "2026-10-01T00:00:00Z",
   active_sessions: 1,
+  mfa_enabled: true,
 };
 
 let invites: InviteOut[] = [];

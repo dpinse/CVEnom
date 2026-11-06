@@ -4,12 +4,17 @@ import { ApiError, api } from "../lib/api";
 import { getAuth } from "../lib/auth";
 import { MAX_PASSWORD_INPUT, MIN_PASSWORD, POLICY_MESSAGE, passwordProblems } from "../lib/password";
 import { AuthCard, ErrorSummary, Field, ShowToggle, commonError } from "../components/formParts";
+import { EnrollStep, RecoveryCodes } from "../components/MfaSteps";
+import type { MfaChallenge } from "../lib/types";
 
-interface Accepted {
+/** The account plus an MFA ticket (no session): a new account goes straight into enrollment. */
+interface Accepted extends Partial<MfaChallenge> {
   id: number;
   email: string;
   role: string;
 }
+
+type After = { kind: "enroll"; ticket: string } | { kind: "codes"; codes: string[] };
 
 const INVALID = "This link is invalid or expired";
 
@@ -23,7 +28,8 @@ function tokenFrom(hash: string): string {
 }
 
 /**
- * `/invite#<token>` creates an account; `/reset#<token>` sets a new password (same endpoint).
+ * `/invite#<token>` creates an account and continues straight into MFA enrollment (the account has no
+ * session until it is done); `/reset#<token>` sets a new password (same endpoint) and leaves MFA alone.
  * The token is in the URL fragment, which browsers never send to the server, so it stays out of
  * nginx and Cloudflare access logs. The page reads it once into memory and at once replaces the
  * history entry without it. It then lives only in component state and the POST body: never in
@@ -40,6 +46,7 @@ export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
   const [pending, setPending] = useState(false);
   const [errors, setErrors] = useState<string[]>(() => (token ? [] : [INVALID]));
   const [tick, setTick] = useState(0);
+  const [after, setAfter] = useState<After | null>(null);
   const busy = useRef(false);
 
   // Strip the fragment from the address bar and history as soon as it has been read.
@@ -82,13 +89,11 @@ export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
           await getAuth().logout();
           navigate("/login", { replace: true, state: { notice: "password-reset" } });
         }
+      } else if (typeof made.ticket === "string" && made.ticket !== "") {
+        // No session yet: the new account sets up its second factor first (the ticket stays in memory).
+        setAfter({ kind: "enroll", ticket: made.ticket });
       } else {
-        try {
-          await getAuth().login(made.email, pw);
-          navigate("/", { replace: true });
-        } catch {
-          navigate("/login", { replace: true, state: { notice: "account-created" } });
-        }
+        navigate("/login", { replace: true, state: { notice: "account-created" } });
       }
       setPw("");
       setConfirm("");
@@ -102,6 +107,25 @@ export default function AcceptInvite({ mode }: { mode: "invite" | "reset" }) {
       setPending(false);
     }
   };
+
+  if (after?.kind === "enroll") {
+    return (
+      <AuthCard title="Accept invite">
+        <EnrollStep
+          ticket={after.ticket}
+          onEnrolled={(codes) => setAfter({ kind: "codes", codes })}
+          onStartOver={() => navigate("/login", { replace: true, state: { notice: "account-created" } })}
+        />
+      </AuthCard>
+    );
+  }
+  if (after?.kind === "codes") {
+    return (
+      <AuthCard title="Two-factor is on">
+        <RecoveryCodes codes={after.codes} onDone={() => navigate("/", { replace: true })} />
+      </AuthCard>
+    );
+  }
 
   const type = show ? "text" : "password";
   return (
