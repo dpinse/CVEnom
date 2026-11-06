@@ -395,7 +395,7 @@ describe("cross-tab identity", () => {
     hub.channel().postMessage({ type: "refreshed", access_token: jwt(1), expires_in: 900, sub: "1" }); // starts the slow /me
     await vi.waitFor(() => expect(meCalls).toBe(1));
     await a.auth.logout();
-    await a.auth.login("u1@x.co", "pw"); // its own /me answers at once
+    await signInFully(a.auth, "u1@x.co", "pw"); // its own /me answers at once
     expect(a.auth.getSnapshot().user).toEqual(userFor(1));
     await new Promise((r) => setTimeout(r, 200)); // the stale /me has resolved by now
     expect(meCalls).toBe(2);
@@ -470,14 +470,14 @@ describe("logout -> login while the old session's refresh is in flight", () => {
         }),
       );
       const { auth, store, client } = mk();
-      await auth.login("u2@x.co", "pw"); // jwt(2): /cves answers 401, so the next call refreshes
+      await signInFully(auth, "u2@x.co", "pw"); // jwt(2): /cves answers 401, so the next call refreshes
       const old = client.api("/cves").then(
         () => "resolved",
         (e: unknown) => e,
       );
       await vi.waitFor(() => expect(calls.refresh).toBe(1));
       await auth.logout();
-      await auth.login("u2@x.co", "pw");
+      await signInFully(auth, "u2@x.co", "pw");
       expect(store.getToken()).toBe(jwt(2));
       expect(await old).toBeInstanceOf(AuthError); // the old session's caller, settled after the late reply
       await tick();
