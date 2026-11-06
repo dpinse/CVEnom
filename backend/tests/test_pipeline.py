@@ -522,7 +522,6 @@ def test_loud_counts_stories_in_range(db_session):
 
 
 def test_kev_row_is_never_likely_or_fresh_in_lane_views(db_session):
-    from datetime import date
     _insert_cve(db_session, "CVE-2026-9610", kev=True, kev_added=NOW.date() - timedelta(days=20),
                 epss_percentile=0.99, cvss=9.8, published=NOW - timedelta(hours=2))
     v7 = lane_views(db_session, NOW, "7d")
@@ -530,3 +529,54 @@ def test_kev_row_is_never_likely_or_fresh_in_lane_views(db_session):
     v30 = lane_views(db_session, NOW, "30d")
     assert [v.cve_id for v in v30[Lane.EXPLOITED]] == ["CVE-2026-9610"]
     assert v30[Lane.LIKELY] == [] and v30[Lane.FRESH] == []
+
+
+# --- cve_event timeline hooks ---
+
+
+def _events(session, kind):
+    from sqlalchemy import select
+
+    from cvenom.models import CveEvent
+    return list(session.scalars(
+        select(CveEvent).where(CveEvent.kind == kind).order_by(CveEvent.source)))
+
+
+def test_ingest_writes_first_news_once(db_session):
+    early, late = NOW - timedelta(days=2), NOW - timedelta(hours=1)
+    stories = [
+        NormalizedStory(url="https://x/a", source="THN", title="CVE-2026-8800 later", summary="s", published=late),
+        NormalizedStory(url="https://x/b", source="THN", title="CVE-2026-8800 earlier", summary="s2", published=early),
+        NormalizedStory(url="https://x/c", source="BC", title="CVE-2026-8800 bc", summary="s3", published=late),
+    ]
+    ingest(db_session, CollectorResult(stories=stories))
+    ingest(db_session, CollectorResult(stories=stories))
+    rows = _events(db_session, "first_news")
+    assert [(r.source, r.occurred_at) for r in rows] == [("BC", late), ("THN", early)]
+    assert rows[1].detail == {"title": "CVE-2026-8800 earlier", "url": "https://x/b"}
+
+
+def test_ingest_passes_collector_label(db_session):
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-8801", published=NOW)]),
+           collector="nvd")
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-8802", published=NOW)]),
+           collector="osv")
+    assert sorted((r.cve_id, r.source) for r in _events(db_session, "published")) == [
+        ("CVE-2026-8801", "NVD"), ("CVE-2026-8802", "OSV")]
+
+
+def test_enrich_only_events_only_for_known_cves(db_session):
+    _insert_cve(db_session, "CVE-2026-8803")
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id="CVE-2026-8803", epss=0.9, epss_percentile=0.99),
+        NormalizedCve(cve_id="CVE-2026-8804", epss=0.9, epss_percentile=0.99),
+    ]), enrich_only=True, collector="epss")
+    assert [r.cve_id for r in _events(db_session, "epss_crossed")] == ["CVE-2026-8803"]
+
+
+def test_result_cve_events_are_persisted(db_session):
+    from cvenom.schemas import NormalizedCveEvent
+    ev = NormalizedCveEvent(cve_id="CVE-2026-8805", kind="poc_published", occurred_at=NOW,
+                            source="Exploit-DB")
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-8805")], cve_events=[ev]))
+    assert [r.source for r in _events(db_session, "poc_published")] == ["Exploit-DB"]

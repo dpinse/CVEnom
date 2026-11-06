@@ -5,7 +5,7 @@
 
 import logging
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import and_, delete, exists, func, or_, select, update
@@ -17,18 +17,21 @@ from cvenom.collectors.base import CollectorResult
 from cvenom.config import get_settings
 from cvenom.db import upsert_cve
 from cvenom.extract import extract_cve_ids, link_story
+from cvenom.ingestutil import _DETAILS_MAX_DEPTH, _ID_CHUNK, _in_chunks, _sanitize_details
 from cvenom.models import AlertEvent, Cve, GeoEvent, Story, StoryCveLink
 from cvenom.schemas import (
     CVE_ID_RE,
     MAX_CVSS_VECTOR_LEN,
     CveReference,
     NormalizedCve,
+    NormalizedCveEvent,
     NormalizedGeoEvent,
     NormalizedStory,
 )
 from cvenom.ranges import DEFAULT_RANGE, RangeKey, range_start, range_start_date
 from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve
 from cvenom.textutil import content_hash, find_existing_story, sanitize_text
+from cvenom.timeline import derived_events, insert_cve_events
 
 log = logging.getLogger(__name__)
 
@@ -73,22 +76,14 @@ def _ingest_story(session: Session, story: NormalizedStory) -> None:
     session.add(row)
     session.flush()
     link_story(session, row, cve_ids)
-
-
-_ID_CHUNK = 1000
-
-
-def _in_chunks(session: Session, entity, ids: Iterable[str], *conditions) -> list:
-    """SELECT ``entity`` for the ``cve`` rows whose id is in ``ids`` (and ``conditions``).
-
-    Chunked ``IN`` lists keep the statement count O(len(ids) / _ID_CHUNK).
-    """
-    unique = list(dict.fromkeys(ids))
-    found: list = []
-    for i in range(0, len(unique), _ID_CHUNK):
-        chunk = unique[i : i + _ID_CHUNK]
-        found.extend(session.scalars(select(entity).where(Cve.cve_id.in_(chunk), *conditions)))
-    return found
+    if cve_ids:
+        insert_cve_events(session, [
+            NormalizedCveEvent(
+                cve_id=cve_id, kind="first_news", occurred_at=story.published,
+                source=story.source, detail={"title": title, "url": story.url},
+            )
+            for cve_id in sorted(cve_ids)
+        ])
 
 
 def _drop_known_kev_events(session: Session, events: list[dict]) -> list[dict]:
@@ -164,22 +159,6 @@ def _sanitized(cve: NormalizedCve) -> NormalizedCve:
 
 
 _GEO_CHUNK = 500
-_DETAILS_MAX_DEPTH = 4
-
-
-def _sanitize_details(value, depth: int = 0):
-    """Sanitize every string inside a details structure (keys coerced to str, depth-limited)."""
-    if isinstance(value, str):
-        return sanitize_text(value)
-    if isinstance(value, float) and not math.isfinite(value):
-        return None  # Postgres JSONB rejects NaN/Infinity
-    if depth >= _DETAILS_MAX_DEPTH:
-        return None if isinstance(value, (dict, list, tuple)) else value
-    if isinstance(value, dict):
-        return {sanitize_text(str(k)): _sanitize_details(v, depth + 1) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_sanitize_details(v, depth + 1) for v in value]
-    return value
 _GEO_UPDATE_COLS = (
     "observed_at", "magnitude", "label", "details", "kind",
     "country_code", "asn", "cve_id", "story_url",
@@ -224,7 +203,8 @@ def purge_old_geo_events(session: Session, now: datetime, *, days: int) -> int:
     return session.execute(delete(GeoEvent).where(GeoEvent.observed_at < cutoff)).rowcount
 
 
-def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = False) -> list[dict]:
+def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = False,
+           collector: str | None = None) -> list[dict]:
     """Persist a collector result and return its events.
 
     ``kev_added`` events for CVEs already KEV in the DB are dropped; all other
@@ -239,15 +219,22 @@ def ingest(session: Session, result: CollectorResult, *, enrich_only: bool = Fal
         # the rows strongly referenced). No insert can happen on this path, so no
         # SAVEPOINT/retry is needed.
         existing = {r.cve_id: r for r in _in_chunks(session, Cve, (c.cve_id for c in result.cves))}
-        for cve in result.cves:
-            if cve.cve_id in existing:
-                upsert_cve(session, _sanitized(cve))
+        upserted = [c for c in result.cves if c.cve_id in existing]
+        for cve in upserted:
+            upsert_cve(session, _sanitized(cve))
     else:
-        for cve in result.cves:
+        upserted = list(result.cves)
+        for cve in upserted:
             data = _sanitized(cve)
             _retry_unique(session, lambda data=data: upsert_cve(session, data))
         for story in result.stories:
             _retry_unique(session, lambda story=story: _ingest_story(session, story))
+
+    cve_events = derived_events(
+        upserted, collector=collector, now=datetime.now(timezone.utc), cfg=get_settings()
+    ) + list(result.cve_events)
+    if cve_events:
+        insert_cve_events(session, cve_events)
 
     # Geo events never create CVE rows (cve_id is a plain reference), so they are
     # processed regardless of enrich_only.

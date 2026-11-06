@@ -230,7 +230,7 @@ def test_kev_alerted_at_migration_backfill_and_model(scratch_url):
     assert rows == {"CVE-2026-0001": True, "CVE-2026-0002": False}  # only kev_added backfills
     assert tuple(col) == ("timestamp with time zone", "YES", None)
     # At 0005 the cve table is the head model minus the columns later revisions add.
-    assert cols == {c.name for c in Cve.__table__.columns} - CVE_0006_COLS
+    assert cols == {c.name for c in Cve.__table__.columns} - CVE_0006_COLS - {"affected_versions"}
     command.downgrade(cfg, "0004")
     with eng.connect() as c:
         cols = {r[0] for r in c.execute(text(
@@ -329,11 +329,12 @@ def test_migration_0006_cleanup(scratch_url):
         "https://example.com/x.onion": False, "https://x.onionz.example/": False,
     }
     # Schema matches the models (names, nullability, server defaults, types).
-    assert set(cve_cols) == {col.name for col in Cve.__table__.columns}
+    assert set(cve_cols) == {col.name for col in Cve.__table__.columns} - {"affected_versions"}  # added in 0008
     assert set(story_cols) == {col.name for col in Story.__table__.columns}
     for table, cols in ((Cve.__table__, cve_cols), (Story.__table__, story_cols)):
         for col in table.columns:
-            assert (cols[col.name][1] == "YES") == col.nullable, col.name
+            if col.name in cols:
+                assert (cols[col.name][1] == "YES") == col.nullable, col.name
     expect = {
         "kev_name": ("text", "YES", None, None), "kev_action": ("text", "YES", None, None),
         "kev_due": ("date", "YES", None, None), "kev_ransomware": ("boolean", "YES", None, None),
@@ -403,3 +404,50 @@ def test_mfa_migration_revokes_live_sessions_and_round_trips(scratch_url):
     eng.dispose()
     assert not ({"mfa_secret_enc", "mfa_enabled_at", "mfa_last_step"} & cols)
     assert not ({"mfa_ticket", "mfa_recovery_code"} & _tables(scratch_url))
+
+
+def test_migration_0008_backfill_and_model(scratch_url):
+    from cvenom.models import CveEvent
+
+    cfg = _cfg()
+    command.upgrade(cfg, "0007")
+    eng = create_engine(scratch_url)
+    with eng.begin() as c:
+        c.execute(text(
+            "insert into cve (cve_id, published, kev, kev_added, kev_source, poc_badge, affected, summary) "
+            "values ('CVE-2026-0001', '2026-10-01T00:00:00Z', true, '2026-10-05', 'cisa', false, '[]', '')"))
+        c.execute(text(
+            "insert into story (id, url, content_hash, source, title, summary, published, details) values "
+            "(1, 'https://x/late', 'h1', 'THN', 'late', 's', '2026-10-09T00:00:00Z', '{}'),"
+            "(2, 'https://x/early', 'h2', 'BC', 'early', 's', '2026-10-07T00:00:00Z', '{}')"))
+        c.execute(text(
+            "insert into story_cve_link (story_id, cve_id) values (1, 'CVE-2026-0001'), (2, 'CVE-2026-0001')"))
+    command.upgrade(cfg, "0008")
+    with eng.connect() as c:
+        rows = {r[0]: (r[1], str(r[2]), r[3]) for r in c.execute(text(
+            "select kind, source, occurred_at at time zone 'UTC', detail from cve_event"))}
+        cols = {
+            r[0]: (r[1], r[2], r[3])
+            for r in c.execute(text(
+                "select column_name, data_type, is_nullable, column_default from information_schema.columns "
+                "where table_name='cve_event'"))
+        }
+        av = c.execute(text("select column_name, is_nullable, column_default from information_schema.columns "
+                            "where table_name='cve' and column_name='affected_versions'")).one()
+    assert set(rows) == {"published", "kev_added", "first_news"}
+    assert rows["published"][:2] == ("NVD", "2026-10-01 00:00:00")
+    assert rows["kev_added"][:2] == ("CISA KEV", "2026-10-05 00:00:00")
+    assert rows["first_news"][:2] == ("BC", "2026-10-07 00:00:00")
+    assert rows["first_news"][2] == {"title": "early", "url": "https://x/early"}
+    assert set(cols) == {c.name for c in CveEvent.__table__.columns}
+    for col in CveEvent.__table__.columns:
+        assert (cols[col.name][1] == "YES") == col.nullable, col.name
+    assert "now()" in cols["created_at"][2]
+    assert cols["detail"][2].startswith("'{}'")
+    assert av[1] == "NO" and av[2].startswith("'[]'")
+    command.downgrade(cfg, "0007")
+    with eng.connect() as c:
+        assert c.execute(text("select to_regclass('cve_event')")).scalar() is None
+        assert not c.execute(text("select 1 from information_schema.columns "
+                                  "where table_name='cve' and column_name='affected_versions'")).first()
+    eng.dispose()

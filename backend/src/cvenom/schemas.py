@@ -262,6 +262,41 @@ class NormalizedStory(BaseModel):
         return bound_datetime(value)
 
 
+# fix_released is deliberately absent: no source gives it a date (ruling R13).
+CVE_EVENT_KINDS = (
+    "reserved", "published", "nvd_modified", "poc_published", "detection",
+    "first_news", "kev_added", "epss_crossed",
+)
+
+
+class NormalizedCveEvent(BaseModel):
+    cve_id: str
+    kind: Literal[
+        "reserved", "published", "nvd_modified", "poc_published", "detection",
+        "first_news", "kev_added", "epss_crossed",
+    ]
+    occurred_at: datetime
+    source: str = Field(min_length=1, max_length=64)
+    detail: dict = Field(default_factory=dict)  # stored raw; insert_cve_events sanitizes
+
+    @field_validator("cve_id", mode="before")
+    @classmethod
+    def _validate_cve_id(cls, value: object) -> str:
+        return validate_cve_id(value)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _bound_occurred_at(cls, value: datetime) -> datetime:
+        return bound_datetime(value)
+
+    @field_validator("source")
+    @classmethod
+    def _validate_source(cls, value: str) -> str:
+        if _CONTROL_CHARS.search(value):
+            raise ValueError("source contains control characters")
+        return value
+
+
 class NormalizedGeoEvent(BaseModel):
     source: str
     external_id: str = Field(min_length=1, max_length=256)

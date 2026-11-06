@@ -210,6 +210,21 @@ def test_run_collector_success(db_session, factory, fake_registry):
     assert lock.acquired == [("fake_t", 246)] and lock.released == ["fake_t"]
 
 
+def test_run_collector_passes_collector_name(db_session, factory, fake_registry, monkeypatch):
+    import cvenom.tasks as tasks
+    fake_registry(make_fake())
+    seen = {}
+    real = tasks.ingest
+
+    def spy(session, result, **kw):
+        seen.update(kw)
+        return real(session, result, **kw)
+
+    monkeypatch.setattr(tasks, "ingest", spy)
+    tasks.run_collector("fake_t", session_factory=factory, lock=FakeLock())
+    assert seen == {"enrich_only": False, "collector": "fake_t"}
+
+
 def test_run_collector_failure_does_not_advance(db_session, factory, fake_registry):
     from cvenom.tasks import run_collector
     fake_registry(make_fake(fail=True))
@@ -401,9 +416,9 @@ def test_ingest_failure_rolls_back_and_releases_lock(db_session, fake_registry, 
             sp.rollback()
             raise
 
-    def bad_ingest(session, result, *, enrich_only=False):
+    def bad_ingest(session, result, *, enrich_only=False, collector=None):
         from cvenom.pipeline import ingest
-        ingest(session, result, enrich_only=enrich_only)  # writes CVE rows first
+        ingest(session, result, enrich_only=enrich_only, collector=collector)  # writes CVE rows first
         raise RuntimeError("ingest boom")
 
     monkeypatch.setattr(tasks, "ingest", bad_ingest)
@@ -431,7 +446,7 @@ def test_ingest_failure_creates_no_run_row(db_session, fake_registry, monkeypatc
             sp.rollback()
             raise
 
-    def bad_ingest(session, result, *, enrich_only=False):
+    def bad_ingest(session, result, *, enrich_only=False, collector=None):
         raise RuntimeError("ingest boom")
 
     monkeypatch.setattr(tasks, "ingest", bad_ingest)

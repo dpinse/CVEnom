@@ -53,12 +53,31 @@ class Cve(Base):
     # "references" is a reserved word: SQLAlchemy quotes it; raw SQL must write "references".
     references: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
     last_modified: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Product/version ranges from OSV/NVD (migration 0008); see cvenom.ranges.
+    affected_versions: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
     __table_args__ = (
         Index("ix_cve_published_brin", "published", postgresql_using="brin"),
+    )
+
+
+class CveEvent(Base):
+    __tablename__ = "cve_event"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cve_id: Mapped[str] = mapped_column(String, ForeignKey("cve.cve_id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(32))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(64))
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("cve_id", "kind", "source", name="uq_cve_event_cve_kind_source"),
+        Index("ix_cve_event_kind_occurred_at", "kind", "occurred_at"),
     )
 
 

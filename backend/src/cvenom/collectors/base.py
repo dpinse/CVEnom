@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from cvenom.schemas import NormalizedCve, NormalizedGeoEvent, NormalizedStory
+from cvenom.schemas import NormalizedCve, NormalizedCveEvent, NormalizedGeoEvent, NormalizedStory
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ class CollectorResult:
     stories: list[NormalizedStory] = field(default_factory=list)
     events: list[dict] = field(default_factory=list)
     geo_events: list[NormalizedGeoEvent] = field(default_factory=list)
+    cve_events: list[NormalizedCveEvent] = field(default_factory=list)
 
 
 class Collector(ABC):
