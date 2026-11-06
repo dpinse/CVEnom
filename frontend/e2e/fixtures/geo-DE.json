@@ -121,5 +121,7 @@
       "events": 3
     }
   ],
-  "events": null
+  "events": null,
+  "trend_unit": "hour",
+  "top_cves": []
 }

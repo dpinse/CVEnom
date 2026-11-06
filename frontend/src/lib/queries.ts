@@ -16,26 +16,30 @@ import type {
   CveQuery,
   GeoSummaryItem,
   Health,
-  CveItem,
   LanesOut,
   LoudStory,
   StoryDetailOut,
   StoryListOut,
   StoryQuery,
+  SummaryOut,
   VelocityOut,
+  VolumeOut,
 } from "./types";
+import { DEFAULT_RANGE, type RangeKey } from "./range";
 
 /** Query keys. Shared with the live-update invalidation map (live.ts) and later tasks. */
 export const qk = {
-  lanes: () => ["lanes"] as const,
+  lanes: (range: RangeKey, limit: number) => ["lanes", range, limit] as const,
+  summary: (range: RangeKey) => ["summary", range] as const,
+  volume: (range: RangeKey) => ["volume", range] as const,
   velocity: (days: number) => ["velocity", days] as const,
-  geo: (windowHours: number) => ["geo", windowHours] as const,
-  loud: (limit: number) => ["loud", limit] as const,
-  cve: (id: string) => ["cve", id] as const,
+  geo: (range: RangeKey) => ["geo", range] as const,
+  loud: (range: RangeKey, limit: number) => ["loud", range, limit] as const,
+  cve: (id: string, range: RangeKey) => ["cve", id, range] as const,
   cves: (params: CveQuery) => ["cves", params] as const,
   stories: (params: StoryQuery) => ["stories", params] as const,
   story: (url: string) => ["story", url] as const,
-  country: (cc: string, windowHours: number) => ["geo", "country", cc, windowHours] as const,
+  country: (cc: string, range: RangeKey) => ["geo", "country", cc, range] as const,
   health: () => ["health"] as const,
   sessions: () => ["sessions"] as const,
   /** status only (enabled, remaining count): never the secret or the recovery codes */
@@ -180,18 +184,27 @@ export function useHealth() {
   );
 }
 
-// /api/lanes returns {total, items} per lane; the current UI consumes plain item arrays.
-type WireLanes = Partial<Record<keyof LanesOut, { total: number; items: CveItem[] }>>;
-
-function fromWireLanes(w: WireLanes): LanesOut {
-  const items = (k: keyof LanesOut): CveItem[] => w[k]?.items ?? [];
-  return { EXPLOITED: items("EXPLOITED"), LIKELY: items("LIKELY"), LOUD: items("LOUD"), FRESH: items("FRESH") };
+/** Dashboard lanes for a range: `{total, items}` per lane, `items` capped at `limit`. */
+export function useLanes(range: RangeKey, limit = 5) {
+  return useRead({
+    queryKey: qk.lanes(range, limit),
+    queryFn: ({ signal }) => api<LanesOut>(`/lanes?range=${range}&limit=${limit}`, { signal }),
+    refetchInterval: errorRefetchInterval,
+  });
 }
 
-export function useLanes() {
+export function useSummary(range: RangeKey) {
   return useRead({
-    queryKey: qk.lanes(),
-    queryFn: async ({ signal }) => fromWireLanes(await api<WireLanes>("/lanes?limit=100", { signal })),
+    queryKey: qk.summary(range),
+    queryFn: ({ signal }) => api<SummaryOut>(`/summary?range=${range}`, { signal }),
+    refetchInterval: errorRefetchInterval,
+  });
+}
+
+export function useVolume(range: RangeKey) {
+  return useRead({
+    queryKey: qk.volume(range),
+    queryFn: ({ signal }) => api<VolumeOut>(`/volume?range=${range}`, { signal }),
     refetchInterval: errorRefetchInterval,
   });
 }
@@ -204,26 +217,27 @@ export function useVelocity(days = 30) {
   });
 }
 
-export function useGeo(windowHours = 24) {
+export function useGeo(range: RangeKey) {
   return useRead({
-    queryKey: qk.geo(windowHours),
-    queryFn: ({ signal }) => api<GeoSummaryItem[]>(`/geo?window_hours=${windowHours}`, { signal }),
+    queryKey: qk.geo(range),
+    queryFn: ({ signal }) => api<GeoSummaryItem[]>(`/geo?range=${range}`, { signal }),
     refetchInterval: errorRefetchInterval,
   });
 }
 
-export function useLoudStories(limit = 50) {
+export function useLoudStories(range: RangeKey, limit = 20) {
   return useRead({
-    queryKey: qk.loud(limit),
-    queryFn: ({ signal }) => api<LoudStory[]>(`/stories/loud?limit=${limit}`, { signal }),
+    queryKey: qk.loud(range, limit),
+    queryFn: ({ signal }) => api<LoudStory[]>(`/stories/loud?range=${range}&limit=${limit}`, { signal }),
     refetchInterval: errorRefetchInterval,
   });
 }
 
-export function useCve(id: string | undefined) {
+/** `range` only affects the threat page's "where it's seen" box (geo_top). */
+export function useCve(id: string | undefined, range: RangeKey = DEFAULT_RANGE) {
   return useRead({
-    queryKey: qk.cve(id ?? ""),
-    queryFn: ({ signal }) => api<CveDetail>(`/cves/${encodeURIComponent(id ?? "")}`, { signal }),
+    queryKey: qk.cve(id ?? "", range),
+    queryFn: ({ signal }) => api<CveDetail>(`/cves/${encodeURIComponent(id ?? "")}?range=${range}`, { signal }),
     enabled: !!id,
   });
 }
@@ -273,11 +287,10 @@ export function useStory(url: string | undefined) {
 }
 
 /** Disabled while `cc` is undefined. */
-export function useCountry(cc: string | undefined, windowHours = 24) {
+export function useCountry(cc: string | undefined, range: RangeKey) {
   return useRead({
-    queryKey: qk.country(cc ?? "", windowHours),
-    queryFn: ({ signal }) =>
-      api<CountryActivity>(`/geo/${encodeURIComponent(cc ?? "")}?window_hours=${windowHours}`, { signal }),
+    queryKey: qk.country(cc ?? "", range),
+    queryFn: ({ signal }) => api<CountryActivity>(`/geo/${encodeURIComponent(cc ?? "")}?range=${range}`, { signal }),
     enabled: !!cc,
   });
 }

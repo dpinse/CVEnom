@@ -45,6 +45,13 @@ const detail = (o: Partial<CveDetail> = {}): CveDetail => ({
   cwes: [],
   references: [],
   last_modified: null,
+  product: null,
+  last_seen: null,
+  events: [],
+  affected_versions: [],
+  related: [],
+  geo_top: [],
+  updated_at: "2026-10-01T00:00:00Z",
   ...o,
 });
 const ev = (o: Partial<GeoEventOut> = {}): GeoEventOut => ({
@@ -829,6 +836,8 @@ describe("CountryDetail", () => {
     ],
     top_sources: [{ source: "greynoise", events: 10 }],
     trend: trend([0, 5, 0, 7]),
+    trend_unit: "hour",
+    top_cves: [],
     events: null,
     ...o,
   });
@@ -969,6 +978,8 @@ describe("CveDetail geo country chips", () => {
           counts: [],
           top_sources: [],
           trend: [],
+          trend_unit: "hour",
+          top_cves: [],
           events: null,
         }),
       ),

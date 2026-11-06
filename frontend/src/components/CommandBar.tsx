@@ -1,6 +1,6 @@
 import { Link, NavLink } from "react-router-dom";
 import { useLiveUpdates, type LiveStatus } from "../lib/live";
-import { useLanes } from "../lib/queries";
+import { useSummary } from "../lib/queries";
 import { situationLevel } from "../lib/situation";
 import { useTheme } from "../lib/theme";
 import { useNow } from "../lib/useNow";
@@ -28,10 +28,10 @@ function Radar() {
 }
 
 function Situation() {
-  const lanes = useLanes();
+  // fixed 7-day window: the gauge is not driven by the Dashboard range control
+  const summary = useSummary("7d");
   const now = useNow();
-  const known = lanes.data !== undefined;
-  const s = known ? situationLevel(lanes.data.EXPLOITED ?? [], now) : null;
+  const s = summary.data ? situationLevel(summary.data, now) : null;
   const label = s ? s.level : "Unavailable";
   return (
     <div

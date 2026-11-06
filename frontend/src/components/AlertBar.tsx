@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { DEFAULT_RANGE } from "../lib/range";
 import { useLanes } from "../lib/queries";
+import { LANE_CAP } from "./Lanes";
 import { recentKev } from "../lib/situation";
 import { Text } from "../lib/text";
 import { useNow } from "../lib/useNow";
@@ -21,7 +23,7 @@ function readDismissed(): string | null {
  * this browser session: a newer CVE shows again.
  */
 export function AlertBar() {
-  const lanes = useLanes();
+  const lanes = useLanes(DEFAULT_RANGE, LANE_CAP);
   const now = useNow();
   const [, setSearchParams] = useSearchParams();
   const [dismissed, setDismissed] = useState<string | null>(readDismissed);

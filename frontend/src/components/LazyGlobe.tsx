@@ -4,13 +4,14 @@
  * failed chunk load or render error into the static fallback panel instead of a blank page.
  */
 import { Component, Suspense, lazy, type ReactNode } from "react";
+import { DEFAULT_RANGE } from "../lib/range";
 import { useGeo } from "../lib/queries";
 import { type FallbackReason, GlobeFallback, GlobeLegend, GlobeTitle } from "./GlobeChrome";
 
 const Globe = lazy(() => import("./Globe"));
 
 function FallbackWithData({ reason }: { reason: FallbackReason }) {
-  const geo = useGeo(24);
+  const geo = useGeo(DEFAULT_RANGE);
   const items = Array.isArray(geo.data) ? geo.data : [];
   const state = geo.isPending ? "loading" : geo.isError && !geo.data ? "error" : "ready";
   return (

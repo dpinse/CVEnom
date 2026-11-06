@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { ApiError } from "../lib/api";
+import { DEFAULT_RANGE } from "../lib/range";
 import { useCve } from "../lib/queries";
 import { isIso3166Alpha2 } from "../lib/iso3166";
 import { relTime } from "../lib/relTime";
@@ -408,7 +409,7 @@ export function CveDetailBody({ d }: { d: CveDetail }) {
 
 /** Fetches the CVE and renders loading, 404, error-with-retry, or the detail. */
 export function CveDetailView({ id }: { id: string }) {
-  const q = useCve(id);
+  const q = useCve(id, DEFAULT_RANGE);
   if (q.isError) {
     if (q.error instanceof ApiError && q.error.status === 404) {
       return (

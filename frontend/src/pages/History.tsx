@@ -84,7 +84,7 @@ export function parseFilters(sp: URLSearchParams): CveQuery & { page: number } {
   const kevTo = validDate(sp.get("kev_to"));
   if (kevTo) out.kev_to = kevTo;
   const sort = sp.get("sort");
-  if (sort && (SORTS as readonly string[]).includes(sort)) out.sort = sort;
+  if (sort && (SORTS as readonly string[]).includes(sort)) out.sort = sort as CveQuery["sort"];
   return out;
 }
 

@@ -149,13 +149,16 @@ describe("I1: the query cache is identity-scoped", () => {
     const qc = createQueryClient();
     unbind = bindQueryCacheToAuth(qc, storeA);
     qc.setQueryData(qk.sessions(), [session("a1", "198.51.100.1")]);
-    qc.setQueryData(qk.cve("CVE-2026-0001"), { cve_id: "CVE-2026-0001", stories: [{ source: "ransomware.live" }] });
+    qc.setQueryData(qk.cve("CVE-2026-0001", "7d"), {
+      cve_id: "CVE-2026-0001",
+      stories: [{ source: "ransomware.live" }],
+    });
     qc.setQueryData(qk.health(), { status: "ok", public_read: true });
 
     tabB.announce({ type: "logout", sub: String(A.id) });
     await waitFor(() => expect(storeA.getSnapshot().authenticated).toBe(false));
     expect(qc.getQueryData(qk.sessions())).toBeUndefined();
-    expect(qc.getQueryData(qk.cve("CVE-2026-0001"))).toBeUndefined();
+    expect(qc.getQueryData(qk.cve("CVE-2026-0001", "7d"))).toBeUndefined();
     expect(qc.getQueryData(qk.health())).toEqual({ status: "ok", public_read: true });
     tabA.dispose();
     tabB.dispose();
@@ -190,8 +193,8 @@ describe("I1: the query cache is identity-scoped", () => {
     store.setReady(true);
     const qc = createQueryClient();
     unbind = bindQueryCacheToAuth(qc, store);
-    qc.setQueryData(qk.lanes(), { EXPLOITED: [] });
+    qc.setQueryData(qk.lanes("7d", 5), { EXPLOITED: [] });
     store.setToken("tok-2");
-    expect(qc.getQueryData(qk.lanes())).toEqual({ EXPLOITED: [] });
+    expect(qc.getQueryData(qk.lanes("7d", 5))).toEqual({ EXPLOITED: [] });
   });
 });

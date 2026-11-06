@@ -13,7 +13,9 @@
         "patch_available": false,
         "published": "2026-11-03T10:00:00Z",
         "summary": "Acme Gateway auth bypass <img src=x onerror=alert(1)> &lt;script&gt;alert(2)&lt;/script&gt;",
-        "recent_story_count": 2
+        "recent_story_count": 2,
+        "product": null,
+        "last_seen": null
       },
       {
         "cve_id": "CVE-2026-1002",
@@ -26,7 +28,9 @@
         "patch_available": false,
         "published": "2026-11-03T10:00:00Z",
         "summary": "Widget Server RCE under active exploitation",
-        "recent_story_count": 1
+        "recent_story_count": 1,
+        "product": null,
+        "last_seen": null
       }
     ]
   },
@@ -44,7 +48,9 @@
         "patch_available": true,
         "published": "2026-11-03T10:00:00Z",
         "summary": "Contoso VPN heap overflow",
-        "recent_story_count": 0
+        "recent_story_count": 0,
+        "product": null,
+        "last_seen": null
       },
       {
         "cve_id": "CVE-2026-2002",
@@ -57,7 +63,9 @@
         "patch_available": true,
         "published": "2026-11-03T10:00:00Z",
         "summary": "Fabrikam CMS SQL injection",
-        "recent_story_count": 0
+        "recent_story_count": 0,
+        "product": null,
+        "last_seen": null
       }
     ]
   },
@@ -75,7 +83,9 @@
         "patch_available": true,
         "published": "2026-11-03T10:00:00Z",
         "summary": "Globex router flaw drawing press attention",
-        "recent_story_count": 3
+        "recent_story_count": 3,
+        "product": null,
+        "last_seen": null
       },
       {
         "cve_id": "CVE-2026-3002",
@@ -88,7 +98,9 @@
         "patch_available": true,
         "published": "2026-11-03T10:00:00Z",
         "summary": "Initech mail relay leak",
-        "recent_story_count": 2
+        "recent_story_count": 2,
+        "product": null,
+        "last_seen": null
       }
     ]
   },
@@ -106,7 +118,9 @@
         "patch_available": true,
         "published": "2026-11-03T10:00:00Z",
         "summary": "Umbrella controller critical RCE",
-        "recent_story_count": 0
+        "recent_story_count": 0,
+        "product": null,
+        "last_seen": null
       },
       {
         "cve_id": "CVE-2026-4002",
@@ -119,7 +133,9 @@
         "patch_available": true,
         "published": "2026-11-03T10:00:00Z",
         "summary": "Hooli SDK deserialization",
-        "recent_story_count": 0
+        "recent_story_count": 0,
+        "product": null,
+        "last_seen": null
       }
     ]
   }

@@ -46,7 +46,7 @@ for (const size of SIZES) {
 
     test("CVE drawer with long unbroken summary, reference and vector", async ({ page }) => {
       const base = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", `cve-${CVE_ID}.json`), "utf8"));
-      await page.route(`**/api/cves/${CVE_ID}`, (route) =>
+      await page.route(`**/api/cves/${CVE_ID}?*`, (route) =>
         route.fulfill({
           status: 200,
           contentType: "application/json",

@@ -154,7 +154,7 @@ const fixture: GeoSummaryItem[] = [
 
 function seeded(data: GeoSummaryItem[] | undefined) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  if (data) qc.setQueryData(qk.geo(24), data);
+  if (data) qc.setQueryData(qk.geo("7d"), data);
   return qc;
 }
 

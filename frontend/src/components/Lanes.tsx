@@ -1,8 +1,9 @@
 import { Link } from "react-router-dom";
 import { RateLimited } from "../lib/api";
+import { DEFAULT_RANGE } from "../lib/range";
 import { errorRefetchMs, nextRetryAt, pollsAfterError, useLanes, useLoudStories } from "../lib/queries";
 import { useSelection, type Selection } from "../lib/selection";
-import type { CveItem, Lane, LoudStory } from "../lib/types";
+import type { CveItem, Lane, LanesOut, LoudStory } from "../lib/types";
 import { useNow } from "../lib/useNow";
 import { LaneRow, StoryRow } from "./LaneRow";
 
@@ -43,7 +44,7 @@ export function loudStoriesFor(loud: CveItem[], stories: LoudStory[]): LoudStory
 }
 
 interface ViewProps {
-  lanes?: Partial<Record<Lane, CveItem[]>>;
+  lanes?: Partial<LanesOut>;
   stories?: LoudStory[];
   loading?: boolean;
   error?: unknown;
@@ -83,7 +84,7 @@ export function LanesView({ lanes, stories = [], loading, error, retryAt, now, o
       ) : null}
       <div className="lanes">
         {DEFS.map((d) => {
-          const cves = (lanes?.[d.key] ?? []).slice(0, LANE_CAP);
+          const cves = (lanes?.[d.key]?.items ?? []).slice(0, LANE_CAP);
           const storyRows = d.key === "LOUD" ? loudStoriesFor(cves, stories) : [];
           const storyShown = storyRows.slice(0, Math.max(0, LANE_CAP - cves.length));
           const count = cves.length + storyShown.length;
@@ -139,8 +140,8 @@ export function LanesView({ lanes, stories = [], loading, error, retryAt, now, o
 }
 
 export function Lanes() {
-  const lanes = useLanes();
-  const stories = useLoudStories();
+  const lanes = useLanes(DEFAULT_RANGE, LANE_CAP);
+  const stories = useLoudStories(DEFAULT_RANGE, 50);
   // Tick every second while the error countdown is on screen.
   const now = useNow(lanes.isError ? 1000 : 60_000);
   const { select } = useSelection();

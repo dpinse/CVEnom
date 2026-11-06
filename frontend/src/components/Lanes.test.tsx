@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { ApiError, RateLimited } from "../lib/api";
 import { relTime } from "../lib/relTime";
 import { parseSelection, useSelection } from "../lib/selection";
-import type { LoudStory } from "../lib/types";
+import type { CveItem, Lane, LanesOut, LoudStory } from "../lib/types";
 import { item } from "../test/shell";
 import { LANE_CAP, LanesView } from "./Lanes";
 
@@ -35,15 +35,18 @@ const story = (o: Partial<LoudStory> = {}): LoudStory => ({
 });
 const lane = (name: string) => screen.getByRole("region", { name });
 const noop = () => {};
+/** Plain item arrays -> the {total, items} shape LanesView reads. */
+const ln = (o: Partial<Record<Lane, CveItem[]>>): Partial<LanesOut> =>
+  Object.fromEntries(Object.entries(o).map(([k, items]) => [k, { total: items.length, items }]));
 
 describe("LanesView lane copy", () => {
   test("subtitles name the windows", () => {
-    render(<LanesView lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] }} onSelect={noop} now={NOW} />);
+    render(<LanesView lanes={ln({ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] })} onSelect={noop} now={NOW} />);
     expect(within(lane("Exploited now")).getByText("KEV-listed, last 30 days")).toBeInTheDocument();
     expect(within(lane("Likely next")).getByText("published ≤ 30 days, high EPSS")).toBeInTheDocument();
   });
   test("an empty Exploited lane shows the copy and a Browse History link to /history?kev=true", () => {
-    render(<LanesView lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] }} onSelect={noop} now={NOW} />);
+    render(<LanesView lanes={ln({ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] })} onSelect={noop} now={NOW} />);
     const ex = within(lane("Exploited now"));
     expect(ex.getByText("No new KEV listings in the last 30 days")).toBeInTheDocument();
     expect(ex.getByRole("link", { name: "Browse History" }).getAttribute("href")).toBe("/history?kev=true");
@@ -55,7 +58,7 @@ describe("LanesView double-encoded text", () => {
   test("a summary of &amp;lt;b&amp;gt; renders as literal text &lt;b&gt;, never markup", () => {
     const { container } = render(
       <LanesView
-        lanes={{ EXPLOITED: [item({ summary: "&amp;lt;b&amp;gt;" })], LIKELY: [], LOUD: [], FRESH: [] }}
+        lanes={ln({ EXPLOITED: [item({ summary: "&amp;lt;b&amp;gt;" })], LIKELY: [], LOUD: [], FRESH: [] })}
         onSelect={noop}
         now={NOW}
       />,
@@ -69,7 +72,7 @@ describe("LanesView ransomware credit", () => {
   test("only a ransomware.live story row carries the credit link", () => {
     render(
       <LanesView
-        lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] }}
+        lanes={ln({ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] })}
         stories={[
           story({ url: "https://news.example/r", source: "ransomware.live", title: "Victim" }),
           story({ url: "https://news.example/n", source: "Example News", title: "News" }),
@@ -94,7 +97,7 @@ describe("LanesView ransomware credit", () => {
 
 describe("LanesView", () => {
   test("quiet foil appears only in Fresh, with no in-the-wild marker", () => {
-    render(<LanesView lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [foil] }} onSelect={noop} now={NOW} />);
+    render(<LanesView lanes={ln({ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [foil] })} onSelect={noop} now={NOW} />);
     expect(within(lane("Fresh criticals")).getByText("CVE-2026-115560")).toBeInTheDocument();
     expect(screen.getAllByText("CVE-2026-115560")).toHaveLength(1);
     expect(screen.queryByText("in the wild")).toBeNull();
@@ -104,12 +107,12 @@ describe("LanesView", () => {
     const k = (id: string) => item({ cve_id: id, kev: true });
     const { container } = render(
       <LanesView
-        lanes={{
+        lanes={ln({
           EXPLOITED: [k("CVE-2026-0001")],
           LIKELY: [k("CVE-2026-0002")],
           LOUD: [k("CVE-2026-0003")],
           FRESH: [k("CVE-2026-0004")],
-        }}
+        })}
         onSelect={noop}
         now={NOW}
       />,
@@ -123,7 +126,7 @@ describe("LanesView", () => {
   test("null cvss and epss omit their chips without crashing", () => {
     const { container } = render(
       <LanesView
-        lanes={{ EXPLOITED: [item({ cvss: null, epss_percentile: null, kev: false })] }}
+        lanes={ln({ EXPLOITED: [item({ cvss: null, epss_percentile: null, kev: false })] })}
         onSelect={noop}
         now={NOW}
       />,
@@ -135,7 +138,7 @@ describe("LanesView", () => {
   test("chips: EPSS percentile, KEV date + source, PoC, no patch, news", () => {
     render(
       <LanesView
-        lanes={{
+        lanes={ln({
           EXPLOITED: [
             item({
               cvss: 7.5,
@@ -147,7 +150,7 @@ describe("LanesView", () => {
               recent_story_count: 3,
             }),
           ],
-        }}
+        })}
         onSelect={noop}
         now={NOW}
       />,
@@ -163,9 +166,9 @@ describe("LanesView", () => {
   test("patch_available true or null shows no 'no patch' chip", () => {
     render(
       <LanesView
-        lanes={{
+        lanes={ln({
           EXPLOITED: [item({ patch_available: true }), item({ cve_id: "CVE-2026-0002", patch_available: null })],
-        }}
+        })}
         onSelect={noop}
         now={NOW}
       />,
@@ -176,7 +179,7 @@ describe("LanesView", () => {
   test("summary with &lt;script&gt; renders literally with no script element", () => {
     const { container } = render(
       <LanesView
-        lanes={{ FRESH: [item({ kev: false, summary: "&lt;script&gt;alert(1)&lt;/script&gt;" })] }}
+        lanes={ln({ FRESH: [item({ kev: false, summary: "&lt;script&gt;alert(1)&lt;/script&gt;" })] })}
         onSelect={noop}
         now={NOW}
       />,
@@ -195,7 +198,7 @@ describe("LanesView", () => {
     [null, "low"],
   ])("severity bucket for cvss %s is %s", (cvss, sev) => {
     const { container } = render(
-      <LanesView lanes={{ FRESH: [item({ cvss, kev: false })] }} onSelect={noop} now={NOW} />,
+      <LanesView lanes={ln({ FRESH: [item({ cvss, kev: false })] })} onSelect={noop} now={NOW} />,
     );
     const row = container.querySelector(".row")!;
     expect(row).toHaveAttribute("data-sev", sev);
@@ -204,7 +207,7 @@ describe("LanesView", () => {
 
   test("KEV overrides the severity edge", () => {
     const { container } = render(
-      <LanesView lanes={{ EXPLOITED: [item({ cvss: 2, kev: true })] }} onSelect={noop} now={NOW} />,
+      <LanesView lanes={ln({ EXPLOITED: [item({ cvss: 2, kev: true })] })} onSelect={noop} now={NOW} />,
     );
     const row = container.querySelector(".row")!;
     expect(row).toHaveClass("live");
@@ -212,7 +215,7 @@ describe("LanesView", () => {
   });
 
   test("CVE-less stories appear in Loud now with a 'no CVE' chip and decoded title", () => {
-    render(<LanesView lanes={{ LOUD: [] }} stories={[story()]} onSelect={noop} now={NOW} />);
+    render(<LanesView lanes={ln({ LOUD: [] })} stories={[story()]} onSelect={noop} now={NOW} />);
     const loud = lane("Loud now");
     expect(within(loud).getByText("Big & loud")).toBeInTheDocument();
     expect(within(loud).getByText("no CVE")).toBeInTheDocument();
@@ -223,7 +226,7 @@ describe("LanesView", () => {
   test("stories are newest first and come after CVE rows", () => {
     render(
       <LanesView
-        lanes={{ LOUD: [item({ cve_id: "CVE-2026-0009" })] }}
+        lanes={ln({ LOUD: [item({ cve_id: "CVE-2026-0009" })] })}
         stories={[
           story({ title: "older", url: "https://n.example/1", published: "2026-11-04T00:00:00Z" }),
           story({ title: "newer", url: "https://n.example/2", published: "2026-11-05T10:00:00Z" }),
@@ -241,7 +244,7 @@ describe("LanesView", () => {
   test("stories whose CVEs are all LOUD CVE rows are not duplicated", () => {
     render(
       <LanesView
-        lanes={{ LOUD: [item({ cve_id: "CVE-2026-0001" })] }}
+        lanes={ln({ LOUD: [item({ cve_id: "CVE-2026-0001" })] })}
         stories={[
           story({ title: "dupe", url: "https://n.example/d", cve_ids: ["CVE-2026-0001"] }),
           story({ title: "partial", url: "https://n.example/p", cve_ids: ["CVE-2026-0001", "CVE-2026-0002"] }),
@@ -257,18 +260,18 @@ describe("LanesView", () => {
   test("merged Loud lane is capped at 100 rows", () => {
     const cves = Array.from({ length: 90 }, (_, i) => item({ cve_id: `CVE-2026-${String(1000 + i)}`, kev: false }));
     const stories = Array.from({ length: 30 }, (_, i) => story({ title: `s${i}`, url: `https://n.example/${i}` }));
-    const { container } = render(<LanesView lanes={{ LOUD: cves }} stories={stories} onSelect={noop} now={NOW} />);
+    const { container } = render(<LanesView lanes={ln({ LOUD: cves })} stories={stories} onSelect={noop} now={NOW} />);
     expect(lane("Loud now").querySelectorAll(".row")).toHaveLength(LANE_CAP);
     expect(container.querySelector('[data-k="loud"] .n')).toHaveTextContent("100");
     const many = Array.from({ length: 150 }, (_, i) => item({ cve_id: `CVE-2026-${String(2000 + i)}`, kev: false }));
     cleanup();
-    render(<LanesView lanes={{ FRESH: many }} onSelect={noop} now={NOW} />);
+    render(<LanesView lanes={ln({ FRESH: many })} onSelect={noop} now={NOW} />);
     expect(lane("Fresh criticals").querySelectorAll(".row")).toHaveLength(100);
   });
 
   test("clicking a CVE row calls onSelect with the id", () => {
     const onSelect = vi.fn();
-    render(<LanesView lanes={{ EXPLOITED: [item({ cve_id: "CVE-2026-4242" })] }} onSelect={onSelect} now={NOW} />);
+    render(<LanesView lanes={ln({ EXPLOITED: [item({ cve_id: "CVE-2026-4242" })] })} onSelect={onSelect} now={NOW} />);
     fireEvent.click(screen.getByRole("button", { name: /CVE-2026-4242/ }));
     expect(onSelect).toHaveBeenCalledWith({ kind: "cve", id: "CVE-2026-4242" });
   });
@@ -277,7 +280,7 @@ describe("LanesView", () => {
     const onSelect = vi.fn();
     render(
       <LanesView
-        lanes={{ LOUD: [] }}
+        lanes={ln({ LOUD: [] })}
         stories={[story({ cve_ids: ["CVE-2026-7777"] })]}
         onSelect={onSelect}
         now={NOW}
@@ -290,7 +293,7 @@ describe("LanesView", () => {
   });
 
   test("empty states render per lane", () => {
-    render(<LanesView lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] }} onSelect={noop} now={NOW} />);
+    render(<LanesView lanes={ln({ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] })} onSelect={noop} now={NOW} />);
     expect(screen.getByText("No new KEV listings in the last 30 days")).toBeInTheDocument();
     expect(screen.getByText("No likely-next CVEs")).toBeInTheDocument();
     expect(screen.getByText("Quiet — no buzz")).toBeInTheDocument();
@@ -338,7 +341,7 @@ describe("LanesView", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
     render(
       <LanesView
-        lanes={{ LOUD: [] }}
+        lanes={ln({ LOUD: [] })}
         stories={[story({ title: "one" }), story({ title: "two" })]}
         onSelect={noop}
         now={NOW}
@@ -351,7 +354,7 @@ describe("LanesView", () => {
   });
 
   test("lane sections are labelled by their headings", () => {
-    render(<LanesView lanes={{}} onSelect={noop} />);
+    render(<LanesView lanes={ln({})} onSelect={noop} />);
     expect(screen.getAllByRole("region")).toHaveLength(4);
   });
 });

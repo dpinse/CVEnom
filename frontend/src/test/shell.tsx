@@ -7,7 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { authStore } from "../lib/api";
 import { createQueryClient } from "../lib/queries";
-import type { CveItem, LanesOut, Me } from "../lib/types";
+import type { CveItem, Lane, LaneOut, LanesOut, Me, SummaryOut } from "../lib/types";
 
 export const server = setupServer();
 
@@ -53,26 +53,42 @@ export const item = (o: Partial<CveItem> = {}): CveItem => ({
   published: null,
   summary: "A summary",
   recent_story_count: 0,
+  product: null,
+  last_seen: null,
   ...o,
 });
 
-export const lanes = (exploited: CveItem[] = [], rest: Partial<LanesOut> = {}): LanesOut => ({
-  EXPLOITED: exploited,
-  LIKELY: [],
-  LOUD: [],
-  FRESH: [],
-  ...rest,
+export const laneOut = (items: CveItem[] = []): LaneOut => ({ total: items.length, items });
+
+/** LanesOut from plain item arrays; `total` is the item count. */
+export const lanes = (exploited: CveItem[] = [], rest: Partial<Record<Lane, CveItem[]>> = {}): LanesOut => ({
+  EXPLOITED: laneOut(exploited),
+  LIKELY: laneOut(rest.LIKELY),
+  LOUD: laneOut(rest.LOUD),
+  FRESH: laneOut(rest.FRESH),
 });
 
-const wireLanes = (l: LanesOut) =>
-  Object.fromEntries(Object.entries(l).map(([k, items]) => [k, { total: items.length, items }]));
+/** The /summary a given lanes fixture implies (newest KEV date, EXPLOITED total as new_kev). */
+const summaryOf = (l: LanesOut): SummaryOut => ({
+  range: "7d",
+  new_kev: l.EXPLOITED.total,
+  kev_due_soon: 0,
+  new_critical: l.FRESH.total,
+  public_exploits: 0,
+  latest_kev_added:
+    l.EXPLOITED.items
+      .map((c) => c.kev_added ?? "")
+      .sort()
+      .at(-1) || null,
+});
 
 export function handlers(opts: { publicRead?: boolean; lanes?: LanesOut } = {}) {
   server.use(
     http.get("http://localhost/api/health", () =>
       HttpResponse.json({ status: "ok", public_read: opts.publicRead ?? true }),
     ),
-    http.get("http://localhost/api/lanes", () => HttpResponse.json(wireLanes(opts.lanes ?? lanes()))),
+    http.get("http://localhost/api/lanes", () => HttpResponse.json(opts.lanes ?? lanes())),
+    http.get("http://localhost/api/summary", () => HttpResponse.json(summaryOf(opts.lanes ?? lanes()))),
     http.post("http://localhost/api/auth/logout", () => new HttpResponse(null, { status: 204 })),
   );
 }

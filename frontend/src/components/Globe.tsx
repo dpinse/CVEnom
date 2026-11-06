@@ -5,6 +5,7 @@
  */
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { isIso3166Alpha2 } from "../lib/iso3166";
+import { DEFAULT_RANGE } from "../lib/range";
 import { useGeo } from "../lib/queries";
 import { useSelection } from "../lib/selection";
 import type { GeoSummaryItem } from "../lib/types";
@@ -16,7 +17,7 @@ import { type GlobeController, type GlobeFailure, mountGlobe } from "./globeMap"
 const EMPTY: GeoSummaryItem[] = [];
 
 export default function Globe() {
-  const geo = useGeo(24);
+  const geo = useGeo(DEFAULT_RANGE);
   const items = Array.isArray(geo.data) ? geo.data : EMPTY;
   const state: "loading" | "error" | "ready" = geo.isPending ? "loading" : geo.isError && !geo.data ? "error" : "ready";
   const register = useGlobeRegistration();

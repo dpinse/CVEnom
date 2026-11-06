@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { ApiError } from "../lib/api";
+import { DEFAULT_RANGE } from "../lib/range";
 import { useCountry } from "../lib/queries";
 import { relTime } from "../lib/relTime";
 import { decodeEntities, ExternalLink, safeHref, Text } from "../lib/text";
@@ -149,7 +150,7 @@ function CountryBody({ a }: { a: CountryActivity }) {
 
 /** A country drawer body: GET /api/geo/{cc} for the last 24 h. Also turns the globe to the country. */
 export function CountryDetail({ cc }: { cc: string }) {
-  const q = useCountry(cc);
+  const q = useCountry(cc, DEFAULT_RANGE);
   const globe = useGlobe();
   useEffect(() => {
     globe.flyTo(cc);

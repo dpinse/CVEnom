@@ -56,7 +56,7 @@ export default function GlobeHarness() {
   const params = new URLSearchParams(window.location.search);
   const [qc] = useState(() => {
     const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
-    client.setQueryData(qk.geo(24), params.get("data") === "empty" ? [] : GEO_FIXTURE);
+    client.setQueryData(qk.geo("7d"), params.get("data") === "empty" ? [] : GEO_FIXTURE);
     return client;
   });
   const [theme, setTheme] = useState<Theme>(() => {
