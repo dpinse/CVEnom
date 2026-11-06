@@ -171,6 +171,20 @@ td .sub { display: block; color: var(--faint); font-size: 12px; }
 .tag { display: inline-block; font: 500 11px var(--font-mono); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--muted); margin: 0 4px 3px 0; white-space: nowrap; }
 .tag.kev { color: var(--live); border-color: color-mix(in srgb, var(--live) 50%, transparent); }
 .tag.poc { color: var(--sev-high); border-color: color-mix(in srgb, var(--sev-high) 50%, transparent); }
+.sel { background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 6px 8px; color: var(--text); font: inherit; font-size: 13px; }
+.sevchips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.sev-chip { --c: var(--sev-low); display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 999px; padding: 4px 11px 4px 9px; cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.sev-chip[data-sev="med"] { --c: var(--sev-med); } .sev-chip[data-sev="high"] { --c: var(--sev-high); } .sev-chip[data-sev="crit"] { --c: var(--sev-crit); }
+.sev-chip i { width: 10px; height: 10px; border-radius: 50%; box-sizing: border-box; border: 2px solid var(--c); }
+.sev-chip:hover { border-color: var(--c); color: var(--text); }
+.sev-chip[aria-pressed="true"] { color: var(--text); font-weight: 600; border-color: var(--c); background: color-mix(in srgb, var(--c) 16%, var(--panel)); }
+.sev-chip[aria-pressed="true"] i { background: var(--c); }
+.sortbox { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
+.sort-desc { font-size: 12px; color: var(--faint); }
+.morefilters { display: inline-flex; gap: 8px; }
+.skip { position: absolute; left: -9999px; } .skip:focus { position: static; }
+.pager { display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; gap: 12px; flex-wrap: wrap; }
+.pager .pg { display: inline-flex; gap: 10px; align-items: center; }
 .sevpill { display: inline-flex; align-items: center; gap: 6px; font: 500 12.5px var(--font-mono); white-space: nowrap; }
 .sevpill i { width: 8px; height: 8px; border-radius: 50%; }
 
@@ -347,7 +361,7 @@ const ISO_N = { US: 840, DE: 276, GB: 826, FR: 250, NL: 528, RU: 643, CN: 156, B
 const NAMES = { US: "United States", DE: "Germany", GB: "United Kingdom", FR: "France", NL: "Netherlands", RU: "Russia", CN: "China", BR: "Brazil", IN: "India", CA: "Canada", IT: "Italy", ES: "Spain", JP: "Japan", KR: "South Korea", AU: "Australia", PL: "Poland", UA: "Ukraine", SG: "Singapore", TR: "Türkiye", MX: "Mexico", ZA: "South Africa", SE: "Sweden", BE: "Belgium", CH: "Switzerland", IR: "Iran", VN: "Vietnam", ID: "Indonesia", AR: "Argentina", EG: "Egypt", NG: "Nigeria" };
 
 // ---- State ----
-const S = { range: 7, mapMode: "flat", country: null, lane: "all", q: "", sevF: "all", poc: false, nopatch: false, sort: ["date", -1], tab: "cves" };
+const S = { range: 7, mapMode: "flat", country: null, lane: "all", status: "all", added: "any", sevs: new Set(), sortT: "newest", more: false, q: "", sevF: "all", poc: false, nopatch: false, sort: ["date", -1], tab: "cves" };
 try { const r = +localStorage.getItem("cvenom-mock-range"); if ([1, 7, 14, 30].includes(r)) S.range = r; } catch (e) {}
 
 // Lane rules. A KEV listing always means "exploited"; "likely next" never includes KEV entries.
@@ -374,9 +388,10 @@ const app = document.getElementById("app");
 function route() {
   const h = (location.hash || "#dashboard").slice(1);
   closeDrawer();
+  document.getElementById("range").hidden = !(h === "dashboard");
   document.querySelectorAll("[data-nav]").forEach((a) => a.toggleAttribute("aria-current", false));
   if (h.startsWith("cve-")) { setNav("threats"); renderThreat(h.slice(4).toUpperCase()); }
-  else if (h.startsWith("threats")) { const l = h.split("-")[1]; if (l) S.lane = l; setNav("threats"); renderThreats(); }
+  else if (h.startsWith("threats")) { const l = h.split("-")[1]; if (l) { S.status = { exploited: "exploited", likely: "likely", loud: "news", fresh: "critical" }[l] || "all"; S.added = { 1: "1", 7: "7", 14: "30", 30: "30" }[S.range]; } setNav("threats"); renderThreats(); }
   else { setNav("dashboard"); renderDashboard(); }
   window.scrollTo(0, 0);
 }
@@ -569,7 +584,7 @@ function drawVol() {
 function renderThreats() {
   const R = S.range;
   app.innerHTML = `<div class="page">
-    <div class="th-head"><h1>Threats</h1><span class="muted">Every CVE and story CVEnom has seen in the last ${rangeLabel()}. Change the window in the top bar.</span></div>
+    <div class="th-head"><h1>Threats</h1><span class="muted">Every CVE and story CVEnom has recorded. Filter by when it was added, its status and its severity.</span></div>
     <div class="tabs" role="tablist"><button role="tab" type="button" data-tab="cves" aria-selected="${S.tab === "cves"}">CVEs</button><button role="tab" type="button" data-tab="news" aria-selected="${S.tab === "news"}">News</button></div>
     <div id="tab"></div>
   </div>`;
@@ -578,48 +593,69 @@ function renderThreats() {
 }
 function renderCveTab() {
   const tab = document.getElementById("tab");
-  const laneOpts = [["all", "All"], ["exploited", "Exploited now"], ["likely", "Likely next"], ["loud", "Loud now"], ["fresh", "Fresh criticals"]];
+  const statusOpts = [["all", "All"], ["exploited", "Exploited"], ["likely", "Likely next"], ["news", "In the news"], ["critical", "Critical"]];
+  const addedOpts = [["any", "Added any time"], ["1", "Added past day"], ["7", "Added past week"], ["30", "Added past month"], ["90", "Added past 90 days"], ["365", "Added past year"]];
+  const sortOpts = { newest: ["Newest", "Most recently published first"], hot: ["Hot", "Exploited first, then EPSS, CVSS and news"], trending: ["Trending", "Most news stories in the last 7 days"], due: ["KEV due", "Soonest CISA deadline first"] };
+  const sevs = [["low", "Low"], ["med", "Medium"], ["high", "High"], ["crit", "Critical"]];
   tab.innerHTML = `<div style="display:grid;gap:12px">
     <div class="filters">
       <label class="sr-only" for="q">Search CVEs</label><input id="q" type="search" placeholder="Search CVE, vendor or product" value="${esc(S.q)}">
-      ${laneOpts.map(([k, l]) => `<button type="button" class="chip-btn" data-lane="${k}" aria-pressed="${S.lane === k}">${l}</button>`).join("")}
-      <span style="width:1px;height:20px;background:var(--line-2)"></span>
-      <button type="button" class="chip-btn" data-t="poc" aria-pressed="${S.poc}">Public exploit</button>
-      <button type="button" class="chip-btn" data-t="nopatch" aria-pressed="${S.nopatch}">No patch</button>
-      <label class="sr-only" for="sevf">Severity</label>
-      <select id="sevf" class="chip-btn" style="padding:4px 8px"><option value="all">Any severity</option><option value="crit">Critical</option><option value="high">High and up</option></select>
+      <label class="sr-only" for="added">Added</label>
+      <select id="added" class="sel">${addedOpts.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>
+      <span class="sevchips" role="group" aria-label="Severity">${sevs.map(([k, l]) => `<button type="button" class="sev-chip" data-sev="${k}" aria-pressed="${S.sevs.has(k)}"><i></i>${l}</button>`).join("")}</span>
+      <span class="sortbox"><label class="sr-only" for="sortsel">Sort</label><select id="sortsel" class="sel">${Object.entries(sortOpts).map(([v, [l]]) => `<option value="${v}">${l}</option>`).join("")}</select><span class="sort-desc" id="sortdesc"></span></span>
+    </div>
+    <div class="filters">
+      ${statusOpts.map(([k, l]) => `<button type="button" class="chip-btn" data-status="${k}" aria-pressed="${S.status === k}">${l}</button>`).join("")}
+      <button type="button" class="chip-btn more" id="morebtn" aria-expanded="${S.more}">All filters</button>
+      <span class="morefilters" ${S.more ? "" : "hidden"} id="more">
+        <button type="button" class="chip-btn" data-t="poc" aria-pressed="${S.poc}">Public exploit</button>
+        <button type="button" class="chip-btn" data-t="nopatch" aria-pressed="${S.nopatch}">No patch</button>
+      </span>
+      <a class="skip" href="#pager">Skip to pagination</a>
     </div>
     <div class="panel tbl-wrap"><table><thead><tr>
-      <th><button type="button" data-s="cvss">Severity</button></th><th>CVE</th><th>Product and issue</th><th>Signals</th><th><button type="button" data-s="epss">EPSS</button></th><th><button type="button" data-s="date">Seen</button></th>
+      <th>Severity</th><th>CVE</th><th>Product and issue</th><th>Signals</th><th>EPSS</th><th>Added</th>
     </tr></thead><tbody id="tb"></tbody></table></div>
-    <p class="muted" id="cnt" style="margin:0;font-size:12.5px"></p></div>`;
-  document.getElementById("sevf").value = S.sevF;
+    <nav class="pager" id="pager" aria-label="Pagination"><span class="muted" id="cnt"></span><span class="pg"><button type="button" class="chip-btn" disabled>Previous</button><span class="num">Page 1</span><button type="button" class="chip-btn" disabled>Next</button></span></nav></div>`;
+  document.getElementById("added").value = S.added;
+  document.getElementById("sortsel").value = S.sortT;
   const fill = () => {
-    let rows = CVES.filter((c) => { const l = lanesOf(c, S.range); return l.length && (S.lane === "all" || l.includes(S.lane)); });
+    document.getElementById("sortdesc").textContent = sortOpts[S.sortT][1];
+    const addedAge = (c) => S.status === "exploited" && c.kev ? c.kevAge : c.pubAge;
+    let rows = CVES.slice();
+    if (S.added !== "any") rows = rows.filter((c) => addedAge(c) <= +S.added);
+    if (S.status === "exploited") rows = rows.filter((c) => c.kev);
+    if (S.status === "likely") rows = rows.filter((c) => !c.kev && c.epss >= .95);
+    if (S.status === "news") rows = rows.filter((c) => c.news > 0);
+    if (S.status === "critical") rows = rows.filter((c) => c.cvss >= 9);
     if (S.q) { const q = S.q.toLowerCase(); rows = rows.filter((c) => (c.id + c.product + c.title).toLowerCase().includes(q)); }
     if (S.poc) rows = rows.filter((c) => c.poc);
     if (S.nopatch) rows = rows.filter((c) => c.patch === false);
-    if (S.sevF === "crit") rows = rows.filter((c) => c.cvss >= 9); else if (S.sevF === "high") rows = rows.filter((c) => c.cvss >= 7);
-    const [k, dir] = S.sort;
-    const seen = (c) => Math.min(c.kev ? c.kevAge : 99, c.pubAge, c.news ? c.newsAge : 99);
-    rows.sort((a, b) => dir * (k === "cvss" ? a.cvss - b.cvss : k === "epss" ? a.epss - b.epss : seen(b) - seen(a)));
-    tab.querySelectorAll("th button").forEach((b) => b.dataset.s === k ? b.setAttribute("data-dir", dir < 0 ? "↓" : "↑") : b.removeAttribute("data-dir"));
+    if (S.sevs.size) rows = rows.filter((c) => S.sevs.has(sev(c.cvss)));
+    const newest = (a, b) => addedAge(a) - addedAge(b);
+    if (S.sortT === "newest") rows.sort(newest);
+    else if (S.sortT === "hot") rows.sort((a, b) => heat(b) - heat(a));
+    else if (S.sortT === "trending") rows.sort((a, b) => (b.newsAge <= 7 ? b.news : 0) - (a.newsAge <= 7 ? a.news : 0) || b.epss - a.epss || newest(a, b));
+    else rows = rows.filter((c) => c.kev).sort((a, b) => b.kevAge - a.kevAge);
     document.getElementById("tb").innerHTML = rows.map((c) => { const s = sev(c.cvss); return `<tr data-id="${c.id}">
       <td><span class="sevpill"><i class="s-${s}"></i><span class="c-${s}">${c.cvss.toFixed(1)}</span> <span class="muted" style="font-family:var(--font-body);font-size:12px">${sevName[s]}</span></span></td>
       <td><a class="mono" href="#cve-${c.id.toLowerCase()}" style="white-space:nowrap">${c.id}</a></td>
       <td><span class="t">${esc(c.product)}</span><span class="sub">${esc(c.title)}</span></td>
       <td>${c.kev ? `<span class="tag kev">KEV</span>` : ""}${c.poc ? `<span class="tag poc">PoC</span>` : ""}${c.patch === false ? `<span class="tag">no patch</span>` : ""}${c.news ? `<span class="tag">news ×${c.news}</span>` : ""}</td>
       <td class="num">p${Math.round(c.epss * 100)}</td>
-      <td class="num muted" style="white-space:nowrap">${relD(seen(c))}</td></tr>`; }).join("") || `<tr><td colspan="6" class="muted">No CVEs match these filters in the last ${rangeLabel()}.</td></tr>`;
+      <td class="num muted" style="white-space:nowrap">${fmt(ago(addedAge(c)))}</td></tr>`; }).join("") || `<tr><td colspan="6" class="muted">No CVEs match these filters.</td></tr>`;
     document.getElementById("cnt").textContent = `${rows.length} CVEs`;
     document.querySelectorAll("#tb tr[data-id]").forEach((tr) => tr.addEventListener("click", (e) => { if (!e.target.closest("a")) location.hash = "cve-" + tr.dataset.id.toLowerCase(); }));
   };
   fill();
   document.getElementById("q").addEventListener("input", (e) => { S.q = e.target.value; fill(); });
-  document.getElementById("sevf").addEventListener("change", (e) => { S.sevF = e.target.value; fill(); });
-  tab.querySelectorAll("[data-lane]").forEach((b) => b.addEventListener("click", () => { S.lane = b.dataset.lane; tab.querySelectorAll("[data-lane]").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); fill(); }));
+  document.getElementById("added").addEventListener("change", (e) => { S.added = e.target.value; fill(); });
+  document.getElementById("sortsel").addEventListener("change", (e) => { S.sortT = e.target.value; fill(); });
+  document.getElementById("morebtn").addEventListener("click", (e) => { S.more = !S.more; e.currentTarget.setAttribute("aria-expanded", String(S.more)); document.getElementById("more").hidden = !S.more; });
+  tab.querySelectorAll("[data-status]").forEach((b) => b.addEventListener("click", () => { S.status = b.dataset.status; tab.querySelectorAll("[data-status]").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); fill(); }));
+  tab.querySelectorAll("[data-sev]").forEach((b) => b.addEventListener("click", () => { const k = b.dataset.sev; S.sevs.has(k) ? S.sevs.delete(k) : S.sevs.add(k); b.setAttribute("aria-pressed", String(S.sevs.has(k))); fill(); }));
   tab.querySelectorAll("[data-t]").forEach((b) => b.addEventListener("click", () => { S[b.dataset.t] = !S[b.dataset.t]; b.setAttribute("aria-pressed", String(S[b.dataset.t])); fill(); }));
-  tab.querySelectorAll("th button").forEach((b) => b.addEventListener("click", () => { S.sort = [b.dataset.s, S.sort[0] === b.dataset.s ? -S.sort[1] : -1]; fill(); }));
 }
 function renderNewsTab() {
   const rows = STORIES.filter((s) => s.age <= S.range).sort((a, b) => a.age - b.age);
