@@ -193,3 +193,33 @@ ones and note it in the ledger):
 
 ## Non-goals
 LLM summaries/analysis; Telegram; per-user watchlists; HIBP; paid feeds; Reddit (API terms); AlienVault OTX (key).
+
+## Amendment A (2026-11-06, user) — Threats is a history browser; the range control is Dashboard-only
+
+User: "For the threats there should be more filtering ability like going back in history. Only the dashboard should
+have the 24 hours, 7d, 14d, 30d." Model on offseq's Threats controls (take ideas, don't copy). This supersedes §2 and
+§5 where they conflict.
+
+- **Range control** (`24h | 7d | 14d | 30d`) appears **only on the Dashboard**. The threat page's "Where it's seen"
+  box uses the fixed default `7d`.
+- **Threats filters** (all in the URL, independent of the dashboard range):
+  - **Added** select: `Added any time` (default, `added=any`), `Added past day` (`day`), `Added past week` (`week`),
+    `Added past month` (`month`), `Added past 90 days` (`90d`), `Added past year` (`year`). The backend also accepts
+    `14d` (used only by dashboard deep links); when the URL holds it the select shows an extra `Added past 14 days`.
+    "Added" means: the KEV add date when the Exploited status filter is on; otherwise the CVE's `published` date.
+    News tab: the story's published date.
+  - **Status** chips (attributes, not time-windowed lanes): All · Exploited (KEV) · Likely next (not KEV, EPSS ≥
+    threshold) · In the news (≥1 linked story within the Added window, or ever when `any`) · Critical (CVSS ≥ 9).
+    Plus Public exploit, No patch, Severity (any / critical / high and up), search box.
+  - An **"All filters"** toggle collapses the secondary filters (Public exploit, No patch, Severity) on narrow screens.
+  - **Sort** select: `Newest` (default; most recently published first — for Exploited, most recently KEV-added
+    first), `Hot` (the existing `heat_rank` order: KEV, EPSS, CVSS, recency, news), `Trending` (most linked stories
+    in the last 7 days, then EPSS percentile, then newest), `KEV due` (soonest first; KEV only). Each option shows a
+    one-line description under the select (e.g. "Most recently published first").
+  - Pagination with a "Skip to pagination" link for keyboard users. Count line under the table.
+- **Dashboard deep links** map range → added: `24h→day`, `7d→week`, `14d→14d`, `30d→month`; lane → status:
+  exploited→`status=exploited`, likely→`status=likely`, loud→`status=news`, fresh→`status=critical&exclude_kev=1`.
+  The summary-line counts must equal what those links show.
+- `/api/cves` gains `added`, `status`, `sort ∈ {newest, hot, trending, due}`; the `range`/`lane` params from Task 1 /
+  the plan remain for the lanes endpoint only. `/api/stories` gains `added`.
+- Legacy `/history?kev=true` → `/threats?status=exploited` (added any).
