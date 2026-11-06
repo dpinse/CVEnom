@@ -157,7 +157,7 @@ def test_loud_includes_cveless_and_links_sorted(db_session):
 
 
 def test_loud_window_and_order(db_session):
-    _story(db_session, 1, 100)
+    _story(db_session, 1, 200)  # outside the default 7d range
     new = _story(db_session, 2, 1)
     same = _story(db_session, 3, 1)  # same published, higher id first
     r = loud_stories(db_session, NOW)

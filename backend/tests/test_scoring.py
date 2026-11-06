@@ -1,5 +1,9 @@
 from datetime import datetime, timezone, timedelta
 
+import pytest
+
+from cvenom.ranges import RANGE_DAYS
+
 
 def _cfg():
     from cvenom.config import Settings
@@ -29,8 +33,9 @@ def test_quiet_foil_is_fresh_only_not_likely():
 def test_fresh_window_uses_utc_and_expires():
     from cvenom.scoring import CveView, Lane, lanes_for_cve
     cfg = _cfg()
-    old = CveView("CVE-2026-9", NOW - timedelta(hours=72), 9.5, 0.10, False)
+    old = CveView("CVE-2026-9", NOW - timedelta(days=8), 9.5, 0.10, False)
     assert Lane.FRESH not in lanes_for_cve(old, NOW, cfg)
+    assert Lane.FRESH in lanes_for_cve(CveView("CVE-2026-9", NOW - timedelta(days=6), 9.5, 0.10, False), NOW, cfg)
 
 
 def test_likely_uses_percentile_threshold():
@@ -59,8 +64,8 @@ def test_likely_boundary():
 def test_fresh_boundaries():
     from cvenom.scoring import CveView, Lane, lanes_for_cve
     cfg = _cfg()
-    assert Lane.FRESH in lanes_for_cve(CveView("a", NOW - timedelta(hours=48), 9.0, 0.1, False), NOW, cfg)
-    assert Lane.FRESH not in lanes_for_cve(CveView("b", NOW - timedelta(hours=49), 9.0, 0.1, False), NOW, cfg)
+    assert Lane.FRESH in lanes_for_cve(CveView("a", NOW - timedelta(hours=24), 9.0, 0.1, False), NOW, cfg, "24h")
+    assert Lane.FRESH not in lanes_for_cve(CveView("b", NOW - timedelta(hours=25), 9.0, 0.1, False), NOW, cfg, "24h")
     assert Lane.FRESH not in lanes_for_cve(CveView("c", NOW - timedelta(hours=1), 8.9, 0.1, False), NOW, cfg)
     assert Lane.FRESH not in lanes_for_cve(CveView("d", None, 9.5, 0.1, False), NOW, cfg)
 
@@ -76,14 +81,14 @@ def test_loud_boundary():
 def test_utc_normalization_tz_aware_and_naive():
     from cvenom.scoring import CveView, Lane, lanes_for_cve
     cfg = _cfg()
-    # 12:00Z minus 47h expressed at +05:00 -> still fresh; 49h -> not.
+    # 12:00Z minus 23h expressed at +05:00 -> still fresh for 24h; 25h -> not.
     tz = timezone(timedelta(hours=5))
-    fresh = (NOW - timedelta(hours=47)).astimezone(tz)
-    stale = (NOW - timedelta(hours=49)).astimezone(tz)
-    assert Lane.FRESH in lanes_for_cve(CveView("a", fresh, 9.5, 0.1, False), NOW, cfg)
-    assert Lane.FRESH not in lanes_for_cve(CveView("b", stale, 9.5, 0.1, False), NOW, cfg)
-    naive = (NOW - timedelta(hours=47)).replace(tzinfo=None)
-    assert Lane.FRESH in lanes_for_cve(CveView("c", naive, 9.5, 0.1, False), NOW, cfg)
+    fresh = (NOW - timedelta(hours=23)).astimezone(tz)
+    stale = (NOW - timedelta(hours=25)).astimezone(tz)
+    assert Lane.FRESH in lanes_for_cve(CveView("a", fresh, 9.5, 0.1, False), NOW, cfg, "24h")
+    assert Lane.FRESH not in lanes_for_cve(CveView("b", stale, 9.5, 0.1, False), NOW, cfg, "24h")
+    naive = (NOW - timedelta(hours=23)).replace(tzinfo=None)
+    assert Lane.FRESH in lanes_for_cve(CveView("c", naive, 9.5, 0.1, False), NOW, cfg, "24h")
 
 
 def test_exploited_window_boundary():
@@ -93,8 +98,8 @@ def test_exploited_window_boundary():
     now = datetime(2026, 11, 5, 23, 30, tzinfo=timezone.utc)
     edge = CveView("a", None, None, None, True, kev_added=date(2026, 10, 6))
     past = CveView("b", None, None, None, True, kev_added=date(2026, 10, 5))
-    assert Lane.EXPLOITED in lanes_for_cve(edge, now, cfg)
-    assert Lane.EXPLOITED not in lanes_for_cve(past, now, cfg)
+    assert Lane.EXPLOITED in lanes_for_cve(edge, now, cfg, "30d")
+    assert Lane.EXPLOITED not in lanes_for_cve(past, now, cfg, "30d")
 
 
 def test_kev_without_date_not_exploited():
@@ -122,5 +127,46 @@ def test_exploited_window_uses_utc_date_for_non_utc_now():
     now = datetime(2026, 11, 5, 23, 30, tzinfo=timezone(timedelta(hours=-5)))  # 2026-11-06T04:30Z
     edge = CveView("a", None, None, None, True, kev_added=date(2026, 10, 7))
     past = CveView("b", None, None, None, True, kev_added=date(2026, 10, 6))
-    assert Lane.EXPLOITED in lanes_for_cve(edge, now, cfg)
-    assert Lane.EXPLOITED not in lanes_for_cve(past, now, cfg)
+    assert Lane.EXPLOITED in lanes_for_cve(edge, now, cfg, "30d")
+    assert Lane.EXPLOITED not in lanes_for_cve(past, now, cfg, "30d")
+
+
+def test_kev_cve_never_likely_or_fresh():
+    """CVE-2026-109619 bug: a KEV row must not appear in 'Likely next' or 'Fresh'."""
+    from datetime import date
+    from cvenom.scoring import CveView, Lane, lanes_for_cve
+    cfg = _cfg()
+    today = NOW.date()
+    v = CveView("CVE-2026-109619", NOW - timedelta(hours=2), 9.8, 0.99, True,
+                kev_added=date.fromordinal(today.toordinal() - 20))
+    assert lanes_for_cve(v, NOW, cfg, "7d") == set()
+    assert lanes_for_cve(v, NOW, cfg, "30d") == {Lane.EXPLOITED}
+
+
+@pytest.mark.parametrize("rng", list(RANGE_DAYS))
+def test_exploited_range_boundary(rng):
+    from datetime import date
+    from cvenom.scoring import CveView, Lane, lanes_for_cve
+    cfg = _cfg()
+    now = datetime(2026, 11, 6, 23, 30, tzinfo=timezone.utc)
+    edge_day = now.date().toordinal() - RANGE_DAYS[rng]
+    edge = CveView("a", None, None, None, True, kev_added=date.fromordinal(edge_day))
+    past = CveView("b", None, None, None, True, kev_added=date.fromordinal(edge_day - 1))
+    assert Lane.EXPLOITED in lanes_for_cve(edge, now, cfg, rng)
+    assert Lane.EXPLOITED not in lanes_for_cve(past, now, cfg, rng)
+
+
+def test_fresh_follows_range():
+    from cvenom.scoring import CveView, Lane, lanes_for_cve
+    cfg = _cfg()
+    v = CveView("a", NOW - timedelta(days=3), 9.1, 0.1, False)
+    assert Lane.FRESH in lanes_for_cve(v, NOW, cfg, "7d")
+    assert Lane.FRESH not in lanes_for_cve(v, NOW, cfg, "24h")
+
+
+def test_likely_ignores_range():
+    from cvenom.scoring import CveView, Lane, lanes_for_cve
+    cfg = _cfg()
+    v = CveView("a", NOW - timedelta(days=20), 5.0, 0.99, False)
+    assert Lane.LIKELY in lanes_for_cve(v, NOW, cfg, "24h")
+    assert Lane.LIKELY in lanes_for_cve(v, NOW, cfg, "30d")

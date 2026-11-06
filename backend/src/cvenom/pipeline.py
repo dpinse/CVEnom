@@ -26,6 +26,7 @@ from cvenom.schemas import (
     NormalizedGeoEvent,
     NormalizedStory,
 )
+from cvenom.ranges import DEFAULT_RANGE, RangeKey, range_start, range_start_date
 from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve
 from cvenom.textutil import content_hash, find_existing_story, sanitize_text
 
@@ -326,12 +327,13 @@ def persist_events(session: Session, events: list[dict], *, source_default: str)
     return added
 
 
-def lane_views(session: Session, now: datetime) -> dict[Lane, list[CveView]]:
+def lane_views(
+    session: Session, now: datetime, rng: RangeKey = DEFAULT_RANGE
+) -> dict[Lane, list[CveView]]:
     cfg = get_settings()
     now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
-    loud_cutoff = now - timedelta(hours=cfg.loud_window_hours)
-    fresh_cutoff = now - timedelta(hours=cfg.fresh_window_hours)
-    kev_cutoff_date = now.date() - timedelta(days=cfg.exploited_window_days)
+    loud_cutoff = fresh_cutoff = range_start(now, rng)
+    kev_cutoff_date = range_start_date(now, rng)
     likely_cutoff = now - timedelta(days=cfg.likely_window_days)
 
     recent_link = (
@@ -342,8 +344,16 @@ def lane_views(session: Session, now: datetime) -> dict[Lane, list[CveView]]:
     candidates = select(Cve).where(
         or_(
             and_(Cve.kev.is_(True), Cve.kev_added >= kev_cutoff_date),
-            and_(Cve.epss_percentile >= cfg.epss_percentile_threshold, Cve.published >= likely_cutoff),
-            and_(Cve.cvss >= cfg.fresh_cvss_floor, Cve.published >= fresh_cutoff),
+            and_(
+                Cve.kev.is_not(True),
+                Cve.epss_percentile >= cfg.epss_percentile_threshold,
+                Cve.published >= likely_cutoff,
+            ),
+            and_(
+                Cve.kev.is_not(True),
+                Cve.cvss >= cfg.fresh_cvss_floor,
+                Cve.published >= fresh_cutoff,
+            ),
             exists(recent_link),
         )
     )
@@ -376,7 +386,7 @@ def lane_views(session: Session, now: datetime) -> dict[Lane, list[CveView]]:
             poc_badge=r.poc_badge,
             kev_added=r.kev_added,
         )
-        for lane in lanes_for_cve(view, now, cfg):
+        for lane in lanes_for_cve(view, now, cfg, rng):
             lanes[lane].append(view)
     for lane, views in lanes.items():
         if lane is Lane.EXPLOITED:

@@ -16,6 +16,7 @@ import type {
   CveQuery,
   GeoSummaryItem,
   Health,
+  CveItem,
   LanesOut,
   LoudStory,
   StoryDetailOut,
@@ -179,10 +180,18 @@ export function useHealth() {
   );
 }
 
+// /api/lanes returns {total, items} per lane; the current UI consumes plain item arrays.
+type WireLanes = Partial<Record<keyof LanesOut, { total: number; items: CveItem[] }>>;
+
+function fromWireLanes(w: WireLanes): LanesOut {
+  const items = (k: keyof LanesOut): CveItem[] => w[k]?.items ?? [];
+  return { EXPLOITED: items("EXPLOITED"), LIKELY: items("LIKELY"), LOUD: items("LOUD"), FRESH: items("FRESH") };
+}
+
 export function useLanes() {
   return useRead({
     queryKey: qk.lanes(),
-    queryFn: ({ signal }) => api<LanesOut>("/lanes", { signal }),
+    queryFn: async ({ signal }) => fromWireLanes(await api<WireLanes>("/lanes?limit=100", { signal })),
     refetchInterval: errorRefetchInterval,
   });
 }

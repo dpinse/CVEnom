@@ -24,6 +24,7 @@ from cvenom.readmodels import (
     search_stories,
     story_detail,
 )
+from cvenom.ranges import DEFAULT_RANGE, RangeKey
 from cvenom.schemas import CVE_ID_RE
 from cvenom.scoring import Lane
 
@@ -46,16 +47,13 @@ from .schemas_api import (
 
 # Cached routes must not vary on request headers (see ResponseCacheMiddleware).
 CACHE_PATHS: dict[str, frozenset[str]] = {
-    "/api/lanes": frozenset(),
+    "/api/lanes": frozenset({"range", "limit"}),
     "/api/velocity": frozenset({"days"}),
     "/api/geo": frozenset({"window_hours"}),
-    "/api/stories/loud": frozenset({"limit"}),
+    "/api/stories/loud": frozenset({"limit", "range"}),
     # free-text `q` is not allowed: it bypasses the cache so arbitrary strings cannot fill Redis
     "/api/stories": frozenset({"source", "from", "to", "page", "page_size"}),
 }
-
-LANE_CAP = 100
-
 
 def _utf8_query(request: Request) -> None:
     """Starlette decodes %FF to U+FFFD silently; reject non-UTF8 explicitly."""
@@ -80,6 +78,10 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _loud_since() -> datetime:
+    return _now() - timedelta(hours=get_settings().loud_window_hours)
+
+
 def _item(c: Cve, story_count: int) -> dict:
     return {
         "cve_id": c.cve_id,
@@ -96,36 +98,39 @@ def _item(c: Cve, story_count: int) -> dict:
     }
 
 
-def _recent_counts(session: Session, ids: list[str]) -> dict[str, int]:
+def _recent_counts(session: Session, ids: list[str], since: datetime) -> dict[str, int]:
     if not ids:
         return {}
-    cutoff = _now() - timedelta(hours=get_settings().loud_window_hours)
     return dict(
         session.execute(
             select(StoryCveLink.cve_id, func.count())
             .join(Story, Story.id == StoryCveLink.story_id)
-            .where(StoryCveLink.cve_id.in_(ids), Story.published >= cutoff)
+            .where(StoryCveLink.cve_id.in_(ids), Story.published >= since)
             .group_by(StoryCveLink.cve_id)
         ).all()
     )
 
 
 @router.get("/lanes", response_model=LanesOut)
-def lanes(session: Session = SessionDep) -> dict:
-    views = lane_views(session, _now())
-    capped = {lane: v[:LANE_CAP] for lane, v in views.items()}
+def lanes(
+    range_: Annotated[RangeKey, Query(alias="range")] = DEFAULT_RANGE,
+    limit: Annotated[int, Query(ge=1, le=100)] = 5,
+    session: Session = SessionDep,
+) -> dict:
+    views = lane_views(session, _now(), range_)
+    capped = {lane: v[:limit] for lane, v in views.items()}
     ids = list({v.cve_id for vs in capped.values() for v in vs})
     rows: dict[str, Cve] = {}
     if ids:  # ONE query for the fields CveView lacks
         rows = {c.cve_id: c for c in session.scalars(select(Cve).where(Cve.cve_id.in_(ids)))}
-    out: dict[str, list[dict]] = {}
+    out: dict[str, dict] = {}
     for lane in Lane:
         items = []
         for v in capped.get(lane, []):
             c = rows.get(v.cve_id)
             if c is not None:
                 items.append(_item(c, v.recent_story_count))
-        out[lane.value] = items
+        out[lane.value] = {"total": len(views.get(lane, [])), "items": items}
     return out
 
 
@@ -187,7 +192,7 @@ def search_cves(
         .limit(page_size)
         .offset((page - 1) * page_size)
     ).all()
-    counts = _recent_counts(session, [r.cve_id for r in rows])
+    counts = _recent_counts(session, [r.cve_id for r in rows], _loud_since())
     return {
         "items": [_item(r, counts.get(r.cve_id, 0)) for r in rows],
         "page": page,
@@ -229,7 +234,7 @@ def cve_detail(
         .order_by(GeoEvent.observed_at.desc(), GeoEvent.id.desc())
         .limit(100)
     ).all()
-    counts = _recent_counts(session, [cve_id])
+    counts = _recent_counts(session, [cve_id], _loud_since())
     return {
         **_item(c, counts.get(cve_id, 0)),
         "epss": c.epss,
@@ -287,10 +292,13 @@ def geo_country(
 @router.get("/stories/loud", response_model=list[LoudStory])
 def stories_loud(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    range_: Annotated[RangeKey, Query(alias="range")] = DEFAULT_RANGE,
     session: Session = SessionDep,
     user: User | None = Depends(current_user),  # gated by the router-level public_or_user
 ) -> list[dict]:
-    return loud_stories(session, _now(), limit=limit, exclude_sources=restricted_sources(user))
+    return loud_stories(
+        session, _now(), limit=limit, rng=range_, exclude_sources=restricted_sources(user)
+    )
 
 
 @router.get("/stories", response_model=StoryListOut)

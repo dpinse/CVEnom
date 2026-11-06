@@ -64,12 +64,15 @@ export const lanes = (exploited: CveItem[] = [], rest: Partial<LanesOut> = {}): 
   ...rest,
 });
 
+const wireLanes = (l: LanesOut) =>
+  Object.fromEntries(Object.entries(l).map(([k, items]) => [k, { total: items.length, items }]));
+
 export function handlers(opts: { publicRead?: boolean; lanes?: LanesOut } = {}) {
   server.use(
     http.get("http://localhost/api/health", () =>
       HttpResponse.json({ status: "ok", public_read: opts.publicRead ?? true }),
     ),
-    http.get("http://localhost/api/lanes", () => HttpResponse.json(opts.lanes ?? lanes())),
+    http.get("http://localhost/api/lanes", () => HttpResponse.json(wireLanes(opts.lanes ?? lanes()))),
     http.post("http://localhost/api/auth/logout", () => new HttpResponse(null, { status: 204 })),
   );
 }

@@ -29,11 +29,16 @@ class CveItem(BaseModel):
     recent_story_count: int
 
 
+class LaneOut(BaseModel):
+    total: int
+    items: list[CveItem]
+
+
 class LanesOut(BaseModel):
-    EXPLOITED: list[CveItem]
-    LIKELY: list[CveItem]
-    LOUD: list[CveItem]
-    FRESH: list[CveItem]
+    EXPLOITED: LaneOut
+    LIKELY: LaneOut
+    LOUD: LaneOut
+    FRESH: LaneOut
 
 
 class CveListOut(BaseModel):

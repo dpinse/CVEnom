@@ -156,7 +156,7 @@ def test_lane_ordering_by_heat_rank_and_multi_lane(db_session):
     ]))
     views = lane_views(db_session, NOW)
     assert [v.cve_id for v in views[Lane.EXPLOITED]] == ["CVE-2026-9101", "CVE-2026-9102", "CVE-2026-9100"]
-    assert [v.cve_id for v in views[Lane.LIKELY]] == ["CVE-2026-9101"]
+    assert views[Lane.LIKELY] == []  # KEV rows are never 'likely next'
 
 
 def test_non_unique_integrity_error_is_not_retried(db_session, monkeypatch):
@@ -247,12 +247,12 @@ def test_exact_boundaries_consistent_between_sql_and_scoring(db_session):
         cves=[
             NormalizedCve(cve_id="CVE-2026-9300", cvss=cfg.fresh_cvss_floor, published=NOW),
             NormalizedCve(cve_id="CVE-2026-9301", cvss=9.9,
-                          published=NOW - timedelta(hours=cfg.fresh_window_hours)),
+                          published=NOW - timedelta(days=7)),
             NormalizedCve(cve_id="CVE-2026-9302", epss_percentile=cfg.epss_percentile_threshold, published=NOW - timedelta(days=cfg.likely_window_days)),
             NormalizedCve(cve_id="CVE-2026-9303"),
         ],
         stories=[_story("https://x/b", "edge CVE-2026-9303",
-                        published=NOW - timedelta(hours=cfg.loud_window_hours))]))
+                        published=NOW - timedelta(days=7))]))
     views = lane_views(db_session, NOW)
     fresh = {v.cve_id for v in views[Lane.FRESH]}
     assert {"CVE-2026-9300", "CVE-2026-9301"} <= fresh
@@ -507,5 +507,26 @@ def test_lane_views_exploited_newest_listing_first(db_session):
                 epss_percentile=0.99, cvss=9.9)
     _insert_cve(db_session, "CVE-2026-9401", kev=True, kev_added=date(2026, 10, 20),
                 epss_percentile=0.10, cvss=5.0)
-    ids = [v.cve_id for v in lane_views(db_session, NOW)[Lane.EXPLOITED]]
+    ids = [v.cve_id for v in lane_views(db_session, NOW, "30d")[Lane.EXPLOITED]]
     assert ids == ["CVE-2026-9401", "CVE-2026-9400"]
+
+
+def test_loud_counts_stories_in_range(db_session):
+    ingest(db_session, CollectorResult(
+        cves=[NormalizedCve(cve_id="CVE-2026-9600")],
+        stories=[_story("https://x/five", "five days CVE-2026-9600", published=NOW - timedelta(days=5))]))
+    loud7 = lane_views(db_session, NOW, "7d")[Lane.LOUD]
+    assert [v.cve_id for v in loud7] == ["CVE-2026-9600"]
+    assert loud7[0].recent_story_count == 1
+    assert lane_views(db_session, NOW, "24h")[Lane.LOUD] == []
+
+
+def test_kev_row_is_never_likely_or_fresh_in_lane_views(db_session):
+    from datetime import date
+    _insert_cve(db_session, "CVE-2026-9610", kev=True, kev_added=NOW.date() - timedelta(days=20),
+                epss_percentile=0.99, cvss=9.8, published=NOW - timedelta(hours=2))
+    v7 = lane_views(db_session, NOW, "7d")
+    assert all(v7[lane] == [] for lane in Lane)
+    v30 = lane_views(db_session, NOW, "30d")
+    assert [v.cve_id for v in v30[Lane.EXPLOITED]] == ["CVE-2026-9610"]
+    assert v30[Lane.LIKELY] == [] and v30[Lane.FRESH] == []

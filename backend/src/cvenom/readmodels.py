@@ -4,8 +4,8 @@ from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import func, or_, select
 
-from cvenom.config import get_settings
 from cvenom.models import Cve, GeoEvent, Story, StoryCveLink
+from cvenom.ranges import DEFAULT_RANGE, RangeKey, range_start
 
 
 def _utc(now: datetime) -> datetime:
@@ -187,12 +187,16 @@ def _story_dicts(session, stories) -> list[dict]:
 
 
 def loud_stories(
-    session, now: datetime, *, limit: int = 50, exclude_sources: frozenset[str] = frozenset()
+    session,
+    now: datetime,
+    *,
+    limit: int = 50,
+    rng: RangeKey = DEFAULT_RANGE,
+    exclude_sources: frozenset[str] = frozenset()
 ) -> list[dict]:
     now = _utc(now)
     limit = max(1, min(100, limit))
-    since = now - timedelta(hours=get_settings().loud_window_hours)
-    conds = [Story.published >= since]
+    conds = [Story.published >= range_start(now, rng)]
     if exclude_sources:
         conds.append(Story.source.not_in(exclude_sources))
     stories = session.scalars(
