@@ -580,3 +580,51 @@ def test_result_cve_events_are_persisted(db_session):
                             source="Exploit-DB")
     ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-8805")], cve_events=[ev]))
     assert [r.source for r in _events(db_session, "poc_published")] == ["Exploit-DB"]
+
+
+def _av(product, source, **kw):
+    return {"product": product, "source": source, **kw}
+
+
+def test_upsert_replaces_per_source(db_session):
+    from cvenom.db import upsert_cve
+
+    def run(*entries):
+        upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-6001", affected_versions=list(entries)))
+        return db_session.get(Cve, "CVE-2026-6001").affected_versions
+
+    run(_av("a", "NVD", fixed="1"))
+    got = run(_av("b", "OSV", fixed="2"))
+    assert [(e["product"], e["source"]) for e in got] == [("a", "NVD"), ("b", "OSV")]
+    got = run(_av("c", "NVD", fixed="3"), _av("c", "NVD", fixed="3"))
+    assert [(e["product"], e["source"]) for e in got] == [("b", "OSV"), ("c", "NVD")]
+    # None (not provided) leaves the stored entries alone
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-6001"))
+    assert len(db_session.get(Cve, "CVE-2026-6001").affected_versions) == 2
+
+
+def test_ingest_sanitizes_affected_versions(db_session):
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(
+        cve_id="CVE-2026-6002",
+        affected_versions=[
+            _av("<b>x</b> & y", "NVD", vendor="<i>v</i>", fixed="1.0"),
+            _av("e" * 125 + "&<>", "NVD"),  # escaping pushes it over 128: dropped
+        ],
+    )]))
+    got = db_session.get(Cve, "CVE-2026-6002").affected_versions
+    assert len(got) == 1
+    assert "<" not in got[0]["product"] and "x" in got[0]["product"]
+    assert got[0]["product"].endswith("&amp; y") and got[0]["vendor"] == "v"
+
+
+def test_first_news_event_source_sanitized_and_truncated(db_session):
+    from cvenom.models import CveEvent
+
+    source = "Odd\x07<b>Source</b> " + "z" * 100
+    ingest(db_session, CollectorResult(stories=[NormalizedStory(
+        url="https://example.com/odd", source=source, title="CVE-2026-6003 exploited",
+        summary="s", published=NOW)]))
+    ev = db_session.query(CveEvent).filter_by(cve_id="CVE-2026-6003", kind="first_news").one()
+    assert len(ev.source) == 64
+    assert ev.source == pipeline.sanitize_text(source)[:64]
+    assert "\x07" not in ev.source and "<" not in ev.source

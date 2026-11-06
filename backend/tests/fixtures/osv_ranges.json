@@ -1,0 +1,26 @@
+{
+  "id": "GHSA-rrrr-rrrr-rrrr",
+  "aliases": ["CVE-2026-4001"],
+  "affected": [
+    {
+      "package": {"ecosystem": "PyPI", "name": "django"},
+      "versions": ["1.0", "1.1", "2.0.1"],
+      "ranges": [
+        {
+          "type": "ECOSYSTEM",
+          "events": [
+            {"introduced": "0"},
+            {"fixed": "1.2.3"},
+            {"introduced": "2.0"},
+            {"last_affected": "2.0.5"}
+          ]
+        },
+        {
+          "type": "GIT",
+          "repo": "https://github.com/django/django",
+          "events": [{"introduced": "0"}, {"fixed": "abcdef0123456789"}]
+        }
+      ]
+    }
+  ]
+}

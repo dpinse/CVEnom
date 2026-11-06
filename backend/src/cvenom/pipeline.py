@@ -21,7 +21,9 @@ from cvenom.ingestutil import _DETAILS_MAX_DEPTH, _ID_CHUNK, _in_chunks, _saniti
 from cvenom.models import AlertEvent, Cve, GeoEvent, Story, StoryCveLink
 from cvenom.schemas import (
     CVE_ID_RE,
+    MAX_AFFECTED_FIELD_LEN,
     MAX_CVSS_VECTOR_LEN,
+    AffectedVersion,
     CveReference,
     NormalizedCve,
     NormalizedCveEvent,
@@ -77,10 +79,13 @@ def _ingest_story(session: Session, story: NormalizedStory) -> None:
     session.flush()
     link_story(session, row, cve_ids)
     if cve_ids:
+        # NormalizedCveEvent.source is capped at 64 chars and rejects control characters;
+        # same prefix as the migration backfill (left(source, 64)).
+        event_source = sanitize_text(story.source)[:64]
         insert_cve_events(session, [
             NormalizedCveEvent(
                 cve_id=cve_id, kind="first_news", occurred_at=story.published,
-                source=story.source, detail={"title": title, "url": story.url},
+                source=event_source, detail={"title": title, "url": story.url},
             )
             for cve_id in sorted(cve_ids)
         ])
@@ -145,6 +150,19 @@ def _sanitized_vector(value: str | None) -> str | None:
     return None if clean is None or len(clean) > MAX_CVSS_VECTOR_LEN else clean
 
 
+def _sanitized_versions(entries: list[AffectedVersion] | None) -> list[AffectedVersion] | None:
+    if entries is None:
+        return None
+    out = []
+    for entry in entries:
+        clean = {k: (None if v is None else sanitize_text(v)) for k, v in entry.model_dump().items()}
+        # Entity-escaping can grow a string past 128: drop the entry rather than truncate it.
+        if not clean["product"] or any(len(v) > MAX_AFFECTED_FIELD_LEN for v in clean.values() if v):
+            continue
+        out.append(AffectedVersion.model_construct(**{k: (v or None) for k, v in clean.items()}))
+    return out
+
+
 def _sanitized(cve: NormalizedCve) -> NormalizedCve:
     return cve.model_copy(update={
         "summary": sanitize_text(cve.summary),
@@ -155,6 +173,7 @@ def _sanitized(cve: NormalizedCve) -> NormalizedCve:
         "cvss_vector": _sanitized_vector(cve.cvss_vector),
         "cwes": None if cve.cwes is None else [clean for c in cve.cwes if (clean := sanitize_text(c))],
         "references": _sanitized_references(cve.references),
+        "affected_versions": _sanitized_versions(cve.affected_versions),
     })
 
 

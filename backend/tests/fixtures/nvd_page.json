@@ -13,6 +13,29 @@
         "published": "2026-10-30T14:15:08.123",
         "lastModified": "2026-11-02T09:00:00.000",
         "vulnStatus": "Analyzed",
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:ivanti:connect_secure:*:*:*:*:*:*:*:*",
+                    "versionStartIncluding": "22.7R2",
+                    "versionEndExcluding": "22.7R2.6"
+                  },
+                  {
+                    "vulnerable": false,
+                    "criteria": "cpe:2.3:o:ivanti:ics_os:*:*:*:*:*:*:*:*",
+                    "versionEndExcluding": "9.9"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
         "descriptions": [
           {"lang": "es", "value": "Desbordamiento de buffer."},
           {"lang": "en", "value": "Heap overflow in Example Server <b>allows</b> RCE."}

@@ -375,3 +375,22 @@ def test_last_modified_bounded():
 def test_story_details_defaults_to_empty_dict():
     assert _story().details == {}
     assert _story(details={"victim": "Acme"}).details == {"victim": "Acme"}
+
+
+def test_affected_versions_cap_and_length():
+    from cvenom.schemas import MAX_AFFECTED_VERSIONS, NormalizedCve
+
+    many = [{"product": f"p{i}", "source": "OSV"} for i in range(60)]
+    assert len(NormalizedCve(cve_id="CVE-2026-1001", affected_versions=many).affected_versions) == 50
+    assert MAX_AFFECTED_VERSIONS == 50
+    mixed = [
+        {"product": "x" * 129, "source": "NVD"},
+        {"product": "ok", "source": "NVD", "fixed": "y" * 129},
+        {"product": "ok", "source": "BOGUS"},
+        "junk",
+        {"product": "good", "source": "NVD"},
+    ]
+    kept = NormalizedCve(cve_id="CVE-2026-1001", affected_versions=mixed).affected_versions
+    assert [a.product for a in kept] == ["good"]
+    assert NormalizedCve(cve_id="CVE-2026-1001", affected_versions="nope").affected_versions is None
+    assert NormalizedCve(cve_id="CVE-2026-1001").affected_versions is None
