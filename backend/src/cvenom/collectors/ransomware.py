@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 import urllib.parse
 from datetime import UTC, datetime
 
@@ -30,14 +29,18 @@ from cvenom.collectors.base import (
     register,
 )
 from cvenom.config import get_settings
-from cvenom.schemas import NormalizedGeoEvent, NormalizedStory, validate_http_url
+from cvenom.schemas import (
+    NormalizedGeoEvent,
+    NormalizedStory,
+    contains_onion,
+    validate_http_url,
+)
 
 log = logging.getLogger(__name__)
 
 URL = "https://api-pro.ransomware.live/victims/recent"
 PERMALINK_PREFIX = "https://www.ransomware.live/"
 MAX_PRESS = 5
-_ONION_TEXT = re.compile(r"(?:\.|%2e)onion", re.IGNORECASE)
 _SKIP = (ValidationError, ValueError, TypeError, AttributeError, KeyError, OverflowError, OSError)
 _disabled_logged = False
 
@@ -90,7 +93,7 @@ def permalink_for(rec: dict) -> str | None:
     host, else one built from the record `id`.
     """
     perma = rec.get("permalink")
-    if isinstance(perma, str) and perma.startswith(PERMALINK_PREFIX):
+    if isinstance(perma, str) and perma.startswith(PERMALINK_PREFIX) and not contains_onion(perma):
         if url := _valid_url(perma):
             return url
     rid = rec.get("id")
@@ -119,7 +122,7 @@ def _press(value: object) -> list[str]:
 def _story_details(rec: dict, group: str, victim: str) -> dict:
     """Allow-listed story details. Never post_url/screenshot/ransom/data_size/infostealer."""
     website = _str_or_none(rec.get("website"))
-    if website is not None and _ONION_TEXT.search(website):
+    if website is not None and contains_onion(website):
         website = None  # text only, but a leak-site address must never reach any output
     return {
         "group": group,

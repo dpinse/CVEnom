@@ -1,3 +1,4 @@
+import html
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
@@ -42,14 +43,37 @@ def validate_cve_id(value: object) -> str:
 _IDNA_DOTS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
 
 
+_NORMALISE_MAX_ROUNDS = 10
+
+
+def normalize_onion_text(value: str) -> str:
+    """Normalise text the way a browser (and our ingest sanitiser) would read it.
+
+    Repeats until stable (bounded): HTML-entity decode (ingest's sanitize_text decodes
+    entities to a fixed point, so `&#46;` becomes `.`), percent-decode, NFKC (fullwidth
+    letters/dots), map the IDNA dot separators to "."; then lower-case.
+    """
+    text = value
+    for _ in range(_NORMALISE_MAX_ROUNDS):
+        prev = text
+        text = unicodedata.normalize("NFKC", unquote(html.unescape(text))).translate(_IDNA_DOTS)
+        if text == prev:
+            break
+    return text.lower()
+
+
+def contains_onion(text: str) -> bool:
+    """True if `text`, once normalised, mentions a `.onion` name anywhere."""
+    return ".onion" in normalize_onion_text(text)
+
+
 def _is_onion_host(hostname: str) -> bool:
     """True if the host is (or ends in) .onion as a browser would see it.
 
-    Normalises like WHATWG host parsing does before the check: percent-decode, NFKC
-    (fullwidth letters), map the IDNA dot separators, drop trailing dots, lower-case.
+    Normalises like WHATWG host parsing does before the check (see normalize_onion_text),
+    then drops trailing dots.
     """
-    host = unicodedata.normalize("NFKC", unquote(hostname)).translate(_IDNA_DOTS)
-    host = host.rstrip(".").lower()
+    host = normalize_onion_text(hostname).rstrip(".")
     return host == "onion" or host.endswith(".onion")
 
 

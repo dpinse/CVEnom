@@ -435,10 +435,47 @@ def test_details_non_str_scalars_become_none():
     assert d["attackdate"] is None and d["discovered"] is None
 
 
-def test_onion_website_text_dropped():
-    res = RansomwareLiveCollector().normalize([_rec(website="http://victimsite.ONION/")])
+@pytest.mark.parametrize(
+    "website",
+    [
+        "http://victimsite.ONION/",
+        "http://leak&#46;onion/",
+        "http://leak&period;onion/",
+        "http://leak%2Eonion/",
+        "http://leak．onion/",
+        "http://leak。onion/",
+        "http://leak｡onion/",
+    ],
+)
+def test_onion_website_text_dropped(website):
+    res = RansomwareLiveCollector().normalize([_rec(website=website)])
     assert res.stories[0].details["website"] is None
     assert ".onion" not in repr(res).lower()
+
+
+@pytest.mark.parametrize("website", ["http://leak&#46;onion/", "http://leak&period;onion/"])
+def test_entity_encoded_onion_website_never_stored(db_session, website):
+    ingest(db_session, RansomwareLiveCollector().normalize([_rec(website=website)]))
+    story = db_session.scalars(select(Story).where(Story.source == "ransomware.live")).one()
+    assert story.details["website"] is None
+    assert "onion" not in repr(story.details).lower()
+
+
+@pytest.mark.parametrize(
+    "perma",
+    [
+        "https://www.ransomware.live/x?u=http://a.onion/",
+        "https://www.ransomware.live/x?u=http://a%2Eonion/",
+        "https://www.ransomware.live/a&#46;onion",
+        "https://www.ransomware.live/a．onion",
+    ],
+)
+def test_onion_bearing_permalink_falls_back_to_id(perma):
+    assert ransomware.permalink_for({"permalink": perma, "id": "q1"}) == "https://www.ransomware.live/id/q1"
+    assert ransomware.permalink_for({"permalink": perma}) is None
+    res = RansomwareLiveCollector().normalize([_rec(permalink=perma, id="q1")])
+    assert [s.url for s in res.stories] == ["https://www.ransomware.live/id/q1"]
+    assert "onion" not in repr(res).lower()
 
 
 def test_geo_event_story_url_is_permalink():

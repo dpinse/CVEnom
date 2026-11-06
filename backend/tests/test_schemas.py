@@ -202,6 +202,25 @@ def test_validate_http_url_allows_onion_lookalikes(url):
     assert validate_http_url(url) == url
 
 
+@pytest.mark.parametrize("text", [
+    "http://leak.onion/", "http://leak&#46;onion/", "http://leak&period;onion/",
+    "http://leak&amp;#46;onion/", "http://leak%2Eonion/", "http://leak%252eonion/",
+    "http://leak．onion/", "http://leak。onion/", "http://leak｡onion/",
+    "LEAK.ＯＮＩＯＮ",
+])
+def test_contains_onion_normalises_like_ingest(text):
+    from cvenom.schemas import contains_onion
+
+    assert contains_onion(text)
+
+
+@pytest.mark.parametrize("text", ["https://onion.example.com/", "victim.example", "", "onionring.example"])
+def test_contains_onion_negatives(text):
+    from cvenom.schemas import contains_onion
+
+    assert not contains_onion(text)
+
+
 def test_story_and_geo_reject_onion_urls():
     with pytest.raises(ValidationError):
         _story(url="http://abcdef.onion/leak")
