@@ -2,10 +2,17 @@
 
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, exists, func, or_, select
 
-from cvenom.models import Cve, GeoEvent, Story, StoryCveLink
-from cvenom.ranges import DEFAULT_RANGE, RangeKey, range_start
+from cvenom.config import get_settings
+from cvenom.models import Cve, CveEvent, GeoEvent, Story, StoryCveLink
+from cvenom.ranges import (
+    DEFAULT_RANGE,
+    RANGE_DAYS,
+    RangeKey,
+    range_start,
+    range_start_date,
+)
 
 
 def _utc(now: datetime) -> datetime:
@@ -39,6 +46,107 @@ def cve_velocity(session, now: datetime, *, days: int) -> dict:
         prior = sum(s["count"] for s in series[-14:-7])
         rising = last > prior  # equal window sizes: sum comparison == mean comparison
     return {"series": series, "current": series[-1]["count"] if series else 0, "rising": rising}
+
+
+# --- Reusable "within R" predicates -------------------------------------
+# Each returns a SQL clause over `Cve`. The dashboard summary counts and the
+# Threats filters share these, so a count always equals what its link shows.
+
+
+def exploited_in_range(now: datetime, rng: RangeKey):
+    """EXPLOITED lane membership: KEV listed on/after the range start date."""
+    return and_(Cve.kev.is_(True), Cve.kev_added >= range_start_date(now, rng))
+
+
+def kev_due_within(now: datetime, days: int = 7):
+    """KEV CVEs whose due date is in [UTC today, today + days]. Range-independent."""
+    today = _utc(now).date()
+    return and_(
+        Cve.kev.is_(True),
+        Cve.kev_due.is_not(None),
+        Cve.kev_due >= today,
+        Cve.kev_due <= today + timedelta(days=days),
+    )
+
+
+def fresh_in_range(now: datetime, rng: RangeKey):
+    """FRESH lane membership: not KEV, CVSS >= floor, published in range."""
+    return and_(
+        Cve.kev.is_not(True),
+        Cve.cvss >= get_settings().fresh_cvss_floor,
+        Cve.published >= range_start(now, rng),
+    )
+
+
+def poc_in_range(now: datetime, rng: RangeKey):
+    """A `poc_published` cve_event occurred in range (no lane requirement)."""
+    return exists(
+        select(CveEvent.id).where(
+            CveEvent.cve_id == Cve.cve_id,
+            CveEvent.kind == "poc_published",
+            CveEvent.occurred_at >= range_start(now, rng),
+        )
+    )
+
+
+def summary_counts(session, now: datetime, rng: RangeKey) -> dict:
+    def n(pred) -> int:
+        return int(session.scalar(select(func.count()).select_from(Cve).where(pred)) or 0)
+
+    return {
+        "range": rng,
+        "new_kev": n(exploited_in_range(now, rng)),
+        "kev_due_soon": n(kev_due_within(now)),
+        "new_critical": n(fresh_in_range(now, rng)),
+        "public_exploits": n(poc_in_range(now, rng)),
+        "latest_kev_added": session.scalar(
+            select(func.max(Cve.kev_added)).where(Cve.kev.is_(True))
+        ),
+    }
+
+
+def cve_volume(session, now: datetime, rng: RangeKey) -> dict:
+    """Published-CVE counts per severity bucket (hourly for 24h, else daily)."""
+    now = _utc(now)
+    if rng == "24h":
+        unit, step, count = "hour", timedelta(hours=1), 24
+        end = now.replace(minute=0, second=0, microsecond=0)
+        first = end - timedelta(hours=count - 1)
+    else:
+        unit, step, count = "day", timedelta(days=1), RANGE_DAYS[rng]
+        first_day = now.date() - timedelta(days=count - 1)
+        first = datetime.combine(first_day, time.min, tzinfo=timezone.utc)
+    stop = first + step * count
+    bucket = func.date_trunc(unit, func.timezone("UTC", Cve.published))
+    sev = case(
+        (Cve.cvss >= 9, "crit"),
+        (Cve.cvss >= 7, "high"),
+        (Cve.cvss >= 4, "med"),
+        else_="low",
+    )
+    in_window = (Cve.published >= first, Cve.published < stop)
+    per: dict[tuple[datetime, str], int] = {
+        (r[0].replace(tzinfo=timezone.utc), r[1]): int(r[2])
+        for r in session.execute(
+            select(bucket, sev, func.count())
+            .where(*in_window, Cve.cvss.is_not(None))
+            .group_by(bucket, sev)
+        ).all()
+    }
+    buckets = []
+    total = 0
+    for i in range(count):
+        b = first + step * i
+        row = {k: per.get((b, k), 0) for k in ("crit", "high", "med", "low")}
+        total += sum(row.values())
+        buckets.append({"start": b, **row})
+    unscored = int(
+        session.scalar(
+            select(func.count()).select_from(Cve).where(*in_window, Cve.cvss.is_(None))
+        )
+        or 0
+    )
+    return {"range": rng, "unit": unit, "buckets": buckets, "total": total, "unscored": unscored}
 
 
 def geo_summary(session, now: datetime, *, window_hours: int = 24) -> list[dict]:
@@ -76,10 +184,11 @@ def country_activity(
 
     counts / top_sources / events cover `observed_at >= now - window_hours`
     (the same window as geo_summary, so the drawer agrees with the globe).
-    trend is hourly UTC buckets, zero-filled, exactly `window_hours` points,
-    oldest first: the window end is `now` truncated to the hour and the oldest
-    bucket is `end - (window_hours - 1)` hours, so the last bucket is the
-    current (partial) hour. Events are listed (newest first, max 50) only when
+    trend is zero-filled, oldest first. For windows <= 168 h it is hourly UTC
+    buckets, exactly `window_hours` points, the last being the current (partial)
+    hour (`trend_unit == "hour"`); longer windows are daily buckets,
+    `window_hours // 24` points, the last being today (`"day"`). top_cves lists
+    up to 5 CVE ids by event count (public aggregate). Events are listed (newest first, max 50) only when
     `include_events`; the counts themselves are public aggregates.
     """
     now = _utc(now)
@@ -108,9 +217,15 @@ def country_activity(
         ).all()
     ]
 
-    end = now.replace(minute=0, second=0, microsecond=0)
-    first = end - timedelta(hours=window_hours - 1)
-    bucket = func.date_trunc("hour", func.timezone("UTC", GeoEvent.observed_at))
+    if window_hours <= 168:
+        trend_unit, unit_step, points = "hour", timedelta(hours=1), window_hours
+        first = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=points - 1)
+    else:
+        trend_unit, unit_step, points = "day", timedelta(days=1), max(window_hours // 24, 1)
+        first = datetime.combine(
+            now.date() - timedelta(days=points - 1), time.min, tzinfo=timezone.utc
+        )
+    bucket = func.date_trunc(trend_unit, func.timezone("UTC", GeoEvent.observed_at))
     per_bucket = {
         r[0].replace(tzinfo=timezone.utc): int(r[1])
         for r in session.execute(
@@ -118,14 +233,26 @@ def country_activity(
             .where(
                 GeoEvent.country_code == cc,
                 GeoEvent.observed_at >= first,
-                GeoEvent.observed_at < end + timedelta(hours=1),
+                GeoEvent.observed_at < first + unit_step * points,
             )
             .group_by(bucket)
         ).all()
     }
     trend = [
         {"bucket": b, "events": per_bucket.get(b, 0)}
-        for b in (first + timedelta(hours=i) for i in range(window_hours))
+        for b in (first + unit_step * i for i in range(points))
+    ]
+
+    top_cves = [
+        {"cve_id": r.cve_id, "cvss": r.cvss, "events": int(r.events)}
+        for r in session.execute(
+            select(GeoEvent.cve_id, Cve.cvss, n.label("events"))
+            .join(Cve, Cve.cve_id == GeoEvent.cve_id, isouter=True)
+            .where(*in_window, GeoEvent.cve_id.is_not(None))
+            .group_by(GeoEvent.cve_id, Cve.cvss)
+            .order_by(n.desc(), GeoEvent.cve_id)
+            .limit(5)
+        ).all()
     ]
 
     events = None
@@ -154,6 +281,8 @@ def country_activity(
         "counts": counts,
         "top_sources": top_sources,
         "trend": trend,
+        "trend_unit": trend_unit,
+        "top_cves": top_cves,
         "events": events,
     }
 

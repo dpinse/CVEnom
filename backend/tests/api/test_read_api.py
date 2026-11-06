@@ -172,6 +172,52 @@ async def test_lanes_second_anonymous_call_is_cache_hit(db_session):
     assert r1.json() == r2.json()
 
 
+async def test_summary_cached_for_anon(db_session):
+    cve(db_session, "CVE-2024-0001", kev=True, kev_added=NOW.date())
+    async with client(make_app(db_session)) as c:
+        r1 = await c.get("/api/summary?range=7d")
+        r2 = await c.get("/api/summary?range=7d")
+    assert r1.headers["x-cache"] == "MISS"
+    assert r2.headers["x-cache"] == "HIT"
+    assert r1.json() == r2.json()
+    b = r1.json()
+    assert b["range"] == "7d" and b["new_kev"] == 1
+    assert b["latest_kev_added"] == NOW.date().isoformat()
+    assert set(b) == {
+        "range", "new_kev", "kev_due_soon", "new_critical", "public_exploits", "latest_kev_added",
+    }
+
+
+async def test_volume_endpoint_shape(db_session):
+    cve(db_session, "CVE-2024-0001", cvss=9.8, published=NOW)
+    cve(db_session, "CVE-2024-0002", published=NOW)
+    b = (await get(db_session, "/api/volume?range=7d")).json()
+    assert b["unit"] == "day" and len(b["buckets"]) == 7
+    assert b["buckets"][-1]["crit"] == 1 and b["total"] == 1 and b["unscored"] == 1
+    assert set(b["buckets"][0]) == {"start", "crit", "high", "med", "low"}
+    h = (await get(db_session, "/api/volume?range=24h")).json()
+    assert h["unit"] == "hour" and len(h["buckets"]) == 24
+
+
+async def test_summary_and_volume_invalid_range_422(db_session):
+    for path in ("/api/summary", "/api/volume"):
+        for rng in ("1y", "", "7D"):
+            assert (await get(db_session, f"{path}?range={rng}")).status_code == 422, (path, rng)
+
+
+async def test_geo_range_30d_includes_29_day_old_event(db_session):
+    geo(db_session, "old", country_code="FR", observed_at=NOW - timedelta(days=29))
+    geo(db_session, "older", country_code="DE", observed_at=NOW - timedelta(days=31))
+    assert (await get(db_session, "/api/geo")).json() == []
+    rows = (await get(db_session, "/api/geo?range=30d")).json()
+    assert [r["country_code"] for r in rows] == ["FR"]
+    # range wins over window_hours
+    rows = (await get(db_session, "/api/geo?range=30d&window_hours=1")).json()
+    assert [r["country_code"] for r in rows] == ["FR"]
+    assert (await get(db_session, "/api/geo?range=1y")).status_code == 422
+    assert (await get(db_session, "/api/geo?window_hours=169")).status_code == 422
+
+
 async def test_search_and_detail_not_cached(db_session):
     cve(db_session, "CVE-2024-0001")
     async with client(make_app(db_session)) as c:
@@ -187,7 +233,10 @@ async def test_search_and_detail_not_cached(db_session):
 async def test_public_read_off_requires_auth(db_session):
     u = mk_user(db_session)
     h, _ = bearer(db_session, u)
-    for url in ("/api/lanes", "/api/cves", "/api/velocity", "/api/geo", "/api/stories/loud"):
+    for url in (
+        "/api/lanes", "/api/cves", "/api/velocity", "/api/geo", "/api/stories/loud",
+        "/api/summary", "/api/volume",
+    ):
         anon = await get(db_session, url, public_read=False)
         assert anon.status_code == 401, url
         ok = await get(db_session, url, headers=h, public_read=False)

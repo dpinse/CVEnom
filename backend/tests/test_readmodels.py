@@ -3,8 +3,16 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 from sqlalchemy import event, text
 
-from cvenom.models import Cve, GeoEvent, Story, StoryCveLink
-from cvenom.readmodels import cve_velocity, geo_summary, loud_stories
+from cvenom.models import Cve, CveEvent, GeoEvent, Story, StoryCveLink
+from cvenom.pipeline import lane_views
+from cvenom.readmodels import (
+    cve_velocity,
+    cve_volume,
+    geo_summary,
+    loud_stories,
+    summary_counts,
+)
+from cvenom.scoring import Lane
 
 NOW = datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc)
 
@@ -193,3 +201,102 @@ def test_loud_no_n_plus_one(db_session):
         event.remove(engine, "before_cursor_execute", count)
     assert len(r) == 20
     assert len(selects) <= 2
+
+
+# ---- summary / volume ----
+def test_summary_counts_each_figure(db_session):
+    today = NOW.date()
+    old = NOW - timedelta(days=60)
+    db = db_session
+    # new_kev: in 7d vs out
+    db.add(Cve(cve_id="CVE-2026-0001", published=old, kev=True, kev_added=today - timedelta(days=7)))
+    db.add(Cve(cve_id="CVE-2026-0002", published=old, kev=True, kev_added=today - timedelta(days=8)))
+    # kev_due_soon: today+7 counts, today+8 and yesterday do not
+    db.add(Cve(cve_id="CVE-2026-0003", published=old, kev=True, kev_added=today - timedelta(days=90),
+               kev_due=today + timedelta(days=7)))
+    db.add(Cve(cve_id="CVE-2026-0004", published=old, kev=True, kev_added=today - timedelta(days=90),
+               kev_due=today + timedelta(days=8)))
+    db.add(Cve(cve_id="CVE-2026-0005", published=old, kev=True, kev_added=today - timedelta(days=90),
+               kev_due=today - timedelta(days=1)))
+    # new_critical: cvss>=9 not KEV in range; KEV, <9 and out-of-range excluded
+    db.add(Cve(cve_id="CVE-2026-0006", published=NOW - timedelta(days=2), cvss=9.0))
+    db.add(Cve(cve_id="CVE-2026-0007", published=NOW - timedelta(days=2), cvss=8.9))
+    db.add(Cve(cve_id="CVE-2026-0008", published=NOW - timedelta(days=8), cvss=9.8))
+    db.add(Cve(cve_id="CVE-2026-0009", published=NOW - timedelta(days=2), cvss=9.8, kev=True,
+               kev_added=today - timedelta(days=90)))
+    # public_exploits: distinct CVEs with poc_published in range (two sources = one CVE)
+    db.add(Cve(cve_id="CVE-2026-0010", published=old))
+    db.add(Cve(cve_id="CVE-2026-0011", published=old))
+    db.flush()
+    for cid, src, ago, kind in [
+        ("CVE-2026-0010", "a", 1, "poc_published"),
+        ("CVE-2026-0010", "b", 2, "poc_published"),
+        ("CVE-2026-0011", "a", 8, "poc_published"),
+        ("CVE-2026-0006", "a", 1, "kev_added"),
+    ]:
+        db.add(CveEvent(cve_id=cid, kind=kind, source=src, occurred_at=NOW - timedelta(days=ago)))
+    db.flush()
+    r = summary_counts(db, NOW, "7d")
+    assert r["range"] == "7d"
+    assert r["new_kev"] == 1
+    assert r["kev_due_soon"] == 1
+    assert r["new_critical"] == 1
+    assert r["public_exploits"] == 1
+    # kev_due_soon ignores the range; a wider range widens poc
+    assert summary_counts(db, NOW, "30d")["kev_due_soon"] == 1
+    assert summary_counts(db, NOW, "30d")["public_exploits"] == 2
+
+
+def test_summary_counts_equal_lane_totals(db_session):
+    today = NOW.date()
+    for i in range(3):
+        db_session.add(Cve(cve_id=f"CVE-2026-1{i:03d}", published=NOW - timedelta(days=40),
+                           kev=True, kev_added=today - timedelta(days=i * 4)))
+        db_session.add(Cve(cve_id=f"CVE-2026-2{i:03d}", published=NOW - timedelta(days=i * 4),
+                           cvss=9.5))
+    db_session.flush()
+    for rng in ("24h", "7d", "14d", "30d"):
+        views = lane_views(db_session, NOW, rng)
+        s = summary_counts(db_session, NOW, rng)
+        assert s["new_kev"] == len(views[Lane.EXPLOITED])
+        assert s["new_critical"] == len(views[Lane.FRESH])
+
+
+def test_summary_latest_kev_added(db_session):
+    assert summary_counts(db_session, NOW, "7d")["latest_kev_added"] is None
+    db_session.add(Cve(cve_id="CVE-2026-0001", kev=True, kev_added=date(2026, 1, 2)))
+    db_session.add(Cve(cve_id="CVE-2026-0002", kev=True, kev_added=date(2026, 3, 4)))
+    db_session.flush()
+    assert summary_counts(db_session, NOW, "7d")["latest_kev_added"] == date(2026, 3, 4)
+
+
+def test_volume_daily_buckets_and_severity(db_session):
+    db = db_session
+    for cid, cvss, ago in [
+        ("CVE-2026-0001", 9.8, 0), ("CVE-2026-0002", 9.0, 0), ("CVE-2026-0003", 7.0, 1),
+        ("CVE-2026-0004", 4.0, 1), ("CVE-2026-0005", 3.9, 2), ("CVE-2026-0006", None, 0),
+        ("CVE-2026-0007", 9.8, 20),
+    ]:
+        db.add(Cve(cve_id=cid, cvss=cvss, published=NOW - timedelta(days=ago)))
+    db.flush()
+    r = cve_volume(db, NOW, "7d")
+    assert r["unit"] == "day" and len(r["buckets"]) == 7
+    last = r["buckets"][-1]
+    assert last["start"] == datetime(2026, 11, 5, tzinfo=timezone.utc)
+    assert (last["crit"], last["high"], last["med"], last["low"]) == (2, 0, 0, 0)
+    assert (r["buckets"][-2]["high"], r["buckets"][-2]["med"]) == (1, 1)
+    assert r["buckets"][-3]["low"] == 1
+    assert r["total"] == 5 and r["unscored"] == 1
+    assert cve_volume(db, NOW, "30d")["total"] == 6
+
+
+def test_volume_24h_hourly(db_session):
+    db_session.add(Cve(cve_id="CVE-2026-0001", cvss=8.0, published=NOW + timedelta(minutes=30)))
+    db_session.add(Cve(cve_id="CVE-2026-0002", cvss=8.0, published=NOW - timedelta(hours=23)))
+    db_session.add(Cve(cve_id="CVE-2026-0003", cvss=8.0, published=NOW - timedelta(hours=24)))
+    db_session.flush()
+    r = cve_volume(db_session, NOW, "24h")
+    assert r["unit"] == "hour" and len(r["buckets"]) == 24
+    assert r["buckets"][-1]["start"] == datetime(2026, 11, 5, 12, tzinfo=timezone.utc)
+    assert r["buckets"][-1]["high"] == 1 and r["buckets"][0]["high"] == 1
+    assert r["total"] == 2

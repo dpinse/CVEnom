@@ -2,7 +2,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from tests.api.test_read_api import bearer, client, geo, make_app, mk_user, secrets_key  # noqa: F401
+from tests.api.test_read_api import (  # noqa: F401
+    bearer, client, cve, geo, make_app, mk_user, secrets_key,
+)
 
 
 async def get(db, url, headers=None, **app_kw):
@@ -113,3 +115,47 @@ async def test_country_anon_second_call_cache_hit_and_authed_bypasses(db_session
 async def test_country_window_bounds_422(db_session, w):
     r = await get(db_session, f"/api/geo/DE?window_hours={w}")
     assert r.status_code == 422
+
+
+async def test_geo_country_range_daily_trend(db_session):
+    geo(db_session, "d1", country_code="DE", observed_at=_now() - timedelta(days=10))
+    geo(db_session, "d2", country_code="DE", observed_at=_now())
+    d = (await get(db_session, "/api/geo/DE?range=14d")).json()
+    assert d["window_hours"] == 336
+    assert d["trend_unit"] == "day" and len(d["trend"]) == 14
+    buckets = [datetime.fromisoformat(p["bucket"]) for p in d["trend"]]
+    assert all(b.hour == 0 and b.minute == 0 for b in buckets) and buckets == sorted(buckets)
+    assert sum(p["events"] for p in d["trend"]) == 2
+    assert d["trend"][-1]["events"] >= 1
+    h = (await get(db_session, "/api/geo/DE?range=24h")).json()
+    assert h["trend_unit"] == "hour" and len(h["trend"]) == 24
+    w = (await get(db_session, "/api/geo/DE?range=7d")).json()
+    assert w["trend_unit"] == "hour" and len(w["trend"]) == 168
+    assert (await get(db_session, "/api/geo/DE")).json()["trend_unit"] == "hour"
+
+
+async def test_geo_country_top_cves(db_session):
+    cve(db_session, "CVE-2024-0001", cvss=9.8)
+    cve(db_session, "CVE-2024-0002")
+    for i in range(3):
+        geo(db_session, f"a{i}", country_code="DE", cve_id="CVE-2024-0001")
+    geo(db_session, "b0", country_code="DE", cve_id="CVE-2024-0002")
+    geo(db_session, "none", country_code="DE")
+    geo(db_session, "other", country_code="FR", cve_id="CVE-2024-0002")
+    for i in range(5):  # more than 5 distinct ids: capped
+        geo(db_session, f"x{i}", country_code="DE", cve_id=f"CVE-2024-90{i}0")
+    d = (await get(db_session, "/api/geo/DE")).json()
+    assert len(d["top_cves"]) == 5
+    assert d["top_cves"][0] == {"cve_id": "CVE-2024-0001", "cvss": 9.8, "events": 3}
+    assert all(t["events"] == 1 for t in d["top_cves"][1:])
+    assert {"cve_id": "CVE-2024-0002", "cvss": None, "events": 1} in d["top_cves"]
+
+
+async def test_geo_country_anon_events_null_with_range(db_session):
+    geo(db_session, "v1", source="ransomware_live", kind="victim", country_code="CA",
+        label="Zyxwv Victim", magnitude=1.0, observed_at=_now() - timedelta(days=20))
+    r = await get(db_session, "/api/geo/CA?range=30d")
+    d = r.json()
+    assert d["events"] is None
+    assert "Zyxwv" not in r.text
+    assert d["counts"] == [{"kind": "victim", "events": 1, "magnitude": 1.0}]

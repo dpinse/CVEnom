@@ -19,12 +19,14 @@ from cvenom.readmodels import (
     _escape_like,
     country_activity,
     cve_velocity,
+    cve_volume,
     geo_summary,
     loud_stories,
     search_stories,
     story_detail,
+    summary_counts,
 )
-from cvenom.ranges import DEFAULT_RANGE, RangeKey
+from cvenom.ranges import DEFAULT_RANGE, RANGE_DAYS, RangeKey
 from cvenom.schemas import CVE_ID_RE
 from cvenom.scoring import Lane
 
@@ -42,14 +44,18 @@ from .schemas_api import (
     StoryDetailOut,
     StoryListOut,
     StoryRef,
+    SummaryOut,
     VelocityOut,
+    VolumeOut,
 )
 
 # Cached routes must not vary on request headers (see ResponseCacheMiddleware).
 CACHE_PATHS: dict[str, frozenset[str]] = {
     "/api/lanes": frozenset({"range", "limit"}),
     "/api/velocity": frozenset({"days"}),
-    "/api/geo": frozenset({"window_hours"}),
+    "/api/summary": frozenset({"range"}),
+    "/api/volume": frozenset({"range"}),
+    "/api/geo": frozenset({"window_hours", "range"}),
     "/api/stories/loud": frozenset({"limit", "range"}),
     # free-text `q` is not allowed: it bypasses the cache so arbitrary strings cannot fill Redis
     "/api/stories": frozenset({"source", "from", "to", "page", "page_size"}),
@@ -268,10 +274,30 @@ def velocity(
     return cve_velocity(session, _now(), days=days)
 
 
+@router.get("/summary", response_model=SummaryOut)
+def summary(
+    range_: Annotated[RangeKey, Query(alias="range")] = DEFAULT_RANGE,
+    session: Session = SessionDep,
+) -> dict:
+    return summary_counts(session, _now(), range_)
+
+
+@router.get("/volume", response_model=VolumeOut)
+def volume(
+    range_: Annotated[RangeKey, Query(alias="range")] = DEFAULT_RANGE,
+    session: Session = SessionDep,
+) -> dict:
+    return cve_volume(session, _now(), range_)
+
+
 @router.get("/geo", response_model=list[GeoSummaryItem])
 def geo(
-    window_hours: Annotated[int, Query(ge=1, le=168)] = 24, session: Session = SessionDep
+    window_hours: Annotated[int, Query(ge=1, le=168)] = 24,
+    range_: Annotated[RangeKey | None, Query(alias="range")] = None,
+    session: Session = SessionDep,
 ) -> list[dict]:
+    if range_ is not None:  # range wins over window_hours
+        window_hours = RANGE_DAYS[range_] * 24
     return geo_summary(session, _now(), window_hours=window_hours)
 
 
@@ -279,9 +305,12 @@ def geo(
 def geo_country(
     cc: Annotated[str, Path(pattern="^[A-Z]{2}$")],
     window_hours: Annotated[int, Query(ge=1, le=168)] = 24,
+    range_: Annotated[RangeKey | None, Query(alias="range")] = None,
     session: Session = SessionDep,
     user: User | None = Depends(current_user),  # gated by the router-level public_or_user
 ) -> dict:
+    if range_ is not None:  # range wins over window_hours
+        window_hours = RANGE_DAYS[range_] * 24
     # Anonymous callers get counts only (events=None) so the cached body never
     # carries individual records; signed-in requests bypass the cache.
     return country_activity(

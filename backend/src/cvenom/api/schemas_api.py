@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, PlainSerializer
 
@@ -97,6 +97,31 @@ class VelocityOut(BaseModel):
     rising: bool
 
 
+class SummaryOut(BaseModel):
+    range: str
+    new_kev: int
+    kev_due_soon: int
+    new_critical: int
+    public_exploits: int
+    latest_kev_added: date | None
+
+
+class VolumeBucket(BaseModel):
+    start: UtcDatetime
+    crit: int
+    high: int
+    med: int
+    low: int
+
+
+class VolumeOut(BaseModel):
+    range: str
+    unit: Literal["hour", "day"]
+    buckets: list[VolumeBucket]
+    total: int
+    unscored: int
+
+
 class GeoSummaryItem(BaseModel):
     country_code: str
     kind: str
@@ -121,6 +146,12 @@ class CountryTrendPoint(BaseModel):
     events: int
 
 
+class CountryTopCve(BaseModel):
+    cve_id: str
+    cvss: float | None
+    events: int
+
+
 class CountryEventOut(BaseModel):
     source: str
     kind: str
@@ -138,6 +169,8 @@ class CountryActivityOut(BaseModel):
     counts: list[CountryCount]
     top_sources: list[CountrySource]
     trend: list[CountryTrendPoint]
+    trend_unit: Literal["hour", "day"]
+    top_cves: list[CountryTopCve]
     events: list[CountryEventOut] | None
 
 
