@@ -1,8 +1,10 @@
 import { useEffect, useRef } from "react";
 import { ApiError } from "../lib/api";
 import { useCve } from "../lib/queries";
+import { isIso3166Alpha2 } from "../lib/iso3166";
 import { relTime } from "../lib/relTime";
 import { cveOrgUrl, cweUrl, kevUrl, nvdUrl } from "../lib/refLinks";
+import { useSelection } from "../lib/selection";
 import { decodeEntities, ExternalLink, safeHref, Text } from "../lib/text";
 import type { CveDetail, GeoEventOut } from "../lib/types";
 import { useAuth } from "../lib/useAuth";
@@ -76,6 +78,7 @@ function Meter({
 function GeoEvent({ ev, now }: { ev: GeoEventOut; now: Date }) {
   const kind = isGeoKind(ev.kind) ? KIND_LABEL[ev.kind] : String(ev.kind);
   const cc = isIso2(ev.country_code) ? ev.country_code : null;
+  const { select } = useSelection();
   const entries = Object.entries(ev.details && typeof ev.details === "object" ? ev.details : {});
   const shown = entries.slice(0, DETAILS_CAP);
   return (
@@ -84,7 +87,14 @@ function GeoEvent({ ev, now }: { ev: GeoEventOut; now: Date }) {
         <span className="chip">
           <Text value={kind} />
         </span>
-        {cc && <span className="gev-cc">{countryName(cc)}</span>}
+        {cc &&
+          (isIso3166Alpha2(cc) ? (
+            <button type="button" className="chip linked gev-cc" onClick={() => select({ kind: "country", cc })}>
+              {countryName(cc)}
+            </button>
+          ) : (
+            <span className="gev-cc">{countryName(cc)}</span>
+          ))}
         <span className="gev-mag mono">{isNum(ev.magnitude) ? ev.magnitude : "n/a"}</span>
         <span className="gev-time">{relTime(ev.observed_at, now)}</span>
       </div>

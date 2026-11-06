@@ -22,7 +22,8 @@ const H = 48;
  * reconciled with them. Holds numbers only: no text from the API.
  */
 function CountryTrend({ trend }: { trend: CountryActivity["trend"] }) {
-  const max = Math.max(1, ...trend.map((b) => b.events));
+  const val = (n: number) => (Number.isFinite(n) && n > 0 ? n : 0);
+  const max = Math.max(1, ...trend.map((b) => val(b.events)));
   const slot = W / trend.length;
   return (
     <svg
@@ -34,7 +35,7 @@ function CountryTrend({ trend }: { trend: CountryActivity["trend"] }) {
       preserveAspectRatio="none"
     >
       {trend.map((b, i) => {
-        const h = b.events > 0 ? Math.max(2, (b.events / max) * H) : 0;
+        const h = val(b.events) > 0 ? Math.max(2, (val(b.events) / max) * H) : 0;
         return h > 0 ? (
           <rect key={i} className="trend-bar" x={i * slot + 0.5} y={H - h} width={Math.max(1, slot - 1)} height={h} />
         ) : null;
@@ -43,12 +44,9 @@ function CountryTrend({ trend }: { trend: CountryActivity["trend"] }) {
   );
 }
 
-function linkText(url: string): string {
-  const safe = safeHref(decodeEntities(url));
-  return safe ? new URL(safe).hostname : url;
-}
-
 function EventRow({ e, now }: { e: CountryEvent; now: Date }) {
+  // A rejected (unsafe or .onion) story_url renders nothing at all.
+  const safe = e.story_url ? safeHref(decodeEntities(e.story_url)) : null;
   return (
     <li className="ref cev">
       {isGeoKind(e.kind) ? (
@@ -68,9 +66,9 @@ function EventRow({ e, now }: { e: CountryEvent; now: Date }) {
       <span className="dmuted">
         <Text value={e.source} /> · {relTime(e.observed_at, now)}
       </span>
-      {e.story_url ? (
-        <ExternalLink href={decodeEntities(e.story_url)} className="dlink">
-          <Text value={linkText(e.story_url)} />
+      {safe ? (
+        <ExternalLink href={safe} className="dlink">
+          {new URL(safe).hostname}
         </ExternalLink>
       ) : null}
     </li>
@@ -80,7 +78,7 @@ function EventRow({ e, now }: { e: CountryEvent; now: Date }) {
 function CountryBody({ a }: { a: CountryActivity }) {
   const now = useNow();
   const total = a.counts.reduce((n, c) => n + (Number.isFinite(c.events) ? c.events : 0), 0);
-  const nonZero = a.trend.filter((b) => b.events > 0).length;
+  const nonZero = a.trend.filter((b) => Number.isFinite(b.events) && b.events > 0).length;
   const showTrend = total >= TREND_MIN_EVENTS && nonZero >= TREND_MIN_BUCKETS;
   const events = a.events;
   const credit = events?.some((e) => isRansomwareSource(e.source)) ?? false;

@@ -878,7 +878,7 @@ describe("CountryDetail", () => {
     expect(within(list).getByText("<script>alert(1)</script>")).toBeInTheDocument();
     expect(list.querySelector("script")).toBeNull();
     expect(within(list).queryAllByRole("link")).toHaveLength(0);
-    expect(list.textContent).toContain("abcdef.onion");
+    expect(list.textContent).not.toContain("abcdef.onion");
   });
 
   test("the trend shows for a busy window and is omitted when sparse; it holds no API text", async () => {
@@ -917,5 +917,29 @@ describe("CountryDetail", () => {
     const d = await dialog();
     expect(await within(d).findByRole("alert")).toBeInTheDocument();
     expect(within(d).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+});
+
+describe("CveDetail geo country chips", () => {
+  test("a country in Geo events is a button that opens the country drawer; an invalid code stays text", async () => {
+    serveCve(detail({ geo_events: [ev({ country_code: "DE" }), ev({ country_code: "QQ", label: "other" })] }));
+    server.use(
+      http.get("http://localhost/api/geo/DE", () =>
+        HttpResponse.json({
+          country_code: "DE",
+          window_hours: 24,
+          counts: [],
+          top_sources: [],
+          trend: [],
+          events: null,
+        }),
+      ),
+    );
+    renderHost(["/?cve=" + CVE]);
+    await screen.findByText("Geo events");
+    expect(screen.queryByRole("button", { name: "QQ" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Germany" }));
+    expect(screen.getByTestId("search")).toHaveTextContent("?country=DE");
+    expect(await screen.findByRole("heading", { name: "Germany" })).toBeInTheDocument();
   });
 });

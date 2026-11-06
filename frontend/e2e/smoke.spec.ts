@@ -203,26 +203,24 @@ test.describe("country drawer from the keyboard hotspot list", () => {
     expect(m.doc[0]).toBeLessThanOrEqual(m.doc[1]);
   });
 
-  test("Back from a country selection returns to the CVE dialog, with exactly one dialog", async ({ page }) => {
+  test("CVE -> country by real clicks; Back returns to the CVE dialog, Forward to the country", async ({ page }) => {
     await loaded(page);
     await page.locator('.lane[data-k="exploited"] [data-testid="lane-row"]').first().click();
     await expect(page).toHaveURL(new RegExp(`[?&]cve=${CVE_ID}`));
-    await expect(page.getByRole("dialog")).toHaveCount(1);
-    // The open drawer makes the page inert, so a real user cannot reach the hotspot list; the programmatic click
-    // exercises the history semantics (select() pushes one entry that replaces ?cve=).
-    await page
-      .getByRole("list", { name: "Top threat hotspots" })
-      .getByRole("button", { name: /Germany/ })
-      .evaluate((el: HTMLElement) => el.click());
-    await expect(page).toHaveURL(/[?&]country=DE/);
-    await expect(page.getByRole("dialog").getByRole("heading", { name: "Germany" })).toBeVisible();
-    await expect(page.getByRole("dialog")).toHaveCount(1);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toHaveCount(1);
+    await dialog.getByRole("button", { name: "United States" }).click();
+    await expect(page).toHaveURL(/[?&]country=US/);
+    await expect(dialog.getByRole("heading", { name: "United States" })).toBeVisible();
+    await expect(dialog).toHaveCount(1);
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`[?&]cve=${CVE_ID}`));
-    await expect(page.getByRole("dialog")).toHaveCount(1);
-    await expect(page.getByRole("dialog").getByText("Acme Gateway 4.2")).toBeVisible();
+    await expect(dialog).toHaveCount(1);
+    await expect(dialog.getByText("Acme Gateway 4.2")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true);
     await page.goForward();
-    await expect(page).toHaveURL(/[?&]country=DE/);
-    await expect(page.getByRole("dialog")).toHaveCount(1);
+    await expect(page).toHaveURL(/[?&]country=US/);
+    await expect(dialog).toHaveCount(1);
+    await expect(dialog.getByRole("heading", { name: "United States" })).toBeVisible();
   });
 });

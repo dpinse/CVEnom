@@ -46,7 +46,8 @@ async function mockApi(page: Page, unexpected: string[]) {
     if (path === "/api/lanes") return route.fulfill(json(fixture("lanes")));
     if (path === "/api/velocity") return route.fulfill(json(fixture("velocity")));
     if (path === "/api/geo") return route.fulfill(json(fixture("geo")));
-    if (path === "/api/geo/DE") return route.fulfill(json(fixture("geo-DE"))); // anonymous: events is null
+    const geoCc = /^\/api\/geo\/([A-Z]{2})$/.exec(path)?.[1]; // anonymous: events is null
+    if (geoCc) return route.fulfill(json(JSON.stringify({ ...JSON.parse(fixture("geo-DE")), country_code: geoCc })));
     if (path === "/api/stories/loud") return route.fulfill(json(fixture("loud")));
     if (path === "/api/cves") return route.fulfill(json(fixture("cves")));
     if (path === "/api/stories") return route.fulfill(json(fixture("stories")));

@@ -382,6 +382,7 @@ describe("<Globe> chrome and accessibility", () => {
     renderGlobe([{ country_code: "DE", kind: "scan", magnitude: 7, events: 12, last_seen: "2026-11-05T10:00:00Z" }]);
     const btn = screen.getByRole("button", { name: /Germany: .*scan/i });
     expect(btn).toHaveAttribute("type", "button");
+    // jsdom has no native button activation: Enter/Space on a real <button> is covered by the e2e keyboard test.
     fireEvent.click(btn);
     expect(screen.getByTestId("search")).toHaveTextContent("?country=DE");
   });
