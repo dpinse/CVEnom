@@ -98,7 +98,7 @@ export function subOf(token: string): string | null {
   try {
     const part = token.split(".")[1];
     if (!part) return null;
-    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const b64 = part.replaceAll("-", "+").replaceAll("_", "/");
     const json: unknown = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
     return isRecord(json) && json.sub !== undefined ? String(json.sub) : null;
   } catch {

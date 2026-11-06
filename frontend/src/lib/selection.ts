@@ -3,10 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { isIso3166Alpha2 } from "./iso3166";
 import { safeHref } from "./text";
 
-export type Selection =
-  | { kind: "cve"; id: string }
-  | { kind: "story"; url: string }
-  | { kind: "country"; cc: string };
+export type Selection = { kind: "cve"; id: string } | { kind: "story"; url: string } | { kind: "country"; cc: string };
 
 export const CVE_ID_RE = /^CVE-\d{4}-\d{4,7}$/;
 
@@ -30,18 +27,21 @@ export function useSelection() {
   const selection = useMemo(() => parseSelection(sp), [sp]);
   const select = useCallback(
     (s: Selection | null, opts?: { replace?: boolean }) => {
-      setSp((prev) => {
-        const next = new URLSearchParams(prev);
-        next.delete("cve");
-        next.delete("story");
-        next.delete("country");
-        if (s?.kind === "cve" && CVE_ID_RE.test(s.id)) next.set("cve", s.id);
-        else if (s?.kind === "story") {
-          const url = safeHref(s.url);
-          if (url !== null) next.set("story", url);
-        } else if (s?.kind === "country" && isIso3166Alpha2(s.cc)) next.set("country", s.cc);
-        return next;
-      }, opts?.replace ? { replace: true } : undefined);
+      setSp(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("cve");
+          next.delete("story");
+          next.delete("country");
+          if (s?.kind === "cve" && CVE_ID_RE.test(s.id)) next.set("cve", s.id);
+          else if (s?.kind === "story") {
+            const url = safeHref(s.url);
+            if (url !== null) next.set("story", url);
+          } else if (s?.kind === "country" && isIso3166Alpha2(s.cc)) next.set("country", s.cc);
+          return next;
+        },
+        opts?.replace ? { replace: true } : undefined,
+      );
     },
     [setSp],
   );

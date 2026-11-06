@@ -67,7 +67,11 @@ function mock() {
 }
 async function record(request: Request) {
   const text = await request.text();
-  bodies.push({ method: request.method, url: new URL(request.url).pathname, body: text ? JSON.parse(text) : undefined });
+  bodies.push({
+    method: request.method,
+    url: new URL(request.url).pathname,
+    body: text ? JSON.parse(text) : undefined,
+  });
 }
 
 function Page() {
@@ -88,11 +92,18 @@ function open(qc: QueryClient = createQueryClient()) {
   );
   return qc;
 }
-const setField = (label: RegExp | string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
+const setField = (label: RegExp | string, value: string) =>
+  fireEvent.change(screen.getByLabelText(label), { target: { value } });
 const cacheDump = (qc: QueryClient) =>
   JSON.stringify([
-    qc.getQueryCache().getAll().map((q) => ({ k: q.queryKey, d: q.state.data, e: String(q.state.error) })),
-    qc.getMutationCache().getAll().map((m) => ({ v: m.state.variables, d: m.state.data })),
+    qc
+      .getQueryCache()
+      .getAll()
+      .map((q) => ({ k: q.queryKey, d: q.state.data, e: String(q.state.error) })),
+    qc
+      .getMutationCache()
+      .getAll()
+      .map((m) => ({ v: m.state.variables, d: m.state.data })),
   ]);
 
 beforeEach(() => {
@@ -111,7 +122,12 @@ const submitCreate = () => fireEvent.click(screen.getByRole("button", { name: "C
 describe("create rule: client validation", () => {
   test("an http:// webhook is blocked on the client", async () => {
     mock();
-    server.use(http.post(`${U}/rules`, async ({ request }) => (await record(request), HttpResponse.json(mkRule(), { status: 201 }))));
+    server.use(
+      http.post(
+        `${U}/rules`,
+        async ({ request }) => (await record(request), HttpResponse.json(mkRule(), { status: 201 })),
+      ),
+    );
     open();
     await openCreate();
     setField("Name", "Hook rule");
@@ -249,7 +265,10 @@ describe("create rule: secret shown once", () => {
       http.post(`${U}/rules`, async ({ request }) => {
         await record(request);
         return HttpResponse.json(
-          mkRule({ id: 3, recipients: [{ id: 30, channel: "webhook", url_masked: "https://h.example.com/…", secret: SECRET }] }),
+          mkRule({
+            id: 3,
+            recipients: [{ id: 30, channel: "webhook", url_masked: "https://h.example.com/…", secret: SECRET }],
+          }),
           { status: 201 },
         );
       }),
@@ -269,7 +288,10 @@ describe("create rule: secret shown once", () => {
 
 describe("rule list", () => {
   test("shows name, kind badge, condition, toggle, recipient count, and renders hostile text as text", async () => {
-    rules = [mkRule({ name: "<img src=x onerror=alert(1)>" }), mkRule({ id: 2, name: "KEV", kind: "kev_added", threshold: null, recipients: [] })];
+    rules = [
+      mkRule({ name: "<img src=x onerror=alert(1)>" }),
+      mkRule({ id: 2, name: "KEV", kind: "kev_added", threshold: null, recipients: [] }),
+    ];
     mock();
     open();
     expect((await screen.findAllByText("<img src=x onerror=alert(1)>")).length).toBeGreaterThan(0);
@@ -308,7 +330,12 @@ describe("rule list", () => {
 
   test("the enabled toggle sends only {enabled}", async () => {
     mock();
-    server.use(http.patch(`${U}/rules/1`, async ({ request }) => (await record(request), HttpResponse.json(mkRule({ enabled: false })))));
+    server.use(
+      http.patch(
+        `${U}/rules/1`,
+        async ({ request }) => (await record(request), HttpResponse.json(mkRule({ enabled: false }))),
+      ),
+    );
     open();
     fireEvent.click(await screen.findByRole("switch", { name: "Enabled: Critical CVSS" }));
     await waitFor(() => expect(bodies).toHaveLength(1));
@@ -345,10 +372,16 @@ describe("edit rule", () => {
   test("recipients: shows masked URL as returned; Remove sends DELETE; Add sends POST and surfaces a one-time secret", async () => {
     mock();
     server.use(
-      http.delete(`${U}/rules/1/recipients/10`, async ({ request }) => (await record(request), new HttpResponse(null, { status: 204 }))),
+      http.delete(
+        `${U}/rules/1/recipients/10`,
+        async ({ request }) => (await record(request), new HttpResponse(null, { status: 204 })),
+      ),
       http.post(`${U}/rules/1/recipients`, async ({ request }) => {
         await record(request);
-        return HttpResponse.json({ id: 40, channel: "webhook", url_masked: "https://new.example.com/…", secret: SECRET }, { status: 201 });
+        return HttpResponse.json(
+          { id: 40, channel: "webhook", url_masked: "https://new.example.com/…", secret: SECRET },
+          { status: 201 },
+        );
       }),
     );
     const qc = open();
@@ -364,7 +397,10 @@ describe("edit rule", () => {
     setField(/Recipient 3 webhook URL/, "https://new.example.com/hook");
     fireEvent.click(screen.getByRole("button", { name: "Add recipient" }));
     await screen.findByRole("region", { name: /Webhook secret/ });
-    expect(bodies.find((b) => b.method === "POST")?.body).toEqual({ channel: "webhook", url: "https://new.example.com/hook" });
+    expect(bodies.find((b) => b.method === "POST")?.body).toEqual({
+      channel: "webhook",
+      url: "https://new.example.com/hook",
+    });
     expect(cacheDump(qc)).not.toContain(SECRET);
   });
 
@@ -382,7 +418,9 @@ describe("edit rule", () => {
     setField(/Recipient 3 webhook URL/, "https://10.0.0.1/x");
     const add = () => fireEvent.click(screen.getByRole("button", { name: "Add recipient" }));
     add();
-    expect(await screen.findByText("That webhook address isn't allowed (must be a public https endpoint)")).toBeInTheDocument();
+    expect(
+      await screen.findByText("That webhook address isn't allowed (must be a public https endpoint)"),
+    ).toBeInTheDocument();
     code = "too_many_recipients";
     add();
     expect(await screen.findByText("A rule can have at most 20 recipients")).toBeInTheDocument();
@@ -400,7 +438,9 @@ describe("edit rule", () => {
     setField("Recipient 1 type", "webhook");
     setField("Recipient 1 webhook URL", "https://169.254.169.254/x");
     submitCreate();
-    expect(await screen.findByText("That webhook address isn't allowed (must be a public https endpoint)")).toBeInTheDocument();
+    expect(
+      await screen.findByText("That webhook address isn't allowed (must be a public https endpoint)"),
+    ).toBeInTheDocument();
     expect(screen.getByRole("form", { name: "New alert rule" })).toBeInTheDocument();
   });
 });
@@ -471,7 +511,9 @@ describe("test send", () => {
       }),
     );
     open();
-    expect(await screen.findByText("Sends a clearly-labelled TEST alert to every recipient of this rule")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Sends a clearly-labelled TEST alert to every recipient of this rule"),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send test" }));
     const running = await screen.findByRole("button", { name: /Sending test/ });
     expect(running).toBeDisabled();
@@ -510,7 +552,14 @@ describe("deliveries", () => {
   test("renders rows with chips, rule name, last_error as text, and filters by status and rule", async () => {
     deliveries = [
       mkDelivery({ id: 1 }),
-      mkDelivery({ id: 2, status: "failed", attempts: 3, last_error: "<i>boom</i>", cve_id: "CVE-2026-2222", rule_id: 99 }),
+      mkDelivery({
+        id: 2,
+        status: "failed",
+        attempts: 3,
+        last_error: "<i>boom</i>",
+        cve_id: "CVE-2026-2222",
+        rule_id: 99,
+      }),
     ];
     deliveryTotal = 2;
     mock();
@@ -528,7 +577,9 @@ describe("deliveries", () => {
     fireEvent.change(screen.getByLabelText("Status"), { target: { value: "failed" } });
     await waitFor(() => expect(deliveryQueries.some((q) => q.get("status") === "failed")).toBe(true));
     fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "1" } });
-    await waitFor(() => expect(deliveryQueries.some((q) => q.get("status") === "failed" && q.get("rule_id") === "1")).toBe(true));
+    await waitFor(() =>
+      expect(deliveryQueries.some((q) => q.get("status") === "failed" && q.get("rule_id") === "1")).toBe(true),
+    );
   });
 
   test("paginates at 50 per page", async () => {
@@ -558,7 +609,13 @@ describe("leaving the page", () => {
     mock();
     server.use(
       http.post(`${U}/rules`, () =>
-        HttpResponse.json(mkRule({ id: 5, recipients: [{ id: 50, channel: "webhook", url_masked: "https://h.example.com/…", secret: SECRET }] }), { status: 201 }),
+        HttpResponse.json(
+          mkRule({
+            id: 5,
+            recipients: [{ id: 50, channel: "webhook", url_masked: "https://h.example.com/…", secret: SECRET }],
+          }),
+          { status: 201 },
+        ),
       ),
     );
     const qc = open();

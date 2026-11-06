@@ -116,7 +116,10 @@ vi.mock("maplibre-gl", () => {
 
 interface FakeMapT {
   options: { style: Record<string, unknown>; [k: string]: unknown };
-  sources: Record<string, { spec: unknown; data: { features: { properties: Record<string, unknown> }[] }; setData: ReturnType<typeof vi.fn> }>;
+  sources: Record<
+    string,
+    { spec: unknown; data: { features: { properties: Record<string, unknown> }[] }; setData: ReturnType<typeof vi.fn> }
+  >;
   layers: { id: string; type: string; paint?: Record<string, unknown> }[];
   paint: Record<string, Record<string, unknown>>;
   paintCalls: [string, string, unknown][];
@@ -135,7 +138,13 @@ const fixture: GeoSummaryItem[] = [
   { country_code: "US", kind: "outage", magnitude: 6, events: 3, last_seen: "2026-11-05T10:00:00Z" },
   { country_code: "NL", kind: "c2", magnitude: 2, events: 9, last_seen: "2026-11-05T10:00:00Z" },
   { country_code: "JP", kind: "outage", magnitude: 1, events: 1, last_seen: "2026-11-05T10:00:00Z" },
-  { country_code: null as unknown as string, kind: "scan", magnitude: 99, events: 1, last_seen: "2026-11-05T10:00:00Z" },
+  {
+    country_code: null as unknown as string,
+    kind: "scan",
+    magnitude: 99,
+    events: 1,
+    last_seen: "2026-11-05T10:00:00Z",
+  },
 ];
 
 function seeded(data: GeoSummaryItem[] | undefined) {
@@ -275,7 +284,11 @@ describe("<Globe> map wiring", () => {
     expect(style).not.toHaveProperty("glyphs");
     expect(style).not.toHaveProperty("sprite");
     expect(style.version).toBe(8);
-    const everything = JSON.stringify({ style, sources: Object.values(m.sources).map((s) => s.spec), layers: m.layers });
+    const everything = JSON.stringify({
+      style,
+      sources: Object.values(m.sources).map((s) => s.spec),
+      layers: m.layers,
+    });
     expect(everything).not.toMatch(/https?:/i);
     expect(everything).not.toMatch(/mapbox:/i);
     for (const s of Object.values(m.sources)) {
@@ -297,7 +310,8 @@ describe("<Globe> map wiring", () => {
     renderGlobe();
     loadMap();
     const m = lastMap();
-    const level = (iso: string) => m.sources.countries.data.features.find((f) => f.properties.iso2 === iso)?.properties.level;
+    const level = (iso: string) =>
+      m.sources.countries.data.features.find((f) => f.properties.iso2 === iso)?.properties.level;
     expect(level("US")).toBe(3);
     expect(level("JP")).toBe(1);
     expect(level("NL")).toBe(0);
@@ -311,7 +325,13 @@ describe("<Globe> map wiring", () => {
     const m = lastMap();
     const hot = m.layers.find((l) => l.id === "hotspots")!;
     const color = JSON.stringify(hot.paint!["circle-color"]);
-    expect(KIND_TOKEN).toEqual({ scan: "--live", outage: "--sev-high", victim: "--scope", c2: "--sev-med", bgp: "--sev-low" });
+    expect(KIND_TOKEN).toEqual({
+      scan: "--live",
+      outage: "--sev-high",
+      victim: "--scope",
+      c2: "--sev-med",
+      bgp: "--sev-low",
+    });
     for (const kind of GEO_KINDS) {
       expect(color).toContain(`"${kind}","${DARK[KIND_TOKEN[kind] as keyof typeof DARK]}"`);
     }
@@ -359,7 +379,13 @@ describe("<Globe> chrome and accessibility", () => {
   it("shows the overlay title and legend", () => {
     renderGlobe();
     expect(screen.getByText(/Threat geography/)).toBeInTheDocument();
-    for (const label of ["exploit scanning", "infrastructure outage", "victim disclosure", "C2 infrastructure", "BGP anomaly"]) {
+    for (const label of [
+      "exploit scanning",
+      "infrastructure outage",
+      "victim disclosure",
+      "C2 infrastructure",
+      "BGP anomaly",
+    ]) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
   });

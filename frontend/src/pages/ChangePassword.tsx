@@ -2,20 +2,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, AuthError, api, getApiClient } from "../lib/api";
-import {
-  MAX_PASSWORD_INPUT,
-  MIN_PASSWORD,
-  POLICY_MESSAGE,
-  passwordProblems,
-} from "../lib/password";
+import { MAX_PASSWORD_INPUT, MIN_PASSWORD, POLICY_MESSAGE, passwordProblems } from "../lib/password";
 import { qk } from "../lib/queries";
-import {
-  AuthCard,
-  ErrorSummary,
-  Field,
-  ShowToggle,
-  commonError,
-} from "../components/formParts";
+import { AuthCard, ErrorSummary, Field, ShowToggle, commonError } from "../components/formParts";
 
 export default function ChangePassword() {
   const qc = useQueryClient();
@@ -56,12 +45,7 @@ export default function ChangePassword() {
       } catch (err) {
         // invalid_credentials is a wrong current password. Any other 401 means the access token
         // lapsed (this route is exempt from automatic refresh): refresh once, retry once.
-        if (!(
-          err instanceof ApiError &&
-          err.status === 401 &&
-          err.code !== "invalid_credentials"
-        ))
-          throw err;
+        if (!(err instanceof ApiError && err.status === 401 && err.code !== "invalid_credentials")) throw err;
         await getApiClient().refresh();
         await post();
       }
@@ -73,9 +57,7 @@ export default function ChangePassword() {
     } catch (err) {
       if (
         err instanceof AuthError ||
-        (err instanceof ApiError &&
-          err.status === 401 &&
-          err.code !== "invalid_credentials")
+        (err instanceof ApiError && err.status === 401 && err.code !== "invalid_credentials")
       ) {
         // The session could not be refreshed (or is still rejected): sign in again; Login shows the notice.
         navigate("/login", {
@@ -85,11 +67,7 @@ export default function ChangePassword() {
       } else if (err instanceof ApiError && err.status === 401) {
         fail(["Current password is incorrect"]);
       } else if (err instanceof ApiError && err.status === 422) {
-        fail([
-          err.code === "weak_password"
-            ? POLICY_MESSAGE
-            : "Couldn't update password",
-        ]);
+        fail([err.code === "weak_password" ? POLICY_MESSAGE : "Couldn't update password"]);
       } else fail([commonError(err)]);
     } finally {
       busy.current = false;
@@ -100,9 +78,7 @@ export default function ChangePassword() {
   const type = show ? "text" : "password";
   return (
     <AuthCard title="Change password">
-      <p className="form-hint">
-        Other devices will be signed out. This device stays signed in.
-      </p>
+      <p className="form-hint">Other devices will be signed out. This device stays signed in.</p>
       <form className="authform" onSubmit={(e) => void onSubmit(e)}>
         <ErrorSummary errors={errors} tick={tick} />
         {done && (

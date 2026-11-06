@@ -143,7 +143,11 @@ describe("DrawerHost", () => {
   });
 
   test("Tab and Shift+Tab cycle within the dialog", async () => {
-    serveCve(detail({ stories: [{ title: "T", url: "https://news.example/x", source: "S", published: "2026-11-05T10:00:00Z" }] }));
+    serveCve(
+      detail({
+        stories: [{ title: "T", url: "https://news.example/x", source: "S", published: "2026-11-05T10:00:00Z" }],
+      }),
+    );
     renderHost(["/?cve=" + CVE]);
     const d = await dialog();
     await screen.findByText("Acme Widget 1.0");
@@ -407,7 +411,12 @@ describe("anonymous story-count note and ransomware credit (CveDetail)", () => {
   const NOTE = "Some sources are visible to signed-in users only.";
   test("anonymous with recent_story_count above the stories shown: muted note", async () => {
     guest();
-    serveCve(detail({ recent_story_count: 3, stories: [{ title: "T", url: "https://news.example/a", source: "Example", published: "2026-11-05T11:00:00Z" }] }));
+    serveCve(
+      detail({
+        recent_story_count: 3,
+        stories: [{ title: "T", url: "https://news.example/a", source: "Example", published: "2026-11-05T11:00:00Z" }],
+      }),
+    );
     renderHost(["/?cve=" + CVE]);
     expect(await screen.findByText(NOTE)).toBeInTheDocument();
   });
@@ -468,7 +477,12 @@ describe("anonymous story-count note and ransomware credit (CveDetail)", () => {
       detail({
         recent_story_count: 2,
         stories: [
-          { title: "Victim", url: "https://www.ransomware.live/id/x", source: "ransomware.live", published: "2026-11-05T11:00:00Z" },
+          {
+            title: "Victim",
+            url: "https://www.ransomware.live/id/x",
+            source: "ransomware.live",
+            published: "2026-11-05T11:00:00Z",
+          },
           { title: "News", url: "https://news.example/a", source: "Example", published: "2026-11-05T10:00:00Z" },
         ],
       }),

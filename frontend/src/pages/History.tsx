@@ -35,7 +35,19 @@ const SORT_LABELS: Record<Sort, string> = {
   published: "Newest published",
   cvss: "Highest CVSS",
 };
-const FILTER_KEYS = ["q", "lane", "source", "min_cvss", "kev", "from", "to", "kev_from", "kev_to", "sort", "page"] as const;
+const FILTER_KEYS = [
+  "q",
+  "lane",
+  "source",
+  "min_cvss",
+  "kev",
+  "from",
+  "to",
+  "kev_from",
+  "kev_to",
+  "sort",
+  "page",
+] as const;
 /** Every param either tab owns; switching tabs clears them (the cve / story / country selection survives). */
 const TAB_PARAMS = [...new Set<string>([...FILTER_KEYS, ...STORY_FILTER_KEYS, "tab"])];
 
@@ -142,7 +154,8 @@ function HistoryCves() {
   const [seenCvss, setSeenCvss] = useState(filters.min_cvss);
   if (seenCvss !== filters.min_cvss) {
     setSeenCvss(filters.min_cvss);
-    if (validCvss(cvssText) !== filters.min_cvss) setCvssText(filters.min_cvss === undefined ? "" : String(filters.min_cvss));
+    if (validCvss(cvssText) !== filters.min_cvss)
+      setCvssText(filters.min_cvss === undefined ? "" : String(filters.min_cvss));
   }
 
   const params: CveQuery = { ...filters, page_size: PAGE_SIZE };
@@ -200,7 +213,13 @@ function HistoryCves() {
       <form className="sfilters" role="search" onSubmit={(e) => e.preventDefault()}>
         <label className="f f-q">
           <span>Search CVEs</span>
-          <input type="search" maxLength={MAX_Q} value={q.qText} onChange={(e) => q.onChange(e.target.value)} autoComplete="off" />
+          <input
+            type="search"
+            maxLength={MAX_Q}
+            value={q.qText}
+            onChange={(e) => q.onChange(e.target.value)}
+            autoComplete="off"
+          />
         </label>
         <label className="f">
           <span>Lane</span>
@@ -293,21 +312,44 @@ function HistoryCves() {
         </p>
       )}
       <p className="scount" aria-live="polite" tabIndex={-1} ref={countRef}>
-        {data ? (total === 0 ? "0 results" : outOfRange ? "" : `Showing ${first}–${last} of ${total}`) : isFetching ? "Loading…" : ""}
+        {data
+          ? total === 0
+            ? "0 results"
+            : outOfRange
+              ? ""
+              : `Showing ${first}–${last} of ${total}`
+          : isFetching
+            ? "Loading…"
+            : ""}
       </p>
-      {data && items.length === 0 && !errorText && (outOfRange ? <OutOfRange /> : <p className="sempty">No CVEs match these filters</p>)}
+      {data &&
+        items.length === 0 &&
+        !errorText &&
+        (outOfRange ? <OutOfRange /> : <p className="sempty">No CVEs match these filters</p>)}
       {items.length > 0 && (
         <div className="stable-wrap" aria-busy={isPlaceholderData}>
           <table className="stable" role="table">
             {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- mobile display:block table semantics */}
             <thead role="rowgroup">
               <tr role="row">
-                <th scope="col" role="columnheader">CVE</th>
-                <th scope="col" role="columnheader">CVSS</th>
-                <th scope="col" role="columnheader">EPSS</th>
-                <th scope="col" role="columnheader">KEV</th>
-                <th scope="col" role="columnheader">Published</th>
-                <th scope="col" role="columnheader">Summary</th>
+                <th scope="col" role="columnheader">
+                  CVE
+                </th>
+                <th scope="col" role="columnheader">
+                  CVSS
+                </th>
+                <th scope="col" role="columnheader">
+                  EPSS
+                </th>
+                <th scope="col" role="columnheader">
+                  KEV
+                </th>
+                <th scope="col" role="columnheader">
+                  Published
+                </th>
+                <th scope="col" role="columnheader">
+                  Summary
+                </th>
               </tr>
             </thead>
             {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- mobile display:block table semantics */}

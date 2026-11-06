@@ -34,7 +34,9 @@ function api(revokeStatus = 204) {
     http.delete("http://localhost/api/auth/sessions/:id", ({ params }) => {
       revoked.push(String(params.id));
       if (revokeStatus === 204) rows = rows.filter((r) => r.id !== params.id);
-      return revokeStatus === 204 ? new HttpResponse(null, { status: 204 }) : HttpResponse.json({ error: "not_found" }, { status: revokeStatus });
+      return revokeStatus === 204
+        ? new HttpResponse(null, { status: 204 })
+        : HttpResponse.json({ error: "not_found" }, { status: revokeStatus });
     }),
     http.post("http://localhost/api/auth/logout", () => {
       logouts++;

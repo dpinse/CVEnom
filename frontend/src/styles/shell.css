@@ -372,8 +372,26 @@ header.command {
   }
 }
 
-.cnav { display: flex; align-items: center; gap: 14px; }
-.cnav a { color: var(--muted); text-decoration: none; font-size: 13px; padding: 4px 2px; border-bottom: 2px solid transparent; }
-.cnav a:hover { color: var(--text); }
-.cnav a.active { color: var(--text); border-bottom-color: var(--scope); }
-.cnav a:focus-visible { outline: 2px solid var(--scope); outline-offset: 2px; }
+.cnav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.cnav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  padding: 4px 2px;
+  border-bottom: 2px solid transparent;
+}
+.cnav a:hover {
+  color: var(--text);
+}
+.cnav a.active {
+  color: var(--text);
+  border-bottom-color: var(--scope);
+}
+.cnav a:focus-visible {
+  outline: 2px solid var(--scope);
+  outline-offset: 2px;
+}

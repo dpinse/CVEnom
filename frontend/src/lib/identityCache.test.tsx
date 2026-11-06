@@ -40,7 +40,9 @@ describe("I1: the query cache is identity-scoped", () => {
     const sessionCalls: string[] = [];
     server.use(
       http.get("http://localhost/api/health", () => HttpResponse.json({ status: "ok", public_read: true })),
-      http.get("http://localhost/api/lanes", () => HttpResponse.json({ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] })),
+      http.get("http://localhost/api/lanes", () =>
+        HttpResponse.json({ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] }),
+      ),
       http.get("http://localhost/api/auth/sessions", ({ request }) => {
         const auth = request.headers.get("Authorization");
         sessionCalls.push(auth ?? "none");
@@ -50,7 +52,11 @@ describe("I1: the query cache is identity-scoped", () => {
       }),
       http.post("http://localhost/api/auth/login", async ({ request }) => {
         const { email } = (await request.json()) as { email: string };
-        return HttpResponse.json({ access_token: email === A.email ? "tok-A" : "tok-B", token_type: "bearer", expires_in: 900 });
+        return HttpResponse.json({
+          access_token: email === A.email ? "tok-A" : "tok-B",
+          token_type: "bearer",
+          expires_in: 900,
+        });
       }),
       http.get("http://localhost/api/auth/me", ({ request }) =>
         HttpResponse.json(request.headers.get("Authorization") === "Bearer tok-A" ? A : B),
@@ -103,7 +109,9 @@ describe("I1: the query cache is identity-scoped", () => {
     );
     const qc = createQueryClient();
     unbind = bindQueryCacheToAuth(qc, authStore);
-    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
     const { result } = renderHook(() => useCve("CVE-2026-0001"), { wrapper });
     await new Promise((r) => setTimeout(r, 50));
     expect(seen).toEqual([]);

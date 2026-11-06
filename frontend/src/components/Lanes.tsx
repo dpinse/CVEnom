@@ -16,8 +16,20 @@ interface LaneDef {
   empty: string;
 }
 const DEFS: LaneDef[] = [
-  { key: "EXPLOITED", k: "exploited", title: "Exploited now", sub: "KEV-listed, last 30 days", empty: "No new KEV listings in the last 30 days" },
-  { key: "LIKELY", k: "likely", title: "Likely next", sub: "published ≤ 30 days, high EPSS", empty: "No likely-next CVEs" },
+  {
+    key: "EXPLOITED",
+    k: "exploited",
+    title: "Exploited now",
+    sub: "KEV-listed, last 30 days",
+    empty: "No new KEV listings in the last 30 days",
+  },
+  {
+    key: "LIKELY",
+    k: "likely",
+    title: "Likely next",
+    sub: "published ≤ 30 days, high EPSS",
+    empty: "No likely-next CVEs",
+  },
   { key: "LOUD", k: "loud", title: "Loud now", sub: "in the news", empty: "Quiet — no buzz" },
   { key: "FRESH", k: "fresh", title: "Fresh criticals", sub: "new and severe", empty: "No fresh criticals" },
 ];
@@ -66,11 +78,7 @@ export function LanesView({ lanes, stories = [], loading, error, retryAt, now, o
     <div className="lanes-wrap">
       {error ? (
         <div className="lanes-error" role="alert">
-          {!polls
-            ? "Sign in to see the lanes"
-            : rate
-              ? `Rate limited — ${when}`
-              : `Couldn't load the lanes — ${when}`}
+          {!polls ? "Sign in to see the lanes" : rate ? `Rate limited — ${when}` : `Couldn't load the lanes — ${when}`}
         </div>
       ) : null}
       <div className="lanes">

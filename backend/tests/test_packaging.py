@@ -90,6 +90,17 @@ def test_long_running_restart_and_redis_policy(compose):
     assert "volatile-ttl" in cmd and "--requirepass" in cmd
 
 
+def test_worker_and_beat_do_not_inherit_the_api_healthcheck(compose):
+    # backend/Dockerfile's HEALTHCHECK probes the api's port 8000; worker/beat serve no HTTP
+    # and would show "unhealthy" if they inherited it.
+    worker = compose["services"]["worker"]["healthcheck"]
+    assert worker["test"][0] == "CMD-SHELL"
+    assert "celery -A cvenom.tasks:celery_app inspect ping" in worker["test"][1]
+    assert "-d celery@$$HOSTNAME" in worker["test"][1]  # $$ = literal $ after compose escaping
+    assert "8000" not in worker["test"][1]
+    assert compose["services"]["beat"]["healthcheck"] == {"disable": True}
+
+
 def test_postgres_init_env_and_mounts(compose):
     pg = compose["services"]["postgres"]
     assert "${APP_DB_PASSWORD:?" in pg["environment"]["APP_DB_PASSWORD"]
@@ -234,16 +245,43 @@ def test_frontend_dockerfile_pinned_multistage_nonroot():
     assert (FRONTEND_DIR / ".dockerignore").exists()
 
 
+API_CSP = "default-src 'none'; frame-ancestors 'none'"
+
+
+def _csp_map(text):
+    """The `map $uri $csp { ... }` block as {key: value} (keys like 'default' and '~^/api/')."""
+    block = re.search(r"(?m)^map \$uri \$csp \{\n(.*?)^\}", text, re.S)
+    assert block, "map $uri $csp block"
+    return dict(re.findall(r'(?m)^\s*(\S+)\s+"([^"]*)";$', block.group(1)))
+
+
+def test_nginx_conf_per_uri_csp():
+    text = NGINX_CONF.read_text()
+    # Exactly one CSP header, at server level, from the map keyed on the normalised $uri (the
+    # path nginx matches locations against), never the raw $request_uri.
+    assert len(re.findall(r"add_header\s+Content-Security-Policy\s", text)) == 1
+    assert "add_header Content-Security-Policy $csp always;" in text
+    assert not re.search(r"(?m)^map\s+\S*\$request_uri", text)
+    csp = _csp_map(text)
+    assert set(csp) == {"default", "~^/api/"}
+    assert csp["~^/api/"] == API_CSP
+    from cvenom.api.middleware import CSP as APP_CSP  # nginx sends the api's own policy, not a looser one
+
+    assert csp["~^/api/"] == APP_CSP
+    spa = csp["default"]
+    assert "unsafe-" not in spa
+    for bad in ("blob:", "*"):
+        assert bad not in spa, bad
+    for d in ("default-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "base-uri 'none'",
+              "upgrade-insecure-requests"):
+        assert d in spa, d
+    # Both proxied locations still hide the api's own CSP, so /api/ responses carry exactly one.
+    assert text.count("proxy_hide_header Content-Security-Policy;") == 2
+
+
 def test_nginx_conf_csp_and_headers():
     text = NGINX_CONF.read_text()
     assert "server_tokens off" in text and "listen 8080" in text
-    csp = re.search(r'add_header Content-Security-Policy "([^"]+)" always;', text)
-    assert csp, "CSP add_header with always"
-    for bad in ("unsafe-inline", "unsafe-eval", "blob:", "*"):
-        assert bad not in csp.group(1), bad
-    for d in ("default-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "base-uri 'none'",
-              "upgrade-insecure-requests"):
-        assert d in csp.group(1), d
     for h in ("Strict-Transport-Security", "X-Content-Type-Options", "Referrer-Policy",
               "Permissions-Policy", "Cross-Origin-Opener-Policy", "Cross-Origin-Resource-Policy",
               "X-Frame-Options"):

@@ -34,7 +34,11 @@ function Situation() {
   const s = known ? situationLevel(lanes.data.EXPLOITED ?? [], now) : null;
   const label = s ? s.level : "Unavailable";
   return (
-    <div className="situation" data-level={s?.level ?? "Unknown"} title="Situation level, driven by live-exploited vulnerabilities">
+    <div
+      className="situation"
+      data-level={s?.level ?? "Unknown"}
+      title="Situation level, driven by live-exploited vulnerabilities"
+    >
       <div className="sgauge" role="img" aria-label={`Situation: ${label}`}>
         {[0, 1, 2, 3].map((i) => (
           <i key={i} className={s && i < s.lit ? "lit" : undefined} />

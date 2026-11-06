@@ -2,7 +2,7 @@ import { HttpResponse, delay, http } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { makeHub, makeLocks } from "../test/coord";
-import { createApiClient, type ApiClient } from "./api";
+import { AuthError, createApiClient, type ApiClient } from "./api";
 import { createAuth } from "./auth";
 import { createTokenStore } from "./tokenStore";
 
@@ -64,7 +64,9 @@ describe("auth store", () => {
   });
 
   test("bad credentials surface as ApiError and leave the user a guest", async () => {
-    server.use(http.post(`${B}/auth/login`, () => HttpResponse.json({ error: "invalid_credentials" }, { status: 401 })));
+    server.use(
+      http.post(`${B}/auth/login`, () => HttpResponse.json({ error: "invalid_credentials" }, { status: 401 })),
+    );
     const { auth } = mk();
     await expect(auth.login("a@b.co", "x")).rejects.toMatchObject({ status: 401, code: "invalid_credentials" });
     expect(auth.getToken()).toBeNull();
@@ -73,7 +75,9 @@ describe("auth store", () => {
 
   test("logout clears memory even if the server call fails; unsubscribe stops notifications", async () => {
     server.use(
-      http.post(`${B}/auth/login`, () => HttpResponse.json({ access_token: "t", token_type: "bearer", expires_in: 900 })),
+      http.post(`${B}/auth/login`, () =>
+        HttpResponse.json({ access_token: "t", token_type: "bearer", expires_in: 900 }),
+      ),
       meHandler(),
       http.post(`${B}/auth/logout`, () => HttpResponse.error()),
     );
@@ -130,7 +134,7 @@ describe("auth store", () => {
 
 // ---- cross-tab identity ----------------------------------------------------
 
-const b64u = (o: unknown) => btoa(JSON.stringify(o)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+const b64u = (o: unknown) => btoa(JSON.stringify(o)).replace(/=+$/g, "").replaceAll("+", "-").replaceAll("/", "_");
 const jwt = (sub: number) => `${b64u({ alg: "none" })}.${b64u({ sub: String(sub) })}.sig`;
 const userFor = (n: number) => ({ id: n, email: `u${n}@x.co`, role: "member" as const });
 
@@ -140,7 +144,9 @@ function identityServer(opts: { refreshAs?: () => number; failLogout?: boolean }
     http.get(`${B}/auth/me`, ({ request }) => {
       const t = request.headers.get("authorization")?.slice(7) ?? "";
       const sub = Number(JSON.parse(atob(t.split(".")[1] ?? "e30=")).sub);
-      return Number.isFinite(sub) ? HttpResponse.json(userFor(sub)) : HttpResponse.json({ error: "x" }, { status: 401 });
+      return Number.isFinite(sub)
+        ? HttpResponse.json(userFor(sub))
+        : HttpResponse.json({ error: "x" }, { status: 401 });
     }),
     http.post(`${B}/auth/login`, async ({ request }) => {
       const { email } = (await request.json()) as { email: string };
@@ -180,7 +186,9 @@ const tick = () => new Promise((r) => setTimeout(r, 10));
 describe("cross-tab identity", () => {
   test("logout in one tab clears the others", async () => {
     identityServer();
-    const { tabs: [a, b] } = tabs();
+    const {
+      tabs: [a, b],
+    } = tabs();
     await a.auth.login("u1@x.co", "pw");
     await b.auth.login("u1@x.co", "pw"); // same user: both signed in
     await tick();
@@ -193,7 +201,10 @@ describe("cross-tab identity", () => {
 
   test("a logout by a different user does not clear this tab", async () => {
     identityServer();
-    const { tabs: [a], hub } = tabs();
+    const {
+      tabs: [a],
+      hub,
+    } = tabs();
     await a.auth.login("u1@x.co", "pw");
     hub.channel().postMessage({ type: "logout", sub: "2" });
     await tick();
@@ -202,7 +213,10 @@ describe("cross-tab identity", () => {
 
   test("a guest tab is not signed in by a peer's refresh", async () => {
     identityServer();
-    const { tabs: [b], hub } = tabs();
+    const {
+      tabs: [b],
+      hub,
+    } = tabs();
     expect(b.store.getToken()).toBeNull(); // guest
     hub.channel().postMessage({ type: "refreshed", access_token: jwt(1), expires_in: 900, sub: "1" });
     await tick();
@@ -212,7 +226,10 @@ describe("cross-tab identity", () => {
 
   test("failed server logout followed by a peer broadcast does not sign the tab back in", async () => {
     identityServer({ failLogout: true });
-    const { tabs: [a], hub } = tabs();
+    const {
+      tabs: [a],
+      hub,
+    } = tabs();
     await a.auth.login("u1@x.co", "pw");
     await a.auth.logout(); // server call fails, local state still cleared
     expect(a.store.getToken()).toBeNull();
@@ -224,7 +241,9 @@ describe("cross-tab identity", () => {
 
   test("a refresh that returns a different user's token updates the displayed user", async () => {
     identityServer({ refreshAs: () => 1 });
-    const { tabs: [a] } = tabs();
+    const {
+      tabs: [a],
+    } = tabs();
     await a.auth.login("u2@x.co", "pw"); // shows user 2, token jwt(2): /cves 401s
     expect(a.auth.getSnapshot().user?.id).toBe(2);
     await a.client.api("/cves"); // 401 -> refresh returns user 1's token -> retry ok
@@ -233,7 +252,10 @@ describe("cross-tab identity", () => {
 
   test("a peer's refreshed broadcast for another user reloads /me in a signed-in tab", async () => {
     identityServer();
-    const { tabs: [a], hub } = tabs();
+    const {
+      tabs: [a],
+      hub,
+    } = tabs();
     await a.auth.login("u2@x.co", "pw");
     hub.channel().postMessage({ type: "refreshed", access_token: jwt(1), expires_in: 900, sub: "1" });
     await vi.waitFor(() => expect(a.auth.getSnapshot().user?.id).toBe(1));
@@ -242,7 +264,10 @@ describe("cross-tab identity", () => {
 
   test("a login event for a different user adopts the token and reloads /me; same user is ignored", async () => {
     identityServer();
-    const { tabs: [a], hub } = tabs();
+    const {
+      tabs: [a],
+      hub,
+    } = tabs();
     await a.auth.login("u2@x.co", "pw");
     const peer = hub.channel();
     peer.postMessage({ type: "login", sub: "2", access_token: jwt(55), expires_in: 900 });
@@ -255,36 +280,75 @@ describe("cross-tab identity", () => {
 
   test("login in another tab as a different user switches this tab's identity", async () => {
     identityServer();
-    const { tabs: [a, b] } = tabs();
+    const {
+      tabs: [a, b],
+    } = tabs();
     await a.auth.login("u2@x.co", "pw");
     await b.auth.login("u1@x.co", "pw");
     await vi.waitFor(() => expect(a.auth.getSnapshot().user?.id).toBe(1));
   });
 
-  test("a /me that started before a logout does not set a user afterwards", async () => {
+  // Discriminates loadMe's epoch guard: after a logout and a login as the SAME user the token is
+  // non-null and carries the same sub, so neither the `!t` nor the sub check can tell the stale /me
+  // apart. Only the epoch does.
+  test("logout, then login while a stale /me is pending: the stale /me does not overwrite the new session's user", async () => {
     identityServer();
+    let meCalls = 0;
     server.use(
-      http.get(`${B}/auth/me`, async ({ request }) => {
-        await delay(60);
-        const t = request.headers.get("authorization")?.slice(7) ?? "";
-        return HttpResponse.json(userFor(Number(JSON.parse(atob(t.split(".")[1])).sub)));
+      http.get(`${B}/auth/me`, async () => {
+        meCalls++;
+        if (meCalls > 1) return HttpResponse.json(userFor(1));
+        await delay(120);
+        return HttpResponse.json({ ...userFor(1), role: "admin" }); // the old session's view of user 1
       }),
     );
-    const { tabs: [a], hub } = tabs();
+    const {
+      tabs: [a],
+      hub,
+    } = tabs(1);
     a.client.adopt(jwt(2), 900);
-    const peer = hub.channel();
-    peer.postMessage({ type: "refreshed", access_token: jwt(1), expires_in: 900, sub: "1" }); // starts /me
-    await tick();
-    peer.postMessage({ type: "logout", sub: null });
-    await new Promise((r) => setTimeout(r, 150));
+    hub.channel().postMessage({ type: "refreshed", access_token: jwt(1), expires_in: 900, sub: "1" }); // starts the slow /me
+    await vi.waitFor(() => expect(meCalls).toBe(1));
+    await a.auth.logout();
+    await a.auth.login("u1@x.co", "pw"); // its own /me answers at once
+    expect(a.auth.getSnapshot().user).toEqual(userFor(1));
+    await new Promise((r) => setTimeout(r, 200)); // the stale /me has resolved by now
+    expect(meCalls).toBe(2);
+    expect(a.store.getToken()).toBe(jwt(1));
+    expect(a.auth.getSnapshot().user).toEqual(userFor(1));
+  });
+
+  // Discriminates loadMe's `!t` check. In the app the token only empties through client.clear(),
+  // which also bumps the epoch, so this guards the store being emptied directly (the test shell's
+  // authStore.clear() does that). With a token that has no `sub`, the sub check cannot catch it.
+  test("a /me that resolves after the store was emptied directly does not set a user", async () => {
+    let meCalls = 0;
+    server.use(
+      http.get(`${B}/auth/me`, async () => {
+        meCalls++;
+        await delay(60);
+        return HttpResponse.json(userFor(3));
+      }),
+    );
+    const {
+      tabs: [a],
+      hub,
+    } = tabs(1);
+    a.client.adopt("opaque-1", 900);
+    hub.channel().postMessage({ type: "refreshed", access_token: "opaque-2", expires_in: 900, sub: null }); // no user yet: /me
+    await vi.waitFor(() => expect(meCalls).toBe(1));
+    a.store.clear(); // no client.clear(): the epoch does not move
+    await new Promise((r) => setTimeout(r, 120));
     expect(a.store.getToken()).toBeNull();
-    expect(a.auth.getSnapshot().user).toBeNull();
+    expect(a.auth.getSnapshot()).toMatchObject({ authenticated: false, user: null });
   });
 
   test("if /me fails after login the server session is logged out before local state clears", async () => {
     const calls = { logout: 0 };
     server.use(
-      http.post(`${B}/auth/login`, () => HttpResponse.json({ access_token: "t", token_type: "bearer", expires_in: 900 })),
+      http.post(`${B}/auth/login`, () =>
+        HttpResponse.json({ access_token: "t", token_type: "bearer", expires_in: 900 }),
+      ),
       http.get(`${B}/auth/me`, () => HttpResponse.json({ error: "boom" }, { status: 500 })),
       http.post(`${B}/auth/logout`, () => {
         calls.logout++;
@@ -296,4 +360,46 @@ describe("cross-tab identity", () => {
     expect(calls.logout).toBe(1);
     expect(store.getToken()).toBeNull();
   });
+});
+
+// ---- logout -> login while the old session's refresh is still in flight -------------------------
+// The refresh began before the logout, so its result belongs to the old session. The epoch guards in
+// doRefresh must drop it whether it is a 200 (a rotated token of the old session) or a 401: the new
+// session keeps its token and user, nothing is logged out, and nothing throws unhandled. The caller
+// that triggered the old refresh still gets AuthError (the deferred, benign case in the Plan 4 ledger).
+
+describe("logout -> login while the old session's refresh is in flight", () => {
+  const late = {
+    "200 (a rotated token of the old session)": () =>
+      HttpResponse.json({ access_token: jwt(9), token_type: "bearer", expires_in: 900 }),
+    "401": () => HttpResponse.json({ error: "invalid_token" }, { status: 401 }),
+  };
+  for (const [label, reply] of Object.entries(late)) {
+    test(`a late ${label} is ignored and does not log out the new session`, async () => {
+      identityServer();
+      const calls = { refresh: 0 };
+      server.use(
+        http.post(`${B}/auth/refresh`, async () => {
+          calls.refresh++;
+          await delay(100);
+          return reply();
+        }),
+      );
+      const { auth, store, client } = mk();
+      await auth.login("u2@x.co", "pw"); // jwt(2): /cves answers 401, so the next call refreshes
+      const old = client.api("/cves").then(
+        () => "resolved",
+        (e: unknown) => e,
+      );
+      await vi.waitFor(() => expect(calls.refresh).toBe(1));
+      await auth.logout();
+      await auth.login("u2@x.co", "pw");
+      expect(store.getToken()).toBe(jwt(2));
+      expect(await old).toBeInstanceOf(AuthError); // the old session's caller, settled after the late reply
+      await tick();
+      expect(calls.refresh).toBe(1);
+      expect(store.getToken()).toBe(jwt(2));
+      expect(auth.getSnapshot()).toMatchObject({ authenticated: true, user: userFor(2) });
+    });
+  }
 });

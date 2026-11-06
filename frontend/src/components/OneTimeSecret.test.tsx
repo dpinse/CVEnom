@@ -9,7 +9,9 @@ afterEach(() => {
 
 const SECRET = "tok-SECRET-0123456789abcdef";
 const panel = (onDone = () => undefined) =>
-  render(<OneTimeSecret title="Secret" label="The value" value={SECRET} expiresAt="2026-11-08T00:00:00Z" onDone={onDone} />);
+  render(
+    <OneTimeSecret title="Secret" label="The value" value={SECRET} expiresAt="2026-11-08T00:00:00Z" onDone={onDone} />,
+  );
 
 describe("OneTimeSecret", () => {
   test("shows a read-only monospace field, the warning, and the expiry", () => {

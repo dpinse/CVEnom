@@ -152,7 +152,9 @@ describe("hooks", () => {
     const g = renderHook(() => useGeo(), { wrapper });
     const l = renderHook(() => useLoudStories(10), { wrapper });
     const c = renderHook(() => useCve("CVE-2025-1"), { wrapper });
-    const s = renderHook(() => useCveSearch({ q: "log4j", kev: true, min_cvss: 7, page: 2, lane: undefined }), { wrapper });
+    const s = renderHook(() => useCveSearch({ q: "log4j", kev: true, min_cvss: 7, page: 2, lane: undefined }), {
+      wrapper,
+    });
     await waitFor(() => {
       for (const h of [v, g, l, c, s]) expect(h.result.current.isSuccess).toBe(true);
     });
@@ -245,7 +247,9 @@ describe("I3: error-state polling", () => {
       server.use(
         http.get(`${B}/lanes`, () => {
           calls++;
-          return calls === 1 ? HttpResponse.json({ error: "gone" }, { status: 404 }) : HttpResponse.json({ EXPLOITED: [] });
+          return calls === 1
+            ? HttpResponse.json({ error: "gone" }, { status: 404 })
+            : HttpResponse.json({ EXPLOITED: [] });
         }),
       );
       const { result } = renderHook(() => useLanes(), { wrapper });
@@ -295,7 +299,15 @@ describe("history and country hooks", () => {
     server.use(
       http.get(`${B}/story`, ({ request }) => {
         seen = new URL(request.url).search;
-        return HttpResponse.json({ title: "t", summary: "", url, source: "s", published: "2026-11-01T00:00:00Z", cve_ids: [], details: {} });
+        return HttpResponse.json({
+          title: "t",
+          summary: "",
+          url,
+          source: "s",
+          published: "2026-11-01T00:00:00Z",
+          cve_ids: [],
+          details: {},
+        });
       }),
     );
     const off = renderHook(() => useStory(undefined), { wrapper });
@@ -323,7 +335,14 @@ describe("history and country hooks", () => {
     server.use(
       http.get(`${B}/geo/DE`, ({ request }) => {
         seen = new URL(request.url).search;
-        return HttpResponse.json({ country_code: "DE", window_hours: 48, counts: [], top_sources: [], trend: [], events: null });
+        return HttpResponse.json({
+          country_code: "DE",
+          window_hours: 48,
+          counts: [],
+          top_sources: [],
+          trend: [],
+          events: null,
+        });
       }),
     );
     const off = renderHook(() => useCountry(undefined), { wrapper });

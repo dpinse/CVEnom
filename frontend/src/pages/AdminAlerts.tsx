@@ -48,7 +48,13 @@ function TestSend({ rule }: { rule: AlertRule }) {
   return (
     <div className="admin-section" style={{ margin: 0 }}>
       <div className="admin-row">
-        <button type="button" className="btn" disabled={test.isPending || rule.recipients.length === 0} aria-describedby={hint} onClick={() => test.mutate()}>
+        <button
+          type="button"
+          className="btn"
+          disabled={test.isPending || rule.recipients.length === 0}
+          aria-describedby={hint}
+          onClick={() => test.mutate()}
+        >
           {test.isPending && <span className="spinner" aria-hidden="true" />}
           {test.isPending ? "Sending test…" : "Send test"}
         </button>
@@ -93,7 +99,10 @@ export default function AdminAlerts() {
   const editBtns = useRef(new Map<number, HTMLButtonElement>());
   const delBtns = useRef(new Map<number, HTMLButtonElement>());
 
-  const rules = useQuery({ queryKey: qk.rules(), queryFn: ({ signal }) => api<AlertRule[]>("/alerts/rules", { signal }) });
+  const rules = useQuery({
+    queryKey: qk.rules(),
+    queryFn: ({ signal }) => api<AlertRule[]>("/alerts/rules", { signal }),
+  });
 
   useEffect(() => {
     if (confirming !== null) confirmBtn.current?.focus();
@@ -157,7 +166,13 @@ export default function AdminAlerts() {
           <h2 ref={listHead} tabIndex={-1}>
             Rules
           </h2>
-          <button ref={newBtn} type="button" className="btn primary" disabled={creating} onClick={() => setCreating(true)}>
+          <button
+            ref={newBtn}
+            type="button"
+            className="btn primary"
+            disabled={creating}
+            onClick={() => setCreating(true)}
+          >
             New rule
           </button>
         </div>
@@ -211,7 +226,13 @@ export default function AdminAlerts() {
                     {confirming === r.id ? (
                       <span className="confirm">
                         <span>Delete this rule and its recipients?</span>
-                        <button ref={confirmBtn} type="button" className="btn danger" disabled={del.isPending} onClick={() => del.mutate(r)}>
+                        <button
+                          ref={confirmBtn}
+                          type="button"
+                          className="btn danger"
+                          disabled={del.isPending}
+                          onClick={() => del.mutate(r)}
+                        >
                           Confirm delete
                         </button>
                         <button type="button" className="btn" onClick={() => cancelDelete(r.id)}>

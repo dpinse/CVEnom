@@ -46,7 +46,16 @@ describe("decodeEntities edge cases", () => {
     expect(decodeEntities("&nbsp; &apos; & &amp &#;")).toBe("&nbsp; &apos; & &amp &#;");
   });
   test("invalid numeric code points stay literal", () => {
-    for (const bad of ["&#0;", "&#x0;", "&#1114112;", "&#x110000;", "&#xD800;", "&#55357;", "&#xDFFF;", "&#99999999999999999999;"])
+    for (const bad of [
+      "&#0;",
+      "&#x0;",
+      "&#1114112;",
+      "&#x110000;",
+      "&#xD800;",
+      "&#55357;",
+      "&#xDFFF;",
+      "&#99999999999999999999;",
+    ])
       expect(decodeEntities(bad)).toBe(bad);
   });
   test("valid astral code point decodes", () => {
@@ -81,7 +90,19 @@ describe("<Text>", () => {
 
 describe("safeHref edge cases", () => {
   test("rejects control characters, inner whitespace, relative and protocol-relative", () => {
-    for (const bad of ["https://x\n.org", "https://x .org", "https://x\t.org", "\u0000https://x", "https://x\u0000", "//evil", "/relative", "x.org/a", "mailto:a@b.c", "vbscript:x", "https://\u2028x"])
+    for (const bad of [
+      "https://x\n.org",
+      "https://x .org",
+      "https://x\t.org",
+      "\u0000https://x",
+      "https://x\u0000",
+      "//evil",
+      "/relative",
+      "x.org/a",
+      "mailto:a@b.c",
+      "vbscript:x",
+      "https://\u2028x",
+    ])
       expect(safeHref(bad)).toBeNull();
   });
   test("surrounding whitespace is trimmed (documented), result is normalized", () => {

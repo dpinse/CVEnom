@@ -271,7 +271,16 @@ describe("messages and invalidation", () => {
   test("ping and malformed messages are ignored and do not crash", async () => {
     const r = await live({ publicRead: true });
     const before = { ...r.counts };
-    for (const m of [{ type: "ping" }, "{not json", "null", "42", '"str"', "[]", { type: "updated" }, { what: ["lanes"] }]) {
+    for (const m of [
+      { type: "ping" },
+      "{not json",
+      "null",
+      "42",
+      '"str"',
+      "[]",
+      { type: "updated" },
+      { what: ["lanes"] },
+    ]) {
       expect(() => last().msg(m)).not.toThrow();
     }
     last().onmessage?.({ data: new ArrayBuffer(4) });
@@ -328,7 +337,9 @@ describe("close handling", () => {
       channel: null,
       fetchFn: ((u: RequestInfo | URL) => {
         refreshCalls.push(String(u));
-        return Promise.resolve(Response.json({ access_token: "tok-rotated-again", token_type: "bearer", expires_in: 900 }));
+        return Promise.resolve(
+          Response.json({ access_token: "tok-rotated-again", token_type: "bearer", expires_in: 900 }),
+        );
       }) as typeof fetch,
     });
     const qc = createQueryClient();
@@ -488,7 +499,8 @@ describe("close handling", () => {
   test("a health fetch failure is retried with backoff", async () => {
     const r = setup({ publicRead: true });
     let calls = 0;
-    r.deps.getHealth = () => (++calls < 2 ? Promise.reject(new Error("down")) : Promise.resolve({ status: "ok", public_read: true }));
+    r.deps.getHealth = () =>
+      ++calls < 2 ? Promise.reject(new Error("down")) : Promise.resolve({ status: "ok", public_read: true });
     const ctl = createLiveController(r.qc, r.deps);
     ctl.start();
     await flush();

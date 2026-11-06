@@ -109,7 +109,8 @@ export function usePager(update: (patch: Patch, push?: boolean) => void) {
     const el = countRef.current;
     if (el) {
       el.focus({ preventScroll: true });
-      const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const reduce =
+        typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       el.scrollIntoView?.({ behavior: reduce ? "auto" : "smooth", block: "start" });
     }
   };

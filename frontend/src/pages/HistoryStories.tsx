@@ -36,7 +36,17 @@ export function parseStoryFilters(sp: URLSearchParams): StoryQuery & { page: num
   return out;
 }
 
-function Row({ story, now, onOpen, onCve }: { story: StoryItem; now: Date; onOpen: (url: string) => void; onCve: (id: string) => void }) {
+function Row({
+  story,
+  now,
+  onOpen,
+  onCve,
+}: {
+  story: StoryItem;
+  now: Date;
+  onOpen: (url: string) => void;
+  onCve: (id: string) => void;
+}) {
   const ids = story.cve_ids ?? [];
   return (
     <li className="hrow" data-testid="history-story">
@@ -106,7 +116,13 @@ export default function HistoryStories() {
       <form className="sfilters" role="search" onSubmit={(e) => e.preventDefault()}>
         <label className="f f-q">
           <span>Search stories</span>
-          <input type="search" maxLength={MAX_Q} value={q.qText} onChange={(e) => q.onChange(e.target.value)} autoComplete="off" />
+          <input
+            type="search"
+            maxLength={MAX_Q}
+            value={q.qText}
+            onChange={(e) => q.onChange(e.target.value)}
+            autoComplete="off"
+          />
         </label>
         <label className="f">
           <span>Story source</span>
@@ -145,9 +161,20 @@ export default function HistoryStories() {
         </p>
       )}
       <p className="scount" aria-live="polite" tabIndex={-1} ref={countRef}>
-        {data ? (total === 0 ? "0 results" : outOfRange ? "" : `Showing ${first}–${last} of ${total}`) : isFetching ? "Loading…" : ""}
+        {data
+          ? total === 0
+            ? "0 results"
+            : outOfRange
+              ? ""
+              : `Showing ${first}–${last} of ${total}`
+          : isFetching
+            ? "Loading…"
+            : ""}
       </p>
-      {data && items.length === 0 && !errorText && (outOfRange ? <OutOfRange /> : <p className="sempty">No stories match these filters</p>)}
+      {data &&
+        items.length === 0 &&
+        !errorText &&
+        (outOfRange ? <OutOfRange /> : <p className="sempty">No stories match these filters</p>)}
       {items.length > 0 && (
         <ul className="hlist" aria-busy={isPlaceholderData}>
           {items.map((s, i) => (

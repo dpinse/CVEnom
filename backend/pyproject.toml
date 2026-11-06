@@ -36,6 +36,7 @@ dev = [
     "respx>=0.22",
     "mmdb-writer>=0.2.7",
     "fakeredis[lua]>=2.26",
+    "watchfiles>=1.0",
 ]
 
 [tool.setuptools.packages.find]

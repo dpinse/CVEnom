@@ -43,7 +43,9 @@ const many = (n: number) => Array.from({ length: n }, (_, i) => item({ cve_id: `
 
 describe("parseFilters", () => {
   test("drops invalid values", () => {
-    const f = parseFilters(new URLSearchParams("lane=BOGUS&source=x&min_cvss=11&from=2026-13-45&to=nope&page=0&kev=maybe"));
+    const f = parseFilters(
+      new URLSearchParams("lane=BOGUS&source=x&min_cvss=11&from=2026-13-45&to=nope&page=0&kev=maybe"),
+    );
     expect(f).toEqual({ page: 1 });
     expect(parseFilters(new URLSearchParams("min_cvss=abc&page=1.5")).min_cvss).toBeUndefined();
     expect(parseFilters(new URLSearchParams("page=1.5")).page).toBe(1);
@@ -230,7 +232,13 @@ describe("History page (CVEs)", () => {
   });
 
   test("422 shows a message and resets the page to 1", async () => {
-    api(() => new HttpResponse(JSON.stringify({ detail: "bad" }), { status: 422, headers: { "content-type": "application/json" } }));
+    api(
+      () =>
+        new HttpResponse(JSON.stringify({ detail: "bad" }), {
+          status: 422,
+          headers: { "content-type": "application/json" },
+        }),
+    );
     renderAt(ui, "/history?page=3");
     expect(await screen.findByText("Some filters aren't valid")).toBeInTheDocument();
     await waitFor(() => expect(lastUrl).not.toContain("page="));
@@ -285,7 +293,12 @@ const story = (o: Partial<StoryItem> = {}): StoryItem => ({
   cve_ids: ["CVE-2026-0001"],
   ...o,
 });
-const sList = (items = [story()], total = items.length, page = 1): StoryListOut => ({ items, page, page_size: 50, total });
+const sList = (items = [story()], total = items.length, page = 1): StoryListOut => ({
+  items,
+  page,
+  page_size: 50,
+  total,
+});
 
 describe("parseFilters (Task 8 additions)", () => {
   test("reads kev_from / kev_to / sort and drops invalid values", () => {
@@ -298,7 +311,9 @@ describe("parseFilters (Task 8 additions)", () => {
 
 describe("parseStoryFilters", () => {
   test("reads q, source, from, to, page; truncates and drops invalid", () => {
-    const f = parseStoryFilters(new URLSearchParams(`q=${"a".repeat(201)}&source=${"b".repeat(80)}&from=2026-01-01&to=nope&page=3`));
+    const f = parseStoryFilters(
+      new URLSearchParams(`q=${"a".repeat(201)}&source=${"b".repeat(80)}&from=2026-01-01&to=nope&page=3`),
+    );
     expect(f.q).toHaveLength(200);
     expect(f.source).toHaveLength(64);
     expect(f.from).toBe("2026-01-01");

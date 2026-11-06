@@ -25,9 +25,33 @@ const GOOD = "a long enough pass";
 function app(path: string) {
   return renderAt(
     <Routes>
-      <Route path="/invite" element={<><AcceptInvite mode="invite" /><HashProbe /></>} />
-      <Route path="/reset" element={<><AcceptInvite mode="reset" /><HashProbe /></>} />
-      <Route path="/login" element={<><Login /><Where /></>} />
+      <Route
+        path="/invite"
+        element={
+          <>
+            <AcceptInvite mode="invite" />
+            <HashProbe />
+          </>
+        }
+      />
+      <Route
+        path="/reset"
+        element={
+          <>
+            <AcceptInvite mode="reset" />
+            <HashProbe />
+          </>
+        }
+      />
+      <Route
+        path="/login"
+        element={
+          <>
+            <Login />
+            <Where />
+          </>
+        }
+      />
       <Route path="*" element={<Where />} />
     </Routes>,
     path,
@@ -110,7 +134,11 @@ describe("AcceptInvite form", () => {
   test("invite mode: failed auto-login goes to /login with a notice", async () => {
     guest();
     accept(201, { id: 5, email: "new@example.com", role: "member" });
-    server.use(http.post("http://localhost/api/auth/login", () => HttpResponse.json({ error: "invalid_credentials" }, { status: 401 })));
+    server.use(
+      http.post("http://localhost/api/auth/login", () =>
+        HttpResponse.json({ error: "invalid_credentials" }, { status: 401 }),
+      ),
+    );
     app(`/invite#${TOKEN}`);
     fill("New password", GOOD);
     fill("Confirm password", GOOD);
@@ -163,7 +191,11 @@ describe("AcceptInvite form", () => {
     fill("Confirm password", GOOD);
     submit();
     expect(await screen.findByText(/12 to 256 characters/)).toBeInTheDocument();
-    server.use(http.post("http://localhost/api/auth/invites/accept", () => HttpResponse.json({}, { status: 429, headers: { "Retry-After": "9" } })));
+    server.use(
+      http.post("http://localhost/api/auth/invites/accept", () =>
+        HttpResponse.json({}, { status: 429, headers: { "Retry-After": "9" } }),
+      ),
+    );
     submit();
     expect(await screen.findByText("Too many attempts — try again in 9 seconds")).toBeInTheDocument();
   });
@@ -306,18 +338,21 @@ describe("M2: the token travels in the URL fragment", () => {
     expect(body).toEqual({ token: TOKEN, password: GOOD });
   });
 
-  test.each(["/invite", "/invite#", "/reset", "/reset#"])("%s (no token) shows the invalid-link state and never posts", async (path) => {
-    guest();
-    let called = false;
-    accept(201, {}, () => (called = true));
-    app(path);
-    expect(await screen.findByText("This link is invalid or expired")).toBeInTheDocument();
-    fill("New password", GOOD);
-    fill("Confirm password", GOOD);
-    submit();
-    await new Promise((r) => setTimeout(r, 20));
-    expect(called).toBe(false);
-  });
+  test.each(["/invite", "/invite#", "/reset", "/reset#"])(
+    "%s (no token) shows the invalid-link state and never posts",
+    async (path) => {
+      guest();
+      let called = false;
+      accept(201, {}, () => (called = true));
+      app(path);
+      expect(await screen.findByText("This link is invalid or expired")).toBeInTheDocument();
+      fill("New password", GOOD);
+      fill("Confirm password", GOOD);
+      submit();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(called).toBe(false);
+    },
+  );
 
   test("the old /invite/<token> path form is not a route", async () => {
     guest();

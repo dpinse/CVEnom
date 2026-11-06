@@ -3,6 +3,8 @@
 CVEnom is a self-hosted, internet-facing service. Cloudflare in front is welcome but the origin must
 be safe without it.
 
+Looking to hack on CVEnom instead? See [development.md](development.md) (hot-reload dev stack).
+
 ## First run
 
 ```sh
@@ -41,6 +43,22 @@ through `env_file`, but compose blanks `POSTGRES_PASSWORD`, `APP_DB_PASSWORD` an
 in their environment: the app only needs those inside `DATABASE_URL` / `REDIS_URL`.
 `REQUIRE_SECRETS_KEY=true` makes the API refuse to start when `SECRETS_KEY` is missing or invalid
 (the worker logs the error and keeps running).
+
+## First scrape and manual runs
+
+When the worker starts it queues a run of every stale collector: one that has never run (no
+`collector_run` row, or NULL `last_run`) or whose last run is older than its cadence. A fresh deploy
+fills in right away, while an ordinary restart only re-runs what is due. If the database is
+unreachable at that moment nothing is queued and the beat schedule covers it. Collectors without a
+key skip, and the per-collector Redis lock prevents double runs. To force every collector
+regardless of staleness:
+
+```sh
+docker compose --env-file ./.env -f deploy/docker-compose.prod.yml exec worker python -c "from cvenom.tasks import REGISTRY, run_collector_task as t; [t.delay(n) for n in REGISTRY]"
+```
+
+The `worker` container is health-checked with `celery inspect ping`; `beat` has its health check
+disabled (it serves no HTTP) and is supervised by `restart: unless-stopped`.
 
 ## Cloudflare and reverse proxies
 
@@ -151,12 +169,16 @@ host name over http is not exempt.
 ## Content Security Policy and security headers
 
 nginx sends these on every response (`always`, including errors); proxied `/api` responses keep
-the API's other headers (such as `Cache-Control`):
+the API's other headers (such as `Cache-Control`). The CSP depends on the path:
 
 ```
+# the SPA (everything outside /api/)
 Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;
   font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none';
   base-uri 'none'; form-action 'self'; upgrade-insecure-requests
+# /api/ (JSON, the /api/ws/live handshake, and nginx's own 502/504 pages for /api/)
+Content-Security-Policy: default-src 'none'; frame-ancestors 'none'
+# both
 Strict-Transport-Security: max-age=63072000; includeSubDomains
 X-Content-Type-Options: nosniff    Referrer-Policy: no-referrer    X-Frame-Options: DENY
 Cross-Origin-Opener-Policy: same-origin    Cross-Origin-Resource-Policy: same-origin
@@ -166,8 +188,11 @@ Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
 There is no `unsafe-inline`, `unsafe-eval`, `blob:` or remote origin. `connect-src 'self'` covers
 the same-origin `wss://` live socket in current Chromium and Firefox (checked by
 `frontend/e2e/csp.spec.ts`, which serves `dist/` with exactly the headers parsed from
-`nginx.conf`). Fonts are real files (never `data:` URIs) because of `font-src 'self'`; the map
-worker is a same-origin module worker; React and MapLibre set styles through the CSSOM, which
+`nginx.conf`, the per-path CSP map included). The policy is picked by a single `map $uri $csp`
+and one server-level `add_header`; `$uri` is the normalised path nginx also matches locations
+against, so a request gets the `/api/` policy exactly when one of the `/api/` locations serves
+it. Fonts are real files (never `data:` URIs) because of `font-src 'self'`; the map worker is a
+same-origin module worker; React and MapLibre set styles through the CSSOM, which
 `style-src 'self'` allows. `index.html` carries no inline script or style.
 
 - **API docs.** FastAPI mounts `/docs`, `/redoc` and `/openapi.json` at the root, outside `/api/`,
@@ -178,13 +203,9 @@ worker is a same-origin module worker; React and MapLibre set styles through the
   deliberately no nginx route for them; keep `API_DOCS=false`.
 - **Response headers.** The api sets CSP, HSTS, nosniff, Referrer-Policy and X-Frame-Options itself;
   nginx hides those five from `/api/` responses (`proxy_hide_header`) and sends its own, so each
-  appears exactly once. HSTS, nosniff, Referrer-Policy and X-Frame-Options match or exceed the
-  api's. The CSP does not: the SPA policy replaces the api's stricter `default-src 'none';
-  frame-ancestors 'none'` on `/api/` responses. That is acceptable because those responses are JSON
-  served with `nosniff` (a browser will not run or render them as a document), and framing is still
-  refused by `frame-ancestors 'none'` and `X-Frame-Options: DENY`. A per-URI CSP (the api's policy
-  on `/api/`) is a possible future hardening. Any other api header (`Cache-Control`, ...) passes
-  through untouched.
+  appears exactly once. All five match or exceed the api's; on `/api/` the CSP nginx sends is the
+  api's own `default-src 'none'; frame-ancestors 'none'`. Any other api header (`Cache-Control`,
+  ...) passes through untouched.
 - **X-Forwarded-Proto.** nginx passes the gateway's `X-Forwarded-Proto` through only when the peer is
   the trusted gateway and the value is exactly `http` or `https` (cloudflared connects over plain
   http, so `$scheme` alone would always say `http`); otherwise it sends `$scheme`.

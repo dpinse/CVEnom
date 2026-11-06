@@ -20,7 +20,9 @@ export function setupMsw(opts: { ready?: boolean } = {}) {
   beforeAll(() => {
     server.listen({ onUnhandledRequest: "error" });
     const mswFetch = globalThis.fetch;
-    vi.stubGlobal("fetch", (u: RequestInfo | URL, i?: RequestInit) => mswFetch(new URL(String(u), "http://localhost"), i));
+    vi.stubGlobal("fetch", (u: RequestInfo | URL, i?: RequestInit) =>
+      mswFetch(new URL(String(u), "http://localhost"), i),
+    );
   });
   afterEach(() => {
     server.resetHandlers();
@@ -64,7 +66,9 @@ export const lanes = (exploited: CveItem[] = [], rest: Partial<LanesOut> = {}): 
 
 export function handlers(opts: { publicRead?: boolean; lanes?: LanesOut } = {}) {
   server.use(
-    http.get("http://localhost/api/health", () => HttpResponse.json({ status: "ok", public_read: opts.publicRead ?? true })),
+    http.get("http://localhost/api/health", () =>
+      HttpResponse.json({ status: "ok", public_read: opts.publicRead ?? true }),
+    ),
     http.get("http://localhost/api/lanes", () => HttpResponse.json(opts.lanes ?? lanes())),
     http.post("http://localhost/api/auth/logout", () => new HttpResponse(null, { status: 204 })),
   );

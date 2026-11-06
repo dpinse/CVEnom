@@ -12,7 +12,12 @@ afterEach(cleanup);
 const GOOD = "a brand new passphrase";
 const open = () => renderRoute("/account/password", <ChangePassword />, "/account/password");
 const submit = () => fireEvent.click(screen.getByRole("button", { name: "Change password" }));
-const reply = (status: number, body?: Record<string, unknown>, headers?: Record<string, string>, onBody?: (b: unknown) => void) =>
+const reply = (
+  status: number,
+  body?: Record<string, unknown>,
+  headers?: Record<string, string>,
+  onBody?: (b: unknown) => void,
+) =>
   server.use(
     http.post("http://localhost/api/auth/password", async ({ request }) => {
       onBody?.(await request.json());
@@ -107,7 +112,9 @@ describe("ChangePassword hardening", () => {
       http.post("http://localhost/api/auth/password", () => {
         onPost?.();
         const r = statuses[Math.min(i++, statuses.length - 1)];
-        return r.status === 204 ? new HttpResponse(null, { status: 204 }) : HttpResponse.json(r.body ?? {}, { status: r.status });
+        return r.status === 204
+          ? new HttpResponse(null, { status: 204 })
+          : HttpResponse.json(r.body ?? {}, { status: r.status });
       }),
     );
   };

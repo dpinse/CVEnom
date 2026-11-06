@@ -16,6 +16,7 @@ from cvenom.auth import tokens
 from cvenom.auth.tokens import (
     InvalidToken,
     KeyRing,
+    RefreshGrace,
     TokenReuse,
     create_session,
     decode_access,
@@ -356,9 +357,11 @@ def test_reuse_of_any_older_token_revokes(db_session, user):
 def test_predecessor_within_grace_is_not_revoked(db_session, user):
     s, t0 = create_session(db_session, user, NOW, "ua", "ip")
     _, t1 = rotate_refresh(db_session, t0, NOW, "ua", "ip")
-    with pytest.raises(InvalidToken) as ei:
+    # Specifically RefreshGrace: the HTTP layer keys "do not clear the shared cookie" on this type.
+    with pytest.raises(RefreshGrace) as ei:
         rotate_refresh(db_session, t0, NOW + timedelta(seconds=9), "ua", "ip")
-    assert not isinstance(ei.value, TokenReuse)
+    assert type(ei.value) is RefreshGrace and not isinstance(ei.value, TokenReuse)
+    assert isinstance(ei.value, InvalidToken)  # callers that only know InvalidToken still reject it
     assert tokens.REUSE_GRACE == timedelta(seconds=10)
     assert session_is_active(db_session, s.id, NOW + timedelta(seconds=9))
     rotate_refresh(db_session, t1, NOW + timedelta(seconds=9), "ua", "ip")
@@ -368,9 +371,29 @@ def test_predecessor_after_grace_revokes(db_session, user):
     s, t0 = create_session(db_session, user, NOW, "ua", "ip")
     rotate_refresh(db_session, t0, NOW, "ua", "ip")
     at = NOW + timedelta(seconds=11)
-    with pytest.raises(TokenReuse):
+    with pytest.raises(TokenReuse) as ei:
         rotate_refresh(db_session, t0, at, "ua", "ip")
+    assert not isinstance(ei.value, RefreshGrace)
     assert not session_is_active(db_session, s.id, at)
+
+
+def test_only_the_immediate_predecessor_gets_grace(db_session, user):
+    # t0 is two rotations old: even inside the window it is reuse, never RefreshGrace.
+    s, t0 = create_session(db_session, user, NOW, "ua", "ip")
+    _, t1 = rotate_refresh(db_session, t0, NOW, "ua", "ip")
+    rotate_refresh(db_session, t1, NOW + timedelta(seconds=1), "ua", "ip")
+    at = NOW + timedelta(seconds=2)
+    with pytest.raises(TokenReuse) as ei:
+        rotate_refresh(db_session, t0, at, "ua", "ip")
+    assert not isinstance(ei.value, RefreshGrace)
+    assert not session_is_active(db_session, s.id, at)
+
+
+def test_unknown_refresh_token_is_plain_invalid_not_grace(db_session, user):
+    create_session(db_session, user, NOW, "ua", "ip")
+    with pytest.raises(InvalidToken) as ei:
+        rotate_refresh(db_session, "never-issued", NOW, "ua", "ip")
+    assert type(ei.value) is InvalidToken
 
 
 NAIVE = datetime(2026, 1, 1, 12, 0)

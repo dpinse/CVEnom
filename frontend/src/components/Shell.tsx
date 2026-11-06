@@ -47,11 +47,7 @@ export function Shell() {
       {visible && (
         <div className="notice gutter" role="status">
           <span>{notice}</span>
-          <button
-            type="button"
-            onClick={() => setHiddenKey(loc.key)}
-            aria-label="Dismiss notice"
-          >
+          <button type="button" onClick={() => setHiddenKey(loc.key)} aria-label="Dismiss notice">
             <span aria-hidden="true">×</span>
           </button>
         </div>

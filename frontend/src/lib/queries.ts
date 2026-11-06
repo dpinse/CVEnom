@@ -168,10 +168,13 @@ export function fetchHealth(): Promise<Health> {
 }
 
 export function useHealth() {
-  return useRead({
-    queryKey: qk.health(),
-    queryFn: () => fetchHealth(),
-  }, true);
+  return useRead(
+    {
+      queryKey: qk.health(),
+      queryFn: () => fetchHealth(),
+    },
+    true,
+  );
 }
 
 export function useLanes() {
@@ -267,4 +270,3 @@ export function useCountry(cc: string | undefined, windowHours = 24) {
     enabled: !!cc,
   });
 }
-
