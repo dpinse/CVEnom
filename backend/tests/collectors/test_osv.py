@@ -1,5 +1,6 @@
 import logging
-from datetime import UTC, datetime
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -382,3 +383,101 @@ async def test_malformed_and_out_of_order_rows_tolerated(respx_mock):
     )
     raw = await OsvCollector(since=SINCE).fetch()
     assert len(raw) == 3 and route.call_count == 3
+
+
+# --- Minor 5: a truncated index scan must not advance the window past what it covered ---
+
+
+def _rows(*pairs):
+    return "".join(f"{ts},Go/{i}\n" for ts, i in pairs)
+
+
+@pytest.mark.asyncio
+async def test_max_ids_truncation_keeps_a_backlog_and_the_next_run_resumes(respx_mock, monkeypatch):
+    monkeypatch.setattr(osv, "MAX_IDS", 3)
+    rows = [
+        ("2026-11-04T10:00:00Z", "GO-N-1"), ("2026-11-04T09:00:00Z", "GO-N-2"), ("2026-11-04T08:00:00Z", "GO-N-3"),
+        ("2026-11-04T07:00:00Z", "GO-N-4"), ("2026-11-04T06:00:00Z", "GO-N-5"), ("2026-10-30T00:00:00Z", "GO-OLD"),
+    ]
+    route = respx_mock.get(url__startswith="https://api.osv.dev/v1/vulns/").mock(
+        return_value=httpx.Response(200, json=OWN_CVE)
+    )
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=_rows(*rows)))
+    first = OsvCollector(since=SINCE)
+    await first.fetch()
+    fetched = [c.request.url.path.rsplit("/", 1)[-1] for c in route.calls]
+    assert fetched == ["GO-N-1", "GO-N-2", "GO-N-3"]
+    # GO-N-4 / GO-N-5 were not covered: the uncovered span is kept, from the old cutoff.
+    assert first.state["osv_index_backlog"] == [SINCE.isoformat(), "2026-11-04T07:00:00+00:00"]
+
+    # Next run: the scheduler moved `since` past the truncated rows, and a new row arrived on top.
+    done = len(route.calls)
+    newer = [("2026-11-05T12:00:00Z", "GO-NEW"), *rows]
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=_rows(*newer)))
+    second = OsvCollector(since=datetime(2026, 11, 5, tzinfo=UTC), state=first.state)
+    await second.fetch()
+    fetched = [c.request.url.path.rsplit("/", 1)[-1] for c in list(route.calls)[done:]]
+    assert fetched == ["GO-NEW", "GO-N-4", "GO-N-5"]
+    assert "osv_index_backlog" not in second.state  # fully covered: backlog cleared
+
+
+@pytest.mark.asyncio
+async def test_byte_budget_truncation_keeps_a_backlog(respx_mock, monkeypatch):
+    monkeypatch.setattr(osv, "INDEX_MAX_BYTES", 100_000)
+    consumed = [0]
+    recent = "2026-11-04T10:00:00Z,Go/GO-RECENT-1\n"
+    body = _streamed(_index("GO-2026-1"), recent, 5_000_000, consumed)
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, content=body))
+    respx_mock.get(url__startswith="https://api.osv.dev/v1/vulns/").mock(
+        return_value=httpx.Response(200, json=OWN_CVE)
+    )
+    c = OsvCollector(since=SINCE)
+    await c.fetch()
+    lo, hi = c.state["osv_index_backlog"]
+    assert lo == SINCE.isoformat()
+    assert hi == "2026-11-04T10:00:00+00:00"  # rows at/before the last one read are still owed
+
+
+@pytest.mark.asyncio
+async def test_untruncated_run_keeps_no_backlog(respx_mock):
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=_index("GO-2026-1")))
+    respx_mock.get(url__startswith="https://api.osv.dev/v1/vulns/").mock(
+        return_value=httpx.Response(200, json=OWN_CVE)
+    )
+    c = OsvCollector(since=SINCE, state={"osv_index_backlog": ["2026-10-31T00:00:00+00:00", "2026-10-31T12:00:00+00:00"]})
+    await c.fetch()
+    assert "osv_index_backlog" not in c.state
+
+
+def test_truncated_osv_run_does_not_advance_the_window(db_session, respx_mock, monkeypatch):
+    """End to end through run_collector: the window row advances, but the uncovered span survives in state."""
+    from cvenom.models import CollectorRun
+    from cvenom.tasks import run_collector
+
+    monkeypatch.setattr(osv, "MAX_IDS", 1)
+    respx_mock.get(INDEX_URL).mock(return_value=httpx.Response(200, text=_rows(
+        ("2026-11-04T10:00:00Z", "GO-A"), ("2026-11-04T09:00:00Z", "GO-B"), ("2026-10-30T00:00:00Z", "GO-OLD"),
+    )))
+    respx_mock.get(url__startswith="https://api.osv.dev/v1/vulns/").mock(
+        return_value=httpx.Response(200, json=OWN_CVE)
+    )
+    prior = SINCE + timedelta(hours=1)  # since = prior - WINDOW_OVERLAP = SINCE
+    db_session.merge(CollectorRun(collector="osv", last_run=prior, state={}))
+    db_session.flush()
+
+    @contextmanager
+    def factory():
+        yield db_session
+        db_session.flush()
+
+    class _Lock:
+        def acquire(self, *a):
+            return True
+
+        def release(self, *a):
+            pass
+
+    out = run_collector("osv", session_factory=factory, lock=_Lock())
+    assert out["ok"]
+    row = db_session.get(CollectorRun, "osv")
+    assert row.state["osv_index_backlog"] == [SINCE.isoformat(), "2026-11-04T09:00:00+00:00"]

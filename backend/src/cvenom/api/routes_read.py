@@ -30,9 +30,9 @@ from cvenom.scoring import Lane
 from .deps import SessionDep, current_user, public_or_user, restricted_sources
 from .ratelimit import rate_limit
 from .schemas_api import (
+    CountryActivityOut,
     CveDetail,
     CveListOut,
-    CountryActivityOut,
     CveReferenceOut,
     GeoEventOut,
     GeoSummaryItem,

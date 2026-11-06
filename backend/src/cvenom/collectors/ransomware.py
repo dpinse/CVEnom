@@ -41,6 +41,7 @@ log = logging.getLogger(__name__)
 URL = "https://api-pro.ransomware.live/victims/recent"
 PERMALINK_PREFIX = "https://www.ransomware.live/"
 MAX_PRESS = 5
+MAX_SCAN_LEN = 2048  # website / permalink longer than this are rejected unscanned
 _SKIP = (ValidationError, ValueError, TypeError, AttributeError, KeyError, OverflowError, OSError)
 _disabled_logged = False
 
@@ -93,7 +94,12 @@ def permalink_for(rec: dict) -> str | None:
     host, else one built from the record `id`.
     """
     perma = rec.get("permalink")
-    if isinstance(perma, str) and perma.startswith(PERMALINK_PREFIX) and not contains_onion(perma):
+    if (
+        isinstance(perma, str)
+        and len(perma) <= MAX_SCAN_LEN
+        and perma.startswith(PERMALINK_PREFIX)
+        and not contains_onion(perma)
+    ):
         if url := _valid_url(perma):
             return url
     rid = rec.get("id")
@@ -122,7 +128,8 @@ def _press(value: object) -> list[str]:
 def _story_details(rec: dict, group: str, victim: str) -> dict:
     """Allow-listed story details. Never post_url/screenshot/ransom/data_size/infostealer."""
     website = _str_or_none(rec.get("website"))
-    if website is not None and contains_onion(website):
+    # Overlong values are rejected before contains_onion runs NFKC over them.
+    if website is not None and (len(website) > MAX_SCAN_LEN or contains_onion(website)):
         website = None  # text only, but a leak-site address must never reach any output
     return {
         "group": group,

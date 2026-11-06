@@ -1,8 +1,8 @@
 import html
 import re
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
-import unicodedata
 from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -77,10 +77,7 @@ def _is_onion_host(hostname: str) -> bool:
     return host == "onion" or host.endswith(".onion")
 
 
-def validate_http_url(value: object) -> str:
-    if not isinstance(value, str):
-        raise ValueError("url must be a string")
-    url = value.strip()
+def _check_http_url(url: str) -> None:
     if not url or _BAD_URL_CHARS.search(url):
         raise ValueError("url is empty or contains whitespace/control characters")
     try:
@@ -93,6 +90,34 @@ def validate_http_url(value: object) -> str:
         raise ValueError("url must not contain userinfo")
     if _is_onion_host(parts.hostname or ""):
         raise ValueError("onion urls are not allowed")
+
+
+def _entity_decoded(url: str) -> str:
+    """The URL as ingest stores it and the frontend reads it: HTML entities decoded to a fixed point."""
+    text = url
+    for _ in range(_NORMALISE_MAX_ROUNDS):
+        decoded = html.unescape(text)
+        if decoded == text:
+            return text
+        text = decoded
+    raise ValueError("url entity encoding does not settle")
+
+
+def validate_http_url(value: object) -> str:
+    """Accept an http(s) URL with a host, no userinfo and no .onion host; return it unchanged (stripped).
+
+    The checks run on the raw string and again on its entity-decoded form: on the raw string
+    `http://x.onion&#46;/` has the host `x.onion&` (`#` starts the fragment), but sanitize_text
+    decodes it to `http://x.onion./` before it is stored. Only the host is checked for .onion, so
+    `https://example.com/x.onion` and `https://onion.example.com/` still pass.
+    """
+    if not isinstance(value, str):
+        raise ValueError("url must be a string")
+    url = value.strip()
+    _check_http_url(url)
+    decoded = _entity_decoded(url)
+    if decoded != url:
+        _check_http_url(decoded)
     return url
 
 

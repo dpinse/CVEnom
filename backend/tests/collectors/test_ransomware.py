@@ -417,6 +417,7 @@ def test_details_fields_and_press_filtering():
         ([f"https://news.example/{i}" for i in range(8)], [f"https://news.example/{i}" for i in range(5)]),
         (["https://a.example/", 5, None, {"u": "https://b.example/"}], ["https://a.example/"]),
         (["http://x.onion/", "https://xn--abc.onion./", "https://ok.example/"], ["https://ok.example/"]),
+        (["http://x.onion&#46;/", "http://x&#46;onion/", "https://ok.example/"], ["https://ok.example/"]),
         (42, []),
     ],
 )
@@ -476,6 +477,31 @@ def test_onion_bearing_permalink_falls_back_to_id(perma):
     res = RansomwareLiveCollector().normalize([_rec(permalink=perma, id="q1")])
     assert [s.url for s in res.stories] == ["https://www.ransomware.live/id/q1"]
     assert "onion" not in repr(res).lower()
+
+
+def test_entity_obfuscated_onion_press_never_stored(db_session):
+    ingest(db_session, RansomwareLiveCollector().normalize([_rec(press=["http://x.onion&#46;/", "https://ok.example/"])]))
+    story = db_session.scalars(select(Story).where(Story.source == "ransomware.live")).one()
+    assert story.details["press"] == ["https://ok.example/"]
+    assert "onion" not in repr(story.details).lower()
+
+
+def test_overlong_website_and_permalink_rejected_before_onion_scan(monkeypatch):
+    # Deferred T4: contains_onion runs NFKC; values over 2048 chars are rejected without being scanned.
+    scanned: list[int] = []
+    real = ransomware.contains_onion
+    monkeypatch.setattr(ransomware, "contains_onion", lambda s: scanned.append(len(s)) or real(s))
+    long_site = "https://victim.example/" + "a" * 2048
+    long_perma = ransomware.PERMALINK_PREFIX + "x/" + "a" * 2048
+    assert ransomware.permalink_for({"permalink": long_perma, "id": "q1"}) == "https://www.ransomware.live/id/q1"
+    res = RansomwareLiveCollector().normalize([_rec(website=long_site, permalink=long_perma, id="q1")])
+    assert res.stories[0].details["website"] is None
+    assert [s.url for s in res.stories] == ["https://www.ransomware.live/id/q1"]
+    assert all(n <= 2048 for n in scanned)
+    # exactly at the cap is still accepted
+    ok_site = "https://victim.example/" + "a" * (2048 - len("https://victim.example/"))
+    assert len(ok_site) == 2048
+    assert RansomwareLiveCollector().normalize([_rec(website=ok_site)]).stories[0].details["website"] == ok_site
 
 
 def test_geo_event_story_url_is_permalink():

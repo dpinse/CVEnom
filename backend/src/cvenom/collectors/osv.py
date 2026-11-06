@@ -48,19 +48,35 @@ def _valid_id(vuln_id: str) -> bool:
     return bool(_ID_RE.fullmatch(vuln_id)) and bool(vuln_id.strip("."))
 
 
+def _aware(ts: datetime) -> datetime:
+    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
 class _IndexScan:
     """Incremental parser for modified_id.csv rows (newest first).
 
     Ordering assumption: reading stops at the first row older than the cutoff.
     A newer row after that point is never seen (no tolerance window); rows that
     are out of order before it are simply read and kept.
+
+    `backlog` is an earlier run's uncovered span (lo, hi): rows inside it are read
+    again even though they are older than `since`; rows between it and `since` were
+    covered and are skipped. When the scan stops early (MAX_IDS or the byte budget),
+    `truncated` is set and `cursor` is the newest timestamp still owed.
     """
 
-    def __init__(self, since: datetime) -> None:
-        self.since = since if since.tzinfo else since.replace(tzinfo=UTC)
+    def __init__(self, since: datetime, backlog: tuple[datetime, datetime] | None = None) -> None:
+        self.since = _aware(since)
+        self.backlog = backlog
+        self.floor = min(self.since, backlog[0]) if backlog else self.since
         self.ids: list[str] = []
         self.malformed = 0
+        self.truncated = False
+        self.cursor: datetime | None = None  # newest in-range timestamp not known to be covered
         self._seen: set[str] = set()
+
+    def _wanted(self, ts: datetime) -> bool:
+        return ts >= self.since or (self.backlog is not None and self.backlog[0] <= ts <= self.backlog[1])
 
     def feed(self, line: str) -> bool:
         """Consume one row; return False when no further rows are needed."""
@@ -73,17 +89,27 @@ class _IndexScan:
         except ValueError:
             self.malformed += 1
             return True
-        if ts < self.since:
+        if ts < self.floor:
             return False
+        if not self._wanted(ts):
+            return True
+        self.cursor = ts  # rows at this timestamp may still follow
         vuln_id = key.strip().rsplit("/", 1)[-1]
         if not vuln_id or vuln_id in self._seen:
             return True
         if len(self.ids) >= MAX_IDS:
             log.warning("osv: capped at %d ids; older ids not processed this run", MAX_IDS)
+            self.truncated = True
             return False
         self._seen.add(vuln_id)
         self.ids.append(vuln_id)
         return True
+
+    def uncovered(self) -> tuple[datetime, datetime] | None:
+        """The span a truncated scan still owes (from the oldest cutoff to `cursor`), else None."""
+        if not self.truncated:
+            return None
+        return self.floor, self.cursor or datetime.now(UTC)
 
     def finish(self) -> list[str]:
         if self.malformed:
@@ -100,21 +126,36 @@ def parse_index(text: str, since: datetime) -> list[str]:
     return scan.finish()
 
 
-async def read_index(since: datetime) -> list[str]:
+async def read_index(since: datetime, backlog: tuple[datetime, datetime] | None = None) -> _IndexScan:
     """Stream the index, stopping at the cutoff, MAX_IDS or the byte budget."""
-    scan = _IndexScan(since)
+    scan = _IndexScan(since, backlog)
     try:
         async with aclosing(http_stream_lines(INDEX_URL, max_bytes=INDEX_MAX_BYTES)) as lines:
             async for line in lines:
                 if not scan.feed(line):
                     break
     except ResponseTooLarge:
+        scan.truncated = True
         log.warning(
             "osv: index byte budget (%d) exhausted before the cutoff; processing the %d ids read",
             INDEX_MAX_BYTES,
             len(scan.ids),
         )
-    return scan.finish()
+    scan.finish()
+    return scan
+
+
+# Collector state key: [lo, hi] ISO timestamps of index rows a truncated run did not cover.
+BACKLOG_KEY = "osv_index_backlog"
+
+
+def _load_backlog(state: dict) -> tuple[datetime, datetime] | None:
+    raw = state.get(BACKLOG_KEY)
+    try:
+        lo, hi = (_aware(datetime.fromisoformat(v)) for v in raw)
+    except (TypeError, ValueError):
+        return None
+    return (lo, hi) if lo <= hi else None
 
 
 @register
@@ -126,8 +167,16 @@ class OsvCollector(Collector):
 
     async def fetch(self, since: datetime | None = None) -> list[dict]:
         cutoff = since or self.since or datetime.now(UTC) - DEFAULT_WINDOW
+        # The scheduler advances `since` on every successful run. A truncated scan
+        # (MAX_IDS or the byte budget) keeps the span it did not cover in state, so
+        # the next run reads it again instead of skipping those ids for good.
+        scan = await read_index(cutoff, _load_backlog(self.state))
+        if (owed := scan.uncovered()) is not None:
+            self.state[BACKLOG_KEY] = [owed[0].isoformat(), owed[1].isoformat()]
+        else:
+            self.state.pop(BACKLOG_KEY, None)
         ids = []
-        for vuln_id in await read_index(cutoff):
+        for vuln_id in scan.ids:
             if _valid_id(vuln_id):
                 ids.append(vuln_id)
             else:

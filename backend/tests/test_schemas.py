@@ -195,7 +195,23 @@ def test_validate_http_url_rejects_onion(url):
         validate_http_url(url)
 
 
-@pytest.mark.parametrize("url", ["https://onion.example.com/", "https://example.com/x.onion"])
+# I2: entity-obfuscated hosts. On the raw string `#` starts the fragment (host "x.onion&"), but ingest's
+# sanitize_text decodes entities, so the stored/rendered URL points at a .onion host (or smuggles userinfo).
+@pytest.mark.parametrize("url", [
+    "http://x.onion&#46;/", "http://x&#46;onion/", "http://x.onion&#x2e;/p", "http://x.onion&amp;#46;/",
+    "https://good.example&#64;leak.onion/", "http://x.onion&#46;:80/",
+])
+def test_validate_http_url_rejects_entity_obfuscated_onion(url):
+    from cvenom.schemas import validate_http_url
+
+    with pytest.raises(ValueError):
+        validate_http_url(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://onion.example.com/", "https://example.com/x.onion", "https://example.com/?u=a.onion",
+    "https://example.com/a?x=1&amp;y=2", "https://example.com/#frag&#46;onion",
+])
 def test_validate_http_url_allows_onion_lookalikes(url):
     from cvenom.schemas import validate_http_url
 
@@ -240,6 +256,14 @@ def test_normalized_cve_drops_bad_references_and_caps_20():
     urls = [r.url for r in c.references]
     assert urls == [f"https://ref{i}.example/a" for i in range(20)]
     assert all(r.tags == ["Patch"] for r in c.references)
+
+
+def test_references_drop_entity_obfuscated_onion():
+    c = NormalizedCve(cve_id="CVE-2026-1001", references=[
+        {"url": "http://x.onion&#46;/", "tags": []},
+        {"url": "https://ok.example/", "tags": []},
+    ])
+    assert [r.url for r in c.references] == ["https://ok.example/"]
 
 
 def test_references_bad_shapes_dropped_and_tags_bounded():
