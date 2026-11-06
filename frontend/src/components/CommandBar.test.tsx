@@ -17,6 +17,15 @@ afterEach(cleanup);
 const bar = (path = "/") => renderAt(<CommandBar />, path);
 const openMenu = (email: RegExp) => fireEvent.click(screen.getByRole("button", { name: email }));
 
+describe("navigation", () => {
+  test("has a History link to /history", async () => {
+    handlers();
+    guest();
+    bar();
+    expect((await screen.findByRole("link", { name: "History" })).getAttribute("href")).toBe("/history");
+  });
+});
+
 describe("Situation readout", () => {
   test("renders the level and an accessible gauge label from the Exploited lane", async () => {
     // the readout uses the real clock: 4 listings 4 days ago (UTC) are in the 7-day span, none recent

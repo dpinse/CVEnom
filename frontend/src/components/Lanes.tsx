@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { RateLimited } from "../lib/api";
 import { errorRefetchMs, nextRetryAt, pollsAfterError, useLanes, useLoudStories } from "../lib/queries";
 import { useSelection, type Selection } from "../lib/selection";
@@ -15,8 +16,8 @@ interface LaneDef {
   empty: string;
 }
 const DEFS: LaneDef[] = [
-  { key: "EXPLOITED", k: "exploited", title: "Exploited now", sub: "known exploited", empty: "Nothing exploited right now" },
-  { key: "LIKELY", k: "likely", title: "Likely next", sub: "high exploit odds", empty: "No likely-next CVEs" },
+  { key: "EXPLOITED", k: "exploited", title: "Exploited now", sub: "KEV-listed, last 30 days", empty: "No new KEV listings in the last 30 days" },
+  { key: "LIKELY", k: "likely", title: "Likely next", sub: "published ≤ 30 days, high EPSS", empty: "No likely-next CVEs" },
   { key: "LOUD", k: "loud", title: "Loud now", sub: "in the news", empty: "Quiet — no buzz" },
   { key: "FRESH", k: "fresh", title: "Fresh criticals", sub: "new and severe", empty: "No fresh criticals" },
 ];
@@ -95,7 +96,15 @@ export function LanesView({ lanes, stories = [], loading, error, retryAt, now, o
                 {showSkeleton ? (
                   <Skeleton />
                 ) : count === 0 ? (
-                  <p className="lane-empty">{d.empty}</p>
+                  <p className="lane-empty">
+                    {d.empty}
+                    {d.key === "EXPLOITED" && (
+                      <>
+                        {" "}
+                        <Link to="/history?kev=true">Browse History</Link>
+                      </>
+                    )}
+                  </p>
                 ) : (
                   <>
                     {cves.map((c) => (

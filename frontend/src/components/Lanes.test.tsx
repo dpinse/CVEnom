@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, renderHook, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, renderHook, screen, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ReactNode } from "react";
@@ -12,6 +12,9 @@ import { item } from "../test/shell";
 import { LANE_CAP, LanesView } from "./Lanes";
 
 afterEach(cleanup);
+
+// The empty Exploited lane renders a router Link, so every LanesView render needs a router.
+const render = (ui: ReactNode) => rtlRender(ui, { wrapper: MemoryRouter });
 
 const NOW = new Date("2026-11-05T12:00:00Z");
 const foil = item({
@@ -32,6 +35,21 @@ const story = (o: Partial<LoudStory> = {}): LoudStory => ({
 });
 const lane = (name: string) => screen.getByRole("region", { name });
 const noop = () => {};
+
+describe("LanesView lane copy", () => {
+  test("subtitles name the windows", () => {
+    render(<LanesView lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] }} onSelect={noop} now={NOW} />);
+    expect(within(lane("Exploited now")).getByText("KEV-listed, last 30 days")).toBeInTheDocument();
+    expect(within(lane("Likely next")).getByText("published ≤ 30 days, high EPSS")).toBeInTheDocument();
+  });
+  test("an empty Exploited lane shows the copy and a Browse History link to /history?kev=true", () => {
+    render(<LanesView lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] }} onSelect={noop} now={NOW} />);
+    const ex = within(lane("Exploited now"));
+    expect(ex.getByText("No new KEV listings in the last 30 days")).toBeInTheDocument();
+    expect(ex.getByRole("link", { name: "Browse History" }).getAttribute("href")).toBe("/history?kev=true");
+    expect(within(lane("Likely next")).queryByRole("link")).toBeNull();
+  });
+});
 
 describe("LanesView double-encoded text", () => {
   test("a summary of &amp;lt;b&amp;gt; renders as literal text &lt;b&gt;, never markup", () => {
@@ -96,7 +114,7 @@ describe("LanesView", () => {
       <LanesView lanes={{ EXPLOITED: [item({ cvss: null, epss_percentile: null, kev: false })] }} onSelect={noop} now={NOW} />,
     );
     expect(container.querySelector(".chip.num")).toBeNull();
-    expect(screen.queryByText(/EPSS/)).toBeNull();
+    expect(screen.queryByText(/EPSS pd/)).toBeNull();
   });
 
   test("chips: EPSS percentile, KEV date + source, PoC, no patch, news", () => {
@@ -234,7 +252,7 @@ describe("LanesView", () => {
 
   test("empty states render per lane", () => {
     render(<LanesView lanes={{ EXPLOITED: [], LIKELY: [], LOUD: [], FRESH: [] }} onSelect={noop} now={NOW} />);
-    expect(screen.getByText("Nothing exploited right now")).toBeInTheDocument();
+    expect(screen.getByText("No new KEV listings in the last 30 days")).toBeInTheDocument();
     expect(screen.getByText("No likely-next CVEs")).toBeInTheDocument();
     expect(screen.getByText("Quiet — no buzz")).toBeInTheDocument();
     expect(screen.getByText("No fresh criticals")).toBeInTheDocument();

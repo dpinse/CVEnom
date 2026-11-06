@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ApiError, RateLimited } from "../lib/api";
 import { useCveSearch } from "../lib/queries";
@@ -7,21 +8,42 @@ import { useSelection } from "../lib/selection";
 import { Text } from "../lib/text";
 import type { CveItem, CveQuery, Lane } from "../lib/types";
 import { severityOf } from "../components/LaneRow";
+import {
+  cleanQ,
+  DEBOUNCE_MS,
+  MAX_Q,
+  OutOfRange,
+  PAGE_SIZE,
+  Pager,
+  parsePage,
+  useDebouncedQ,
+  usePager,
+  useUpdateParams,
+  validDate,
+  type Patch,
+} from "./historyShared";
+import HistoryStories, { STORY_FILTER_KEYS } from "./HistoryStories";
 
-export const PAGE_SIZE = 50;
-export const MAX_Q = 200;
-export const DEBOUNCE_MS = 300;
+export { DEBOUNCE_MS, MAX_Q, PAGE_SIZE };
+
 const LANES: Lane[] = ["EXPLOITED", "LIKELY", "LOUD", "FRESH"];
 const SOURCES = ["cisa", "vulncheck"] as const;
-const FILTER_KEYS = ["q", "lane", "source", "min_cvss", "kev", "from", "to", "page"] as const;
+const SORTS = ["kev_added", "published", "cvss"] as const;
+type Sort = (typeof SORTS)[number];
+const SORT_LABELS: Record<Sort, string> = {
+  kev_added: "Newest KEV listing",
+  published: "Newest published",
+  cvss: "Highest CVSS",
+};
+const FILTER_KEYS = ["q", "lane", "source", "min_cvss", "kev", "from", "to", "kev_from", "kev_to", "sort", "page"] as const;
+/** Every param either tab owns; switching tabs clears them (the cve / story / country selection survives). */
+const TAB_PARAMS = [...new Set<string>([...FILTER_KEYS, ...STORY_FILTER_KEYS, "tab"])];
 
-function validDate(s: string | null): string | undefined {
-  if (s === null || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return undefined;
-  const [y, m, d] = s.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  const ok = dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
-  return ok ? s : undefined;
-}
+type Tab = "cves" | "stories";
+const TABS: { key: Tab; label: string }[] = [
+  { key: "cves", label: "CVEs" },
+  { key: "stories", label: "Stories" },
+];
 
 function validCvss(s: string | null): number | undefined {
   if (s === null || s.trim() === "") return undefined;
@@ -31,10 +53,9 @@ function validCvss(s: string | null): number | undefined {
 
 /** Pure: reads filters from URL params, silently dropping every invalid value. */
 export function parseFilters(sp: URLSearchParams): CveQuery & { page: number } {
-  const out: CveQuery & { page: number } = { page: 1 };
-  const q = sp.get("q");
-  const tq = q?.trim().slice(0, MAX_Q).trim();
-  if (tq) out.q = tq;
+  const out: CveQuery & { page: number } = { page: parsePage(sp.get("page")) };
+  const q = cleanQ(sp.get("q"));
+  if (q) out.q = q;
   const lane = sp.get("lane");
   if (lane && (LANES as string[]).includes(lane)) out.lane = lane as Lane;
   const source = sp.get("source");
@@ -46,15 +67,14 @@ export function parseFilters(sp: URLSearchParams): CveQuery & { page: number } {
   if (from) out.from = from;
   const to = validDate(sp.get("to"));
   if (to) out.to = to;
-  const pageRaw = sp.get("page");
-  if (pageRaw !== null && /^\d+$/.test(pageRaw)) {
-    const p = Number(pageRaw);
-    if (p >= 1 && p <= 10000) out.page = p;
-  }
+  const kevFrom = validDate(sp.get("kev_from"));
+  if (kevFrom) out.kev_from = kevFrom;
+  const kevTo = validDate(sp.get("kev_to"));
+  if (kevTo) out.kev_to = kevTo;
+  const sort = sp.get("sort");
+  if (sort && (SORTS as readonly string[]).includes(sort)) out.sort = sort;
   return out;
 }
-
-type Patch = Partial<Record<(typeof FILTER_KEYS)[number], string | undefined>>;
 
 function ResultRow({ item, now, onSelect }: { item: CveItem; now: Date; onSelect: (id: string) => void }) {
   const sev = severityOf(item.cvss);
@@ -101,7 +121,7 @@ function ResultRow({ item, now, onSelect }: { item: CveItem; now: Date; onSelect
   );
 }
 
-export default function Search() {
+function HistoryCves() {
   const [sp, setSp] = useSearchParams();
   const { select } = useSelection();
   const filters = useMemo(() => parseFilters(sp), [sp]);
@@ -109,65 +129,13 @@ export default function Search() {
 
   // Sticky: the 422 notice outlives the automatic page reset's refetch; any user edit clears it.
   const [invalidSeen, setInvalidSeen] = useState(false);
-
-  const update = useCallback(
-    (patch: Patch, push = false) => {
-      setInvalidSeen(false);
-      setSp(
-        (prev) => {
-          const next = new URLSearchParams(prev); // keeps cve / story
-          for (const [k, v] of Object.entries(patch)) {
-            if (v === undefined || v === "") next.delete(k);
-            else next.set(k, v);
-          }
-          if (!("page" in patch)) next.delete("page");
-          return next;
-        },
-        push ? undefined : { replace: true },
-      );
-    },
-    [setSp],
-  );
-
-  // q: local text, debounced into the URL (replace).
-  const [qText, setQText] = useState(filters.q ?? "");
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const cancel = () => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
+  const write = useUpdateParams();
+  const update = (patch: Patch, push = false) => {
+    setInvalidSeen(false);
+    write(patch, push);
   };
-  useEffect(() => cancel, []);
-  const urlQ = filters.q ?? "";
-  const [seenQ, setSeenQ] = useState(urlQ);
-  const [lastWritten, setLastWritten] = useState(urlQ);
-  const [epoch, setEpoch] = useState(0);
-  const epochRef = useRef(0);
-  useEffect(() => {
-    epochRef.current = epoch;
-    cancel(); // a stale debounce must not fire after an external URL change
-  }, [epoch]);
-  if (seenQ !== urlQ) {
-    setSeenQ(urlQ);
-    if (urlQ !== lastWritten) {
-      // changed externally (back/forward, link): the URL wins
-      setLastWritten(urlQ);
-      setQText(urlQ);
-      setEpoch((e) => e + 1);
-    }
-  }
-  const onQ = (v: string) => {
-    const value = v.slice(0, MAX_Q);
-    setQText(value);
-    cancel();
-    const mine = epochRef.current;
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      if (mine !== epochRef.current) return;
-      const written = value.trim();
-      setLastWritten(written);
-      update({ q: written });
-    }, DEBOUNCE_MS);
-  };
+
+  const q = useDebouncedQ(filters.q ?? "", (v) => update({ q: v }));
 
   // min CVSS: local text so partial input ("7.") survives.
   const [cvssText, setCvssText] = useState(filters.min_cvss === undefined ? "" : String(filters.min_cvss));
@@ -196,21 +164,16 @@ export default function Search() {
     );
   }, [invalid, page, setSp]);
 
-  const countRef = useRef<HTMLParagraphElement>(null);
-  const setPage = (p: number) => {
-    update({ page: p <= 1 ? undefined : String(p) }, true);
-    const el = countRef.current;
-    if (el) {
-      el.focus({ preventScroll: true });
-      const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      el.scrollIntoView?.({ behavior: reduce ? "auto" : "smooth", block: "start" });
-    }
-  };
+  const { countRef, setPage } = usePager(update);
   const dateOrder = filters.from && filters.to && filters.from > filters.to;
+  const kevOrder = filters.kev_from && filters.kev_to && filters.kev_from > filters.kev_to;
   const total = data?.total ?? 0;
   const items = data?.items ?? [];
   const first = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const last = Math.min(page * PAGE_SIZE, total);
+  // The server's default order follows the KEV filter, so only a differing choice goes in the URL.
+  const defaultSort: Sort = filters.kev ? "kev_added" : "published";
+  const shownSort = (filters.sort as Sort | undefined) ?? defaultSort;
 
   let errorText: string | null = null;
   if (error || invalidSeen) {
@@ -220,10 +183,8 @@ export default function Search() {
   }
 
   const clear = () => {
-    cancel();
+    q.reset();
     setInvalidSeen(false);
-    setLastWritten("");
-    setQText("");
     setCvssText("");
     setSp((prev) => {
       const next = new URLSearchParams(prev);
@@ -232,13 +193,14 @@ export default function Search() {
     });
   };
 
+  const outOfRange = data !== undefined && items.length === 0 && total > 0 && page > 1;
+
   return (
-    <section className="page gutter search">
-      <h1>Search</h1>
+    <>
       <form className="sfilters" role="search" onSubmit={(e) => e.preventDefault()}>
         <label className="f f-q">
           <span>Search CVEs</span>
-          <input type="search" maxLength={MAX_Q} value={qText} onChange={(e) => onQ(e.target.value)} autoComplete="off" />
+          <input type="search" maxLength={MAX_Q} value={q.qText} onChange={(e) => q.onChange(e.target.value)} autoComplete="off" />
         </label>
         <label className="f">
           <span>Lane</span>
@@ -282,6 +244,27 @@ export default function Search() {
           <span>To</span>
           <input type="date" value={filters.to ?? ""} onChange={(e) => update({ to: e.target.value })} />
         </label>
+        <label className="f">
+          <span>KEV added from</span>
+          <input type="date" value={filters.kev_from ?? ""} onChange={(e) => update({ kev_from: e.target.value })} />
+        </label>
+        <label className="f">
+          <span>KEV added to</span>
+          <input type="date" value={filters.kev_to ?? ""} onChange={(e) => update({ kev_to: e.target.value })} />
+        </label>
+        <label className="f">
+          <span>Sort</span>
+          <select
+            value={shownSort}
+            onChange={(e) => update({ sort: e.target.value === defaultSort ? undefined : e.target.value }, true)}
+          >
+            {SORTS.map((s) => (
+              <option key={s} value={s}>
+                {SORT_LABELS[s]}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="f f-check">
           <input
             type="checkbox"
@@ -299,15 +282,20 @@ export default function Search() {
           The From date is after the To date, so nothing can match.
         </p>
       )}
+      {kevOrder && (
+        <p className="shint" role="note">
+          The KEV added from date is after the KEV added to date, so nothing can match.
+        </p>
+      )}
       {errorText && (
         <p className="serror" role="alert">
           {errorText}
         </p>
       )}
       <p className="scount" aria-live="polite" tabIndex={-1} ref={countRef}>
-        {data ? (total === 0 ? "0 results" : `Showing ${first}–${last} of ${total}`) : isFetching ? "Loading…" : ""}
+        {data ? (total === 0 ? "0 results" : outOfRange ? "" : `Showing ${first}–${last} of ${total}`) : isFetching ? "Loading…" : ""}
       </p>
-      {data && items.length === 0 && !errorText && <p className="sempty">No CVEs match these filters</p>}
+      {data && items.length === 0 && !errorText && (outOfRange ? <OutOfRange /> : <p className="sempty">No CVEs match these filters</p>)}
       {items.length > 0 && (
         <div className="stable-wrap" aria-busy={isPlaceholderData}>
           <table className="stable" role="table">
@@ -331,15 +319,60 @@ export default function Search() {
           </table>
         </div>
       )}
-      <nav className="spager" aria-label="Pagination">
-        <button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-          Previous
-        </button>
-        <span className="num">Page {page}</span>
-        <button type="button" disabled={page * PAGE_SIZE >= total} onClick={() => setPage(page + 1)}>
-          Next
-        </button>
-      </nav>
+      <Pager page={page} total={total} setPage={setPage} />
+    </>
+  );
+}
+
+export default function History() {
+  const [sp, setSp] = useSearchParams();
+  const tab: Tab = sp.get("tab") === "stories" ? "stories" : "cves";
+
+  const choose = (next: Tab) => {
+    if (next === tab) return;
+    setSp((prev) => {
+      const out = new URLSearchParams(prev);
+      for (const k of TAB_PARAMS) out.delete(k);
+      if (next === "stories") out.set("tab", "stories");
+      return out;
+    });
+  };
+  const onKey = (e: KeyboardEvent, i: number) => {
+    if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      choose(TABS[e.key === "Home" ? 0 : TABS.length - 1].key);
+    } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      const to = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length].key;
+      choose(to);
+      document.getElementById(`htab-${to}`)?.focus();
+    }
+  };
+
+  return (
+    <section className="page gutter search">
+      <h1>History</h1>
+      <div className="htabs" role="tablist" aria-label="History">
+        {TABS.map((t, i) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            id={`htab-${t.key}`}
+            aria-selected={tab === t.key}
+            aria-controls="htab-panel"
+            tabIndex={tab === t.key ? 0 : -1}
+            className="htab"
+            onClick={() => choose(t.key)}
+            onKeyDown={(e) => onKey(e, i)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div id="htab-panel" role="tabpanel" aria-labelledby={`htab-${tab}`} className="htab-panel">
+        {tab === "stories" ? <HistoryStories /> : <HistoryCves />}
+      </div>
     </section>
   );
 }

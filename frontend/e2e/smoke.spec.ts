@@ -136,3 +136,14 @@ test("400px: the drawer fits the viewport (no horizontal scroll, dialog <= 400px
   expect(m.body).toBeLessThanOrEqual(400);
   expect(m.dialog).toBeLessThanOrEqual(400);
 });
+
+test("/search?q=x redirects to /history?q=x and the History nav link is visible", async ({ page }) => {
+  await page.goto("/search?q=x");
+  await expect(page).toHaveURL(/\/history\?q=x$/);
+  await expect(page.getByRole("heading", { level: 1, name: "History" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "History" })).toBeVisible();
+  await expect(page.getByTestId("search-row")).toHaveCount(1);
+  await page.getByRole("tab", { name: "Stories" }).click();
+  await expect(page).toHaveURL(/\/history\?tab=stories$/);
+  await expect(page.getByTestId("history-story")).toHaveCount(1);
+});

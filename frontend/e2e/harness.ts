@@ -38,6 +38,8 @@ async function mockApi(page: Page, unexpected: string[]) {
     if (path === "/api/velocity") return route.fulfill(json(fixture("velocity")));
     if (path === "/api/geo") return route.fulfill(json(fixture("geo")));
     if (path === "/api/stories/loud") return route.fulfill(json(fixture("loud")));
+    if (path === "/api/cves") return route.fulfill(json(fixture("cves")));
+    if (path === "/api/stories") return route.fulfill(json(fixture("stories")));
     if (path === `/api/cves/${CVE_ID}`) return route.fulfill(json(fixture(`cve-${CVE_ID}`)));
     if (path === "/api/auth/refresh") return route.fulfill(json('{"error":"unauthorized"}', 401)); // stays a guest
     unexpected.push(`${route.request().method()} ${path}`);

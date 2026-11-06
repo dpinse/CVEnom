@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 import { useLiveUpdates, type LiveStatus } from "../lib/live";
 import { useLanes } from "../lib/queries";
 import { situationLevel } from "../lib/situation";
@@ -78,6 +78,9 @@ export function CommandBar() {
           <span className="kicker">vulnerability threat radar</span>
         </span>
       </Link>
+      <nav className="cnav" aria-label="Primary">
+        <NavLink to="/history">History</NavLink>
+      </nav>
       <Situation />
       <div className="cspacer" />
       <LiveStatusReadout />

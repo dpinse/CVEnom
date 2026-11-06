@@ -1,0 +1,20 @@
+{
+  "items": [
+    {
+      "cve_id": "CVE-2026-1001",
+      "cvss": 9.8,
+      "epss_percentile": 0.97,
+      "kev": true,
+      "kev_added": "2026-11-01",
+      "kev_source": "cisa",
+      "poc_badge": false,
+      "patch_available": true,
+      "published": "2026-10-30T00:00:00Z",
+      "summary": "Acme Gateway 4.2 remote code execution",
+      "recent_story_count": 1
+    }
+  ],
+  "page": 1,
+  "page_size": 50,
+  "total": 1
+}

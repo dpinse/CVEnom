@@ -1,5 +1,6 @@
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
+import { useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { authStore } from "./lib/api";
 import { __resetBootstrapForTests } from "./lib/useAuth";
@@ -15,7 +16,18 @@ afterEach(() => {
 });
 
 /** Shell tests drive auth via the store; bootstrap is a no-op there because it already settled. */
-const at = (path: string) => renderAt(<AppRoutes />, path);
+function Loc() {
+  const l = useLocation();
+  return <output data-testid="loc">{l.pathname + l.search}</output>;
+}
+const at = (path: string) =>
+  renderAt(
+    <>
+      <AppRoutes />
+      <Loc />
+    </>,
+    path,
+  );
 
 describe("guards", () => {
   test("a member is sent away from /admin/alerts with an Admins only notice", async () => {
@@ -55,8 +67,15 @@ describe("guards", () => {
   test("public server: a guest sees the dashboard and search", async () => {
     handlers({ publicRead: true });
     guest();
-    at("/search");
-    expect(await screen.findByRole("heading", { name: "Search" })).toBeInTheDocument();
+    at("/history");
+    expect(await screen.findByRole("heading", { name: "History" })).toBeInTheDocument();
+  });
+  test("/search?q=log4j&kev=true redirects to /history?q=log4j&kev=true", async () => {
+    handlers({ publicRead: true });
+    guest();
+    at("/search?q=log4j&kev=true");
+    expect(await screen.findByRole("heading", { name: "History" })).toBeInTheDocument();
+    expect(screen.getByTestId("loc")).toHaveTextContent("/history?q=log4j&kev=true");
   });
   test("private server: a guest is redirected from / to /login", async () => {
     handlers({ publicRead: false });
