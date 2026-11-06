@@ -71,6 +71,16 @@ def test_rdf_feed_parses():
     assert plain_story.published == datetime(2026, 11, 4, 1, 30, tzinfo=UTC)
 
 
+def test_project_zero_atom_feed_parses():
+    res = _Feed().normalize(_fx("atom_project_zero.xml"))
+    assert len(res.stories) == 2
+    first, second = res.stories
+    assert first.title == "Fuzzers vs. AI: Comparing Fuzzilli and BigSleep on JavaScript Engines"
+    assert first.url == "https://projectzero.google/2026/10/fuzzing-v-AI.html"
+    assert first.published == datetime(2026, 10, 27, 7, 0, tzinfo=UTC)
+    assert second.published == datetime(2026, 10, 6, 7, 0, tzinfo=UTC)
+
+
 def test_atom_entries_map_to_stories_utc_with_updated_fallback():
     res = _Feed().normalize(_fx("atom_sample.xml"))
     assert len(res.stories) == 2
@@ -211,6 +221,7 @@ def test_news_subclasses_registered_base_not():
         ),
         "news_jvn": ("https://jvn.jp/en/rss/jvn.rdf", "JVN"),
         "news_sans_isc": ("https://isc.sans.edu/rssfeed_full.xml", "SANS ISC"),
+        "news_project_zero": ("https://projectzero.google/feed.xml", "Google Project Zero"),
     }
     for name, (url, src) in expected.items():
         cls = REGISTRY[name]

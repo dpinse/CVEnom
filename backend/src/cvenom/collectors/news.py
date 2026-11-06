@@ -222,3 +222,10 @@ class SansIscCollector(NewsFeedCollector):
     name = "news_sans_isc"
     feed_url = "https://isc.sans.edu/rssfeed_full.xml"
     source_name = "SANS ISC"
+
+
+@register
+class ProjectZeroCollector(NewsFeedCollector):
+    name = "news_project_zero"
+    feed_url = "https://projectzero.google/feed.xml"
+    source_name = "Google Project Zero"
