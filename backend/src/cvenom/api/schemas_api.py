@@ -100,6 +100,42 @@ class GeoSummaryItem(BaseModel):
     last_seen: UtcDatetime
 
 
+class CountryCount(BaseModel):
+    kind: str
+    events: int
+    magnitude: float
+
+
+class CountrySource(BaseModel):
+    source: str
+    events: int
+
+
+class CountryTrendPoint(BaseModel):
+    bucket: UtcDatetime
+    events: int
+
+
+class CountryEventOut(BaseModel):
+    source: str
+    kind: str
+    label: str | None
+    magnitude: float
+    observed_at: UtcDatetime
+    asn: int | None
+    story_url: str | None
+    details: dict
+
+
+class CountryActivityOut(BaseModel):
+    country_code: str
+    window_hours: int
+    counts: list[CountryCount]
+    top_sources: list[CountrySource]
+    trend: list[CountryTrendPoint]
+    events: list[CountryEventOut] | None
+
+
 class StoryItem(BaseModel):
     title: str
     summary: str

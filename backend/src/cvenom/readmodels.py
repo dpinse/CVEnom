@@ -69,6 +69,95 @@ def geo_summary(session, now: datetime, *, window_hours: int = 24) -> list[dict]
     ]
 
 
+def country_activity(
+    session, now: datetime, cc: str, *, window_hours: int, include_events: bool
+) -> dict:
+    """Activity for one country over the last `window_hours`.
+
+    counts / top_sources / events cover `observed_at >= now - window_hours`
+    (the same window as geo_summary, so the drawer agrees with the globe).
+    trend is hourly UTC buckets, zero-filled, exactly `window_hours` points,
+    oldest first: the window end is `now` truncated to the hour and the oldest
+    bucket is `end - (window_hours - 1)` hours, so the last bucket is the
+    current (partial) hour. Events are listed (newest first, max 50) only when
+    `include_events`; the counts themselves are public aggregates.
+    """
+    now = _utc(now)
+    since = now - timedelta(hours=window_hours)
+    in_window = (GeoEvent.country_code == cc, GeoEvent.observed_at >= since)
+
+    mag = func.sum(GeoEvent.magnitude)
+    n = func.count()
+    counts = [
+        {"kind": r.kind, "events": int(r.events), "magnitude": float(r.magnitude)}
+        for r in session.execute(
+            select(GeoEvent.kind, n.label("events"), mag.label("magnitude"))
+            .where(*in_window)
+            .group_by(GeoEvent.kind)
+            .order_by(n.desc(), GeoEvent.kind)
+        ).all()
+    ]
+    top_sources = [
+        {"source": r.source, "events": int(r.events)}
+        for r in session.execute(
+            select(GeoEvent.source, n.label("events"))
+            .where(*in_window)
+            .group_by(GeoEvent.source)
+            .order_by(n.desc(), GeoEvent.source)
+            .limit(5)
+        ).all()
+    ]
+
+    end = now.replace(minute=0, second=0, microsecond=0)
+    first = end - timedelta(hours=window_hours - 1)
+    bucket = func.date_trunc("hour", func.timezone("UTC", GeoEvent.observed_at))
+    per_bucket = {
+        r[0].replace(tzinfo=timezone.utc): int(r[1])
+        for r in session.execute(
+            select(bucket, func.count())
+            .where(
+                GeoEvent.country_code == cc,
+                GeoEvent.observed_at >= first,
+                GeoEvent.observed_at < end + timedelta(hours=1),
+            )
+            .group_by(bucket)
+        ).all()
+    }
+    trend = [
+        {"bucket": b, "events": per_bucket.get(b, 0)}
+        for b in (first + timedelta(hours=i) for i in range(window_hours))
+    ]
+
+    events = None
+    if include_events:
+        events = [
+            {
+                "source": e.source,
+                "kind": e.kind,
+                "label": e.label,
+                "magnitude": e.magnitude,
+                "observed_at": e.observed_at,
+                "asn": e.asn,
+                "story_url": e.story_url,
+                "details": e.details,
+            }
+            for e in session.execute(
+                select(GeoEvent)
+                .where(*in_window)
+                .order_by(GeoEvent.observed_at.desc(), GeoEvent.id.desc())
+                .limit(50)
+            ).scalars()
+        ]
+    return {
+        "country_code": cc,
+        "window_hours": window_hours,
+        "counts": counts,
+        "top_sources": top_sources,
+        "trend": trend,
+        "events": events,
+    }
+
+
 def _escape_like(q: str) -> str:
     return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 

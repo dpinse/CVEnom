@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated, Literal
 from urllib.parse import unquote_to_bytes
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import String, any_, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -17,6 +17,7 @@ from cvenom.models import Cve, GeoEvent, Story, StoryCveLink, User
 from cvenom.pipeline import lane_views
 from cvenom.readmodels import (
     _escape_like,
+    country_activity,
     cve_velocity,
     geo_summary,
     loud_stories,
@@ -31,6 +32,7 @@ from .ratelimit import rate_limit
 from .schemas_api import (
     CveDetail,
     CveListOut,
+    CountryActivityOut,
     CveReferenceOut,
     GeoEventOut,
     GeoSummaryItem,
@@ -266,6 +268,20 @@ def geo(
     window_hours: Annotated[int, Query(ge=1, le=168)] = 24, session: Session = SessionDep
 ) -> list[dict]:
     return geo_summary(session, _now(), window_hours=window_hours)
+
+
+@router.get("/geo/{cc}", response_model=CountryActivityOut)
+def geo_country(
+    cc: Annotated[str, Path(pattern="^[A-Z]{2}$")],
+    window_hours: Annotated[int, Query(ge=1, le=168)] = 24,
+    session: Session = SessionDep,
+    user: User | None = Depends(current_user),  # gated by the router-level public_or_user
+) -> dict:
+    # Anonymous callers get counts only (events=None) so the cached body never
+    # carries individual records; signed-in requests bypass the cache.
+    return country_activity(
+        session, _now(), cc, window_hours=window_hours, include_events=user is not None
+    )
 
 
 @router.get("/stories/loud", response_model=list[LoudStory])
