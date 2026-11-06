@@ -177,3 +177,57 @@
     display: none;
   }
 }
+
+/*
+ * Keyboard route into the country drawer: the list is visually hidden (same technique as .sr-only, so it stays in the
+ * tab order and the accessibility tree) until a button inside it has focus, then it shows as a panel with a visible
+ * focus ring on the focused item.
+ */
+.hotspot-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.hotspot-list:not(:focus-within) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.hotspot-list:focus-within {
+  position: absolute;
+  top: 48px;
+  right: 12px;
+  z-index: 2;
+  width: min(360px, calc(100% - 24px));
+  max-height: calc(100% - 96px);
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--well);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.hotspot-list button {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.hotspot-list button:hover {
+  background: color-mix(in srgb, var(--scope) 12%, transparent);
+}
+.hotspot-list button:focus-visible {
+  outline: 2px solid var(--scope);
+  outline-offset: -2px;
+}

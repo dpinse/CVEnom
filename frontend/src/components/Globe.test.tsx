@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import type { ReactNode } from "react";
@@ -27,6 +28,7 @@ vi.mock("maplibre-gl", () => {
   class FakeMap {
     options: Record<string, unknown>;
     handlers = new Map<string, Set<Handler>>();
+    cursor = "";
     sources: Record<string, { spec: unknown; data: unknown; setData: (d: unknown) => void }> = {};
     layers: Record<string, unknown>[] = [];
     paint: Record<string, Record<string, unknown>> = {};
@@ -56,17 +58,19 @@ vi.mock("maplibre-gl", () => {
     isSourceLoaded() {
       return false;
     }
-    on(type: string, fn: Handler) {
-      if (!this.handlers.has(type)) this.handlers.set(type, new Set());
-      this.handlers.get(type)!.add(fn);
+    // Like MapLibre: on(type, fn) or on(type, layerId, fn); layer handlers are keyed "type@layer".
+    on(type: string, a: string | Handler, b?: Handler) {
+      const key = typeof a === "string" ? `${type}@${a}` : type;
+      if (!this.handlers.has(key)) this.handlers.set(key, new Set());
+      this.handlers.get(key)!.add(typeof a === "string" ? b! : a);
       return this;
     }
-    off(type: string, fn: Handler) {
-      this.handlers.get(type)?.delete(fn);
+    off(type: string, a: string | Handler, b?: Handler) {
+      this.handlers.get(typeof a === "string" ? `${type}@${a}` : type)?.delete(typeof a === "string" ? b! : a);
       return this;
     }
-    fire(type: string, e: unknown = {}) {
-      for (const fn of this.handlers.get(type) ?? []) fn(e);
+    fire(type: string, e: unknown = {}, layer?: string) {
+      for (const fn of this.handlers.get(layer ? `${type}@${layer}` : type) ?? []) fn(e);
     }
     addSource(id: string, spec: { data: unknown }) {
       const src = {
@@ -128,7 +132,8 @@ interface FakeMapT {
   jumpTo: ReturnType<typeof vi.fn>;
   resize: ReturnType<typeof vi.fn>;
   scrollZoom: { enable: ReturnType<typeof vi.fn>; disable: ReturnType<typeof vi.fn> };
-  fire: (type: string, e?: unknown) => void;
+  fire: (type: string, e?: unknown, layer?: string) => void;
+  getCanvas: () => HTMLCanvasElement;
 }
 const maps = () => h.maps as FakeMapT[];
 const lastMap = () => maps()[maps().length - 1];
@@ -153,13 +158,20 @@ function seeded(data: GeoSummaryItem[] | undefined) {
   return qc;
 }
 
+function Search() {
+  return <output data-testid="search">{useLocation().search}</output>;
+}
+
 function renderGlobe(data: GeoSummaryItem[] | undefined = fixture, extra?: ReactNode, qc = seeded(data)) {
   return render(
     <QueryClientProvider client={qc}>
-      <GlobeProvider>
-        <Globe />
-        {extra}
-      </GlobeProvider>
+      <MemoryRouter>
+        <GlobeProvider>
+          <Globe />
+          {extra}
+        </GlobeProvider>
+        <Search />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -364,6 +376,37 @@ describe("<Globe> chrome and accessibility", () => {
     const list = screen.getByRole("list", { name: /top threat hotspots/i });
     expect(list.querySelectorAll("li")).toHaveLength(4);
     expect(list.textContent).toContain("United States");
+  });
+
+  it("hotspot list items are real buttons (Enter/Space activate them natively) that select ?country=", () => {
+    renderGlobe([{ country_code: "DE", kind: "scan", magnitude: 7, events: 12, last_seen: "2026-11-05T10:00:00Z" }]);
+    const btn = screen.getByRole("button", { name: /Germany: .*scan/i });
+    expect(btn).toHaveAttribute("type", "button");
+    fireEvent.click(btn);
+    expect(screen.getByTestId("search")).toHaveTextContent("?country=DE");
+  });
+
+  it("clicking the hotspots layer selects ?country=; an unknown code does nothing", () => {
+    renderGlobe();
+    loadMap();
+    const m = lastMap();
+    act(() => m.fire("click", { features: [{ properties: { iso2: "DE" } }] }, "hotspots"));
+    expect(screen.getByTestId("search")).toHaveTextContent("?country=DE");
+    act(() => m.fire("click", { features: [{ properties: { iso2: "QQ" } }] }, "hotspots"));
+    expect(screen.getByTestId("search")).toHaveTextContent("?country=DE");
+  });
+
+  it("a click with no iso2 does nothing, and hovering a hotspot sets a pointer cursor", () => {
+    renderGlobe();
+    loadMap();
+    const m = lastMap();
+    act(() => m.fire("click", { features: [{ properties: {} }] }, "hotspots"));
+    act(() => m.fire("click", { features: [] }, "hotspots"));
+    expect(screen.getByTestId("search")).toHaveTextContent("");
+    act(() => m.fire("mouseenter", {}, "hotspots"));
+    expect(m.getCanvas().style.cursor).toBe("pointer");
+    act(() => m.fire("mouseleave", {}, "hotspots"));
+    expect(m.getCanvas().style.cursor).toBe("");
   });
 
   it("legend swatches use the same KIND_TOKEN mapping as the map paint, one distinct token per kind", () => {

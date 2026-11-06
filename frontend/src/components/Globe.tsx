@@ -4,7 +4,9 @@
  * atlas and this module stay out of the initial bundle.
  */
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { isIso3166Alpha2 } from "../lib/iso3166";
 import { useGeo } from "../lib/queries";
+import { useSelection } from "../lib/selection";
 import type { GeoSummaryItem } from "../lib/types";
 import { GlobeFallback, GlobeLegend, GlobeTitle, HotspotList } from "./GlobeChrome";
 import { useGlobeRegistration } from "./GlobeContext";
@@ -23,6 +25,12 @@ export default function Globe() {
   const containerRef = useRef<HTMLDivElement>(null);
   const ctlRef = useRef<GlobeController | null>(null);
   const [failed, setFailed] = useState<GlobeFailure | null>(null);
+  // The map is created once; it reads the latest `select` through a ref instead of remounting.
+  const { select } = useSelection();
+  const selectRef = useRef(select);
+  useEffect(() => {
+    selectRef.current = select;
+  });
 
   const data = useMemo(
     () => ({ countries: withShading(toCountryShading(items)), hotspots: toHotspots(items) }),
@@ -44,6 +52,9 @@ export default function Globe() {
       // No WebGL 2, or the data never rendered (worker/source failure): static fallback,
       // never a crashed or blank page. The controller has already torn itself down.
       onError: (_err, reason) => setFailed(reason),
+      onHotspotClick: (cc) => {
+        if (isIso3166Alpha2(cc)) selectRef.current({ kind: "country", cc });
+      },
       describedBy: summaryId,
     });
     if (!ctl) return;

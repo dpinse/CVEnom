@@ -149,3 +149,80 @@ test("/search?q=x redirects to /history?q=x and the History nav link is visible"
   await expect(page).toHaveURL(/\/history\?tab=stories$/);
   await expect(page.getByTestId("history-story")).toHaveCount(1);
 });
+
+test.describe("country drawer from the keyboard hotspot list", () => {
+  test("focusing a hotspot button shows the list; Enter opens Germany; Esc closes", async ({ page }) => {
+    await loaded(page);
+    await expect(page.locator(".globe-map canvas").first()).toBeVisible({ timeout: 20_000 });
+    const list = page.getByRole("list", { name: "Top threat hotspots" });
+    const buttons = list.getByRole("button");
+    // Tabbing on from the globe canvas passes the legend's attribution link, then reaches the first hotspot button,
+    // and the hidden list becomes a visible panel.
+    await page.locator(".globe-map canvas").first().focus();
+    await page.keyboard.press("Tab");
+    await expect(page.locator(".geo-attrib")).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(buttons.first()).toBeFocused();
+    await expect(list).toBeVisible();
+    const box = await list.boundingBox();
+    expect(box!.width).toBeGreaterThan(100);
+    // Tab through the list (ordered by magnitude) to the Germany button.
+    const de = buttons.filter({ hasText: "Germany" });
+    for (let n = 0; n < 10 && !(await de.evaluate((el) => el === document.activeElement)); n++) {
+      await page.keyboard.press("Tab");
+    }
+    await expect(de).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/[?&]country=DE/);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Germany" })).toBeVisible();
+    await expect(dialog.getByText("exploit scanning")).toBeVisible();
+    await expect(dialog.getByText("Sign in to see individual events")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(page).not.toHaveURL(/country=/);
+  });
+
+  test("no horizontal overflow at 400px", async ({ page }) => {
+    await page.setViewportSize({ width: 400, height: 800 });
+    await page.goto("/?country=DE");
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Germany" })).toBeVisible();
+    await expect(dialog.getByText("exploit scanning")).toBeVisible();
+    const m = await page.evaluate(() => {
+      const dlg = document.querySelector<HTMLElement>('[role="dialog"]')!;
+      const body = document.querySelector<HTMLElement>(".dbody")!;
+      return {
+        dlg: [dlg.scrollWidth, dlg.clientWidth],
+        body: [body.scrollWidth, body.clientWidth],
+        doc: [document.documentElement.scrollWidth, innerWidth],
+      };
+    });
+    expect(m.dlg[0]).toBeLessThanOrEqual(m.dlg[1]);
+    expect(m.body[0]).toBeLessThanOrEqual(m.body[1]);
+    expect(m.doc[0]).toBeLessThanOrEqual(m.doc[1]);
+  });
+
+  test("Back from a country selection returns to the CVE dialog, with exactly one dialog", async ({ page }) => {
+    await loaded(page);
+    await page.locator('.lane[data-k="exploited"] [data-testid="lane-row"]').first().click();
+    await expect(page).toHaveURL(new RegExp(`[?&]cve=${CVE_ID}`));
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    // The open drawer makes the page inert, so a real user cannot reach the hotspot list; the programmatic click
+    // exercises the history semantics (select() pushes one entry that replaces ?cve=).
+    await page
+      .getByRole("list", { name: "Top threat hotspots" })
+      .getByRole("button", { name: /Germany/ })
+      .evaluate((el: HTMLElement) => el.click());
+    await expect(page).toHaveURL(/[?&]country=DE/);
+    await expect(page.getByRole("dialog").getByRole("heading", { name: "Germany" })).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    await page.goBack();
+    await expect(page).toHaveURL(new RegExp(`[?&]cve=${CVE_ID}`));
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    await expect(page.getByRole("dialog").getByText("Acme Gateway 4.2")).toBeVisible();
+    await page.goForward();
+    await expect(page).toHaveURL(/[?&]country=DE/);
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+  });
+});

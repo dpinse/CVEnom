@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createQueryClient } from "../lib/queries";
-import type { CveDetail, GeoEventOut, LoudStory, StoryDetailOut } from "../lib/types";
+import type { CountryActivity, CountryEvent, CveDetail, GeoEventOut, LoudStory, StoryDetailOut } from "../lib/types";
 import { guest, member, server, setupMsw, signIn } from "../test/shell";
 import { authStore } from "../lib/api";
 import { BACKEND_STORIES_CAP } from "./CveDetail";
@@ -777,4 +777,145 @@ describe("StoryDetail", () => {
       expect(screen.getByTestId("search")).toHaveTextContent("");
     });
   }
+});
+
+describe("CountryDetail", () => {
+  const trend = (vals: number[]) =>
+    vals.map((events, i) => ({ bucket: `2026-11-05T${String(i).padStart(2, "0")}:00:00Z`, events }));
+  const act1 = (o: Partial<CountryActivity> = {}): CountryActivity => ({
+    country_code: "DE",
+    window_hours: 24,
+    counts: [
+      { kind: "scan", events: 12, magnitude: 5 },
+      { kind: "outage", events: 2, magnitude: 3 },
+    ],
+    top_sources: [{ source: "greynoise", events: 10 }],
+    trend: trend([0, 5, 0, 7]),
+    events: null,
+    ...o,
+  });
+  const cev = (o: Partial<CountryEvent> = {}): CountryEvent => ({
+    source: "greynoise",
+    kind: "scan",
+    label: "scan burst",
+    magnitude: 3,
+    observed_at: "2026-11-05T11:00:00Z",
+    asn: null,
+    story_url: null,
+    details: {},
+    ...o,
+  });
+  const serve = (a: CountryActivity) => server.use(http.get("http://localhost/api/geo/DE", () => HttpResponse.json(a)));
+  const open = () => renderHost(["/?country=DE"]);
+
+  test("opens a Germany dialog, flies the globe there, lists counts and sources; anonymous gets no events", async () => {
+    serve(act1());
+    open();
+    const d = await dialog();
+    expect(within(d).getByRole("heading", { name: "Germany" })).toBeInTheDocument();
+    expect(await within(d).findByText("exploit scanning")).toBeInTheDocument();
+    expect(within(d).getByText("greynoise")).toBeInTheDocument();
+    expect(within(d).getByText("Sign in to see individual events")).toBeInTheDocument();
+    expect(within(d).queryByTestId("country-events")).toBeNull();
+    expect(flyTo).toHaveBeenCalledWith("DE");
+  });
+
+  test("lowercase or unknown country params open no drawer", () => {
+    renderHost(["/?country=de"]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    cleanup();
+    renderHost(["/?country=QQ"]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("signed in: events with decoded label, source, link, and the ransomware credit", async () => {
+    signIn(member);
+    serve(
+      act1({
+        events: [
+          cev({
+            label: "Victim &amp; Co",
+            source: "ransomware.live",
+            kind: "victim",
+            story_url: "https://www.ransomware.live/id/x",
+          }),
+          cev({ label: "second", story_url: "https://news.example/a?x=1&amp;y=2" }),
+        ],
+      }),
+    );
+    open();
+    const d = await dialog();
+    const list = await within(d).findByTestId("country-events");
+    expect(within(list).getByText("Victim & Co")).toBeInTheDocument();
+    expect(within(d).getByTestId("ransomware-credit")).toBeInTheDocument();
+    const a = within(list)
+      .getAllByRole("link")
+      .find((l) => l.getAttribute("href") === "https://news.example/a?x=1&y=2")!;
+    expect(a).toHaveAttribute("target", "_blank");
+    expect(a).toHaveAttribute("rel", "noopener noreferrer");
+    expect(within(d).queryByText("Sign in to see individual events")).toBeNull();
+  });
+
+  test("no credit without a ransomware.live event", async () => {
+    signIn(member);
+    serve(act1({ events: [cev()] }));
+    open();
+    const d = await dialog();
+    await within(d).findByTestId("country-events");
+    expect(within(d).queryByTestId("ransomware-credit")).toBeNull();
+  });
+
+  test("a label with an escaped <script> renders literally; a .onion story_url renders no anchor", async () => {
+    signIn(member);
+    serve(
+      act1({
+        events: [cev({ label: "&lt;script&gt;alert(1)&lt;/script&gt;", story_url: "http://abcdef.onion/x" })],
+      }),
+    );
+    open();
+    const d = await dialog();
+    const list = await within(d).findByTestId("country-events");
+    expect(within(list).getByText("<script>alert(1)</script>")).toBeInTheDocument();
+    expect(list.querySelector("script")).toBeNull();
+    expect(within(list).queryAllByRole("link")).toHaveLength(0);
+    expect(list.textContent).toContain("abcdef.onion");
+  });
+
+  test("the trend shows for a busy window and is omitted when sparse; it holds no API text", async () => {
+    serve(act1());
+    const { unmount } = open();
+    const d = await dialog();
+    const svg = await within(d).findByTestId("country-trend");
+    expect(svg.tagName.toLowerCase()).toBe("svg");
+    expect(svg.querySelectorAll("text")).toHaveLength(0);
+    unmount();
+    serve(act1({ counts: [{ kind: "scan", events: 2, magnitude: 1 }], trend: trend([0, 2, 0]) }));
+    open();
+    const d2 = await dialog();
+    await within(d2).findByText("exploit scanning");
+    expect(within(d2).queryByTestId("country-trend")).toBeNull();
+    cleanup();
+    serve(act1({ trend: trend([0, 0, 9, 0]) })); // 12 events but a single non-zero bucket
+    open();
+    const d3 = await dialog();
+    await within(d3).findByText("exploit scanning");
+    expect(within(d3).queryByTestId("country-trend")).toBeNull();
+  });
+
+  test("no counts shows the empty note", async () => {
+    serve(act1({ counts: [], top_sources: [], trend: [] }));
+    open();
+    const d = await dialog();
+    expect(
+      await within(d).findByText("No activity recorded for this country in the last 24 hours"),
+    ).toBeInTheDocument();
+  });
+
+  test("a failed load shows an alert with Retry", async () => {
+    server.use(http.get("http://localhost/api/geo/DE", () => HttpResponse.json({ error: "x" }, { status: 500 })));
+    open();
+    const d = await dialog();
+    expect(await within(d).findByRole("alert")).toBeInTheDocument();
+    expect(within(d).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
 });

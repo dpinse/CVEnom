@@ -1,0 +1,125 @@
+{
+  "country_code": "DE",
+  "window_hours": 24,
+  "counts": [
+    {
+      "kind": "scan",
+      "events": 12,
+      "magnitude": 5.0
+    },
+    {
+      "kind": "outage",
+      "events": 2,
+      "magnitude": 3.0
+    }
+  ],
+  "top_sources": [
+    {
+      "source": "greynoise",
+      "events": 10
+    },
+    {
+      "source": "ioda",
+      "events": 2
+    }
+  ],
+  "trend": [
+    {
+      "bucket": "2026-11-05T00:00:00Z",
+      "events": 0
+    },
+    {
+      "bucket": "2026-11-05T01:00:00Z",
+      "events": 1
+    },
+    {
+      "bucket": "2026-11-05T02:00:00Z",
+      "events": 2
+    },
+    {
+      "bucket": "2026-11-05T03:00:00Z",
+      "events": 3
+    },
+    {
+      "bucket": "2026-11-05T04:00:00Z",
+      "events": 4
+    },
+    {
+      "bucket": "2026-11-05T05:00:00Z",
+      "events": 0
+    },
+    {
+      "bucket": "2026-11-05T06:00:00Z",
+      "events": 1
+    },
+    {
+      "bucket": "2026-11-05T07:00:00Z",
+      "events": 2
+    },
+    {
+      "bucket": "2026-11-05T08:00:00Z",
+      "events": 3
+    },
+    {
+      "bucket": "2026-11-05T09:00:00Z",
+      "events": 4
+    },
+    {
+      "bucket": "2026-11-05T10:00:00Z",
+      "events": 0
+    },
+    {
+      "bucket": "2026-11-05T11:00:00Z",
+      "events": 1
+    },
+    {
+      "bucket": "2026-11-05T12:00:00Z",
+      "events": 2
+    },
+    {
+      "bucket": "2026-11-05T13:00:00Z",
+      "events": 3
+    },
+    {
+      "bucket": "2026-11-05T14:00:00Z",
+      "events": 4
+    },
+    {
+      "bucket": "2026-11-05T15:00:00Z",
+      "events": 0
+    },
+    {
+      "bucket": "2026-11-05T16:00:00Z",
+      "events": 1
+    },
+    {
+      "bucket": "2026-11-05T17:00:00Z",
+      "events": 2
+    },
+    {
+      "bucket": "2026-11-05T18:00:00Z",
+      "events": 3
+    },
+    {
+      "bucket": "2026-11-05T19:00:00Z",
+      "events": 4
+    },
+    {
+      "bucket": "2026-11-05T20:00:00Z",
+      "events": 0
+    },
+    {
+      "bucket": "2026-11-05T21:00:00Z",
+      "events": 1
+    },
+    {
+      "bucket": "2026-11-05T22:00:00Z",
+      "events": 2
+    },
+    {
+      "bucket": "2026-11-05T23:00:00Z",
+      "events": 3
+    }
+  ],
+  "events": null
+}

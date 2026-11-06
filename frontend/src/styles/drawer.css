@@ -340,3 +340,21 @@
   font-size: 11.5px;
   overflow-wrap: anywhere;
 }
+.trend {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: 48px;
+}
+.trend-bar {
+  fill: var(--scope);
+}
+.cev {
+  gap: 2px 8px;
+}
+.cev-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+}

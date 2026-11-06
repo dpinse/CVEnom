@@ -6,6 +6,7 @@
  */
 import type { CSSProperties } from "react";
 import type { GeoSummaryItem } from "../lib/types";
+import { useSelection } from "../lib/selection";
 import { ExternalLink } from "../lib/text";
 import { GEO_KINDS, type GeoKind, KIND_LABEL, KIND_TOKEN, countryName, rankCountries, topHotspots } from "./geoSummary";
 
@@ -65,15 +66,22 @@ export function GlobeLegend({ hint = true }: { hint?: boolean }) {
   );
 }
 
-/** Visually hidden list of the strongest (country, kind) hotspots. */
+/**
+ * The strongest (country, kind) hotspots as a keyboard route into the country drawer. Visually hidden until a button
+ * inside it has focus, then shown as a panel (see .hotspot-list in globe.css). Each item is a real button, so Enter
+ * and Space work natively.
+ */
 export function HotspotList({ items }: { items: readonly GeoSummaryItem[] }) {
+  const { select } = useSelection();
   const top = topHotspots(items, 10);
   return (
-    <ul className="sr-only" aria-label="Top threat hotspots">
+    <ul className="hotspot-list" aria-label="Top threat hotspots">
       {top.map((it) => (
         <li key={`${it.country_code}:${it.kind}`}>
-          {countryName(it.country_code)}: {KIND_LABEL[it.kind as keyof typeof KIND_LABEL]}, magnitude{" "}
-          {fmt(Number(it.magnitude))}, {fmt(Number(it.events))} events
+          <button type="button" onClick={() => select({ kind: "country", cc: it.country_code })}>
+            {countryName(it.country_code)}: {KIND_LABEL[it.kind as keyof typeof KIND_LABEL]}, magnitude{" "}
+            {fmt(Number(it.magnitude))}, {fmt(Number(it.events))} events
+          </button>
         </li>
       ))}
     </ul>

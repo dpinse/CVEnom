@@ -178,6 +178,8 @@ export interface MountOptions {
    * For "render" failures the controller has already torn the map down.
    */
   onError?: (err: unknown, reason: GlobeFailure) => void;
+  /** A hotspot was clicked (a drag never fires MapLibre's click): the ISO 3166 alpha-2 code of its country. */
+  onHotspotClick?: (iso2: string) => void;
   /** id of the element holding the data summary, linked from the canvas via aria-describedby. */
   describedBy?: string;
 }
@@ -492,6 +494,16 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
     // Tokens may have changed between construction and load (theme toggled early).
     map.setPaintProperty("background", "background-color", tokens.ocean);
     armWatchdog(DATA_DEADLINE_MS);
+    map.on("click", "hotspots", (e: { features?: { properties?: Record<string, unknown> | null }[] }) => {
+      const iso2 = e.features?.[0]?.properties?.iso2;
+      if (typeof iso2 === "string") opts.onHotspotClick?.(iso2);
+    });
+    map.on("mouseenter", "hotspots", () => {
+      map.getCanvas().style.cursor = "pointer";
+    });
+    map.on("mouseleave", "hotspots", () => {
+      map.getCanvas().style.cursor = "";
+    });
     opts.onLoad?.();
     schedule();
   });
