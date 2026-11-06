@@ -376,6 +376,17 @@ describe("CVEs tab: KEV range and sort", () => {
     await waitFor(() => expect(lastUrl).not.toContain("sort="));
   });
 
+  test("with KEV only and a lane the default sort is Newest published; kev_added is reachable", async () => {
+    api(() => list());
+    renderAt(ui, "/history?kev=true&lane=LOUD");
+    await screen.findByText("CVE-2026-0001");
+    const sel = screen.getByLabelText("Sort") as HTMLSelectElement;
+    expect(sel.selectedOptions[0].textContent).toBe("Newest published");
+    expect(seen[0].has("sort")).toBe(false);
+    fireEvent.change(sel, { target: { value: "kev_added" } });
+    await waitFor(() => expect(lastUrl).toContain("sort=kev_added"));
+  });
+
   test("page=40 beyond the total shows No results on this page with a link to page 1", async () => {
     api(() => list([], 120, 40));
     renderAt(ui, "/history?page=40&q=x");
@@ -449,6 +460,20 @@ describe("Stories tab", () => {
     fireEvent.click(screen.getByText("Next"));
     await screen.findByText("Showing 51–100 of 120");
     expect(seenStories[seenStories.length - 1].get("page")).toBe("2");
+  });
+
+  test("blurring the source box unchanged keeps the page", async () => {
+    storiesApi((sp) => sList([story()], 120, Number(sp.get("page") ?? 1)));
+    renderAt(ui, "/history?tab=stories&source=Wired&page=2");
+    await screen.findByText("Showing 51–100 of 120");
+    const box = screen.getByLabelText("Story source");
+    fireEvent.focus(box);
+    fireEvent.blur(box);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lastUrl).toBe("/history?tab=stories&source=Wired&page=2");
+    fireEvent.change(box, { target: { value: "Other" } });
+    fireEvent.blur(box);
+    await waitFor(() => expect(lastUrl).toBe("/history?tab=stories&source=Other"));
   });
 
   test("empty state", async () => {

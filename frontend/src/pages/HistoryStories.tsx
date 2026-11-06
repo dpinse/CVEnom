@@ -86,6 +86,12 @@ export default function HistoryStories() {
     else errorText = "Couldn't load results. Try again shortly.";
   }
 
+  // An unchanged value must not write: update() resets the page.
+  const commitSource = (v: string) => {
+    const t = v.trim();
+    if (t !== (filters.source ?? "")) update({ source: t });
+  };
+
   const clear = () => {
     q.reset();
     setSp((prev) => {
@@ -109,9 +115,9 @@ export default function HistoryStories() {
             maxLength={MAX_SOURCE}
             defaultValue={filters.source ?? ""}
             key={filters.source ?? ""}
-            onBlur={(e) => update({ source: e.target.value.trim() })}
+            onBlur={(e) => commitSource(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") update({ source: e.currentTarget.value.trim() });
+              if (e.key === "Enter") commitSource(e.currentTarget.value);
             }}
             autoComplete="off"
           />

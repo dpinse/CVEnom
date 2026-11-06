@@ -171,8 +171,8 @@ function HistoryCves() {
   const items = data?.items ?? [];
   const first = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const last = Math.min(page * PAGE_SIZE, total);
-  // The server's default order follows the KEV filter, so only a differing choice goes in the URL.
-  const defaultSort: Sort = filters.kev ? "kev_added" : "published";
+  // The server's default order follows the backend rule (kev_added only for KEV without a lane), so only a differing choice goes in the URL.
+  const defaultSort: Sort = filters.kev && !filters.lane ? "kev_added" : "published";
   const shownSort = (filters.sort as Sort | undefined) ?? defaultSort;
 
   let errorText: string | null = null;

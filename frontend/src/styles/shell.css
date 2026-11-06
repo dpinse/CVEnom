@@ -358,6 +358,9 @@ header.command {
   header.command {
     gap: 12px;
   }
+  .cnav {
+    gap: 10px;
+  }
   .brand .kicker {
     display: none;
   }

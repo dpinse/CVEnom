@@ -114,7 +114,7 @@ describe("LanesView", () => {
       <LanesView lanes={{ EXPLOITED: [item({ cvss: null, epss_percentile: null, kev: false })] }} onSelect={noop} now={NOW} />,
     );
     expect(container.querySelector(".chip.num")).toBeNull();
-    expect(screen.queryByText(/EPSS pd/)).toBeNull();
+    expect(screen.queryByText(/EPSS p\d/)).toBeNull();
   });
 
   test("chips: EPSS percentile, KEV date + source, PoC, no patch, news", () => {
