@@ -52,16 +52,17 @@ class NewsFeedCollector(Collector):
             self._pending_validators["last_modified"] = headers["last-modified"]
         return body
 
-    def normalize(self, raw: bytes | None) -> CollectorResult:
+    def _entries(self, raw: bytes | None) -> list | None:
+        """Parsed feed entries, or None when the body is empty or refused (guard/bozo)."""
         if not raw:
-            return CollectorResult()
+            return None
         # Entity declarations enable billion-laughs / XXE; no legitimate news feed needs them.
         # Stripping NULs collapses UTF-16/UTF-32 (BOM or BOM-less, either endianness) ASCII-range
         # markup back to ASCII, so the marker is found without decoding. Encodings that do not
         # embed ASCII (e.g. EBCDIC) are not covered by this check.
         if b"<!entity" in raw.replace(b"\x00", b"").lower():
             log.warning("%s: feed contains <!ENTITY declarations; refusing to parse", self.name)
-            return CollectorResult()
+            return None
         # Wrap in a file object: given bytes/str, feedparser first tries to open() it as a local
         # path (and the entity guard above would have checked the path, not the file).
         parsed = feedparser.parse(io.BytesIO(raw))
@@ -69,11 +70,17 @@ class NewsFeedCollector(Collector):
             log.warning(
                 "%s: malformed feed with no entries: %s", self.name, parsed.get("bozo_exception")
             )
+            return None
+        return list(parsed.entries)
+
+    def normalize(self, raw: bytes | None) -> CollectorResult:
+        entries = self._entries(raw)
+        if entries is None:
             return CollectorResult()
 
         now = datetime.now(UTC)
         stories: list[NormalizedStory] = []
-        for entry in parsed.entries:
+        for entry in entries:
             try:
                 link = entry.get("link")
                 title = entry.get("title")

@@ -628,3 +628,13 @@ def test_first_news_event_source_sanitized_and_truncated(db_session):
     assert len(ev.source) == 64
     assert ev.source == pipeline.sanitize_text(source)[:64]
     assert "\x07" not in ev.source and "<" not in ev.source
+
+
+def test_first_news_event_source_falls_back_to_unknown_when_empty(db_session):
+    from cvenom.models import CveEvent
+
+    ingest(db_session, CollectorResult(stories=[NormalizedStory(
+        url="https://example.com/nosrc", source="<b></b>", title="CVE-2026-6004 exploited",
+        summary="s", published=NOW)]))
+    ev = db_session.query(CveEvent).filter_by(cve_id="CVE-2026-6004", kind="first_news").one()
+    assert ev.source == "unknown"

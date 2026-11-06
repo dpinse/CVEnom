@@ -13,7 +13,7 @@ ALL_COLLECTORS = {
     "news_bleeping", "news_securityweek", "ransomware_live", "dshield", "cf_radar", "abusech",
     "news_talos", "news_unit42", "news_checkpoint", "news_securelist", "news_msft_security",
     "news_zdi", "news_tenable", "news_certcc", "news_ncsc_uk", "news_jvn", "news_sans_isc",
-    "news_project_zero",
+    "news_project_zero", "exploitdb", "circl_osint",
 }
 
 

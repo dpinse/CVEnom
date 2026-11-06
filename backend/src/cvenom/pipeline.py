@@ -81,7 +81,7 @@ def _ingest_story(session: Session, story: NormalizedStory) -> None:
     if cve_ids:
         # NormalizedCveEvent.source is capped at 64 chars and rejects control characters;
         # same prefix as the migration backfill (left(source, 64)).
-        event_source = sanitize_text(story.source)[:64]
+        event_source = sanitize_text(story.source)[:64] or "unknown"
         insert_cve_events(session, [
             NormalizedCveEvent(
                 cve_id=cve_id, kind="first_news", occurred_at=story.published,
