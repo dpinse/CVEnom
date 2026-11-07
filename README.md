@@ -1,10 +1,8 @@
 # CVEnom
 
-CVEnom is a self-hosted vulnerability and threat radar. It pulls CVE, exploitation, threat-activity and security-news feeds into one live dashboard, and sends email or webhook alerts when something matching your rules gets exploited.
+CVEnom is a self-hosted vulnerability and threat radar. It pulls CVE, exploitation, threat-activity and security-news feeds into one live dashboard, and sends email or webhook alerts when a CVE matching your rules gets exploited.
 
-It is built to run on the open internet. A CDN or tunnel such as Cloudflare in front is welcome, but the app does not depend on it for security.
-
-## What you get
+## Features
 
 - **A live radar.** A globe shows where scanning, botnet C2, outages and ransomware activity are happening. Four lanes sit beside it:
   - **Exploited now:** on the CISA or VulnCheck KEV lists.
@@ -12,7 +10,7 @@ It is built to run on the open internet. A CDN or tunnel such as Cloudflare in f
   - **Loud now:** heavy news coverage.
   - **Fresh criticals:** newly published, CVSS 9 or above.
 - **CVE and story detail.** A drawer shows scores, affected products, related stories and geo activity. You can share a link straight to a CVE.
-- **Live updates** over a WebSocket. The page refreshes itself when new data lands.
+- **Live updates** over a WebSocket, so the page refreshes when new data arrives.
 - **Alerts.** Admins write rules that fire when a CVE joins KEV: any KEV listing, CVSS minimum, EPSS minimum, or a keyword. Matches go out by email (SMTP) or by HMAC-signed webhooks, which work with Slack, Discord and generic receivers. Deliveries are deduplicated, retried with backoff, and can be tested from the UI.
 - **Users.** Admins and members, invite links, password resets, session management, and user deactivation.
 - **Public or private.** By default anyone can view the read-only radar, and signing in adds the rest. Set `PUBLIC_READ=false` to put everything behind the login.
@@ -38,22 +36,22 @@ ransomware.live is polled hourly, in line with their fair-use policy. Anonymous 
 ## Architecture
 
 ```
-browser ──► Cloudflare / your proxy ──► nginx (frontend container, 127.0.0.1:8080)
-                                          ├── /            React app
-                                          ├── /api/*       ──► FastAPI (api)
-                                          └── /api/ws/live ──► WebSocket (api)
-                                                                 │
-                         Celery worker + beat ──► collectors ──► Postgres
-                                                  alerts     ──► Redis (queue, cache, rate limits)
+browser ──► nginx (frontend container, :8080)
+               ├── /            React app
+               ├── /api/*       ──► FastAPI (api)
+               └── /api/ws/live ──► WebSocket (api)
+                                      │
+       Celery worker + beat ──► collectors ──► Postgres
+                                alerts     ──► Redis (queue, cache, rate limits)
 ```
 
-- **Backend** (`backend/`): Python 3.12, FastAPI, SQLAlchemy and Alembic, Celery, Postgres and Redis.
+- **Backend** (`backend/`): Python 3.12+, FastAPI, SQLAlchemy and Alembic, Celery, Postgres and Redis.
 - **Frontend** (`frontend/`): React, TypeScript, Vite, TanStack Query and MapLibre GL, served by an unprivileged nginx with a strict Content-Security-Policy.
-- **Deployment** (`deploy/`): Docker Compose. Only nginx publishes a port, and only on localhost. The api, Postgres and Redis are reachable only on the internal network.
+- **Deployment** (`deploy/`): Docker Compose. nginx is the only container with a published port; the api, Postgres and Redis sit on an internal network.
 
 ## Quick start (Docker)
 
-You need Docker with Compose, and a way to put HTTPS in front of port 8080, such as Cloudflare Tunnel (`cloudflared`) or Caddy. On the same machine, `http://localhost:8080` works for a trial run.
+You need Docker with Compose.
 
 ```sh
 cp .env.example .env
@@ -67,12 +65,12 @@ export ADMIN_PASSWORD='a-long-passphrase'
 docker compose --env-file ./.env -f deploy/docker-compose.prod.yml run --rm -e ADMIN_PASSWORD api create-admin --email you@example.com
 ```
 
-Open `http://localhost:8080` and sign in, then invite the rest of your team from **Admin → Invites**. Each collector first runs one full interval after the scheduler starts, so the radar fills in over the first two hours:
+Open `http://localhost:8080`, sign in, and enroll an authenticator app when prompted. Other users can be invited from **Admin → Invites**. Collectors run on their own schedules, so the radar fills in over the first couple of hours:
 - news: after 15 minutes;
 - KEV, DShield and abuse.ch: after 1 hour;
 - NVD, EPSS and OSV: after 2 hours.
 
-[`docs/deploy.md`](docs/deploy.md) is the full operator guide. It covers Cloudflare and proxy setup, how to check that real visitor IPs reach the app, security headers, key rotation, backups and fair-use notes.
+[`docs/deploy.md`](docs/deploy.md) has the rest: security headers, key rotation, backups and API fair-use notes.
 
 ## Local development
 
@@ -106,10 +104,13 @@ cd frontend && npm run lint && npm run typecheck
 cd frontend && npx playwright install && npm run e2e   # Chromium and Firefox, including a CSP check
 ```
 
+GitHub Actions runs all of these on every push, along with Trivy scans of the dependencies and both
+images. Commits to `main` publish rolling images to GHCR, and `v*` tags publish versioned releases
+([details](docs/deploy.md#cicd-and-published-images)).
+
 ## Security
 
-CVEnom assumes the public can reach it:
-
+- **MFA.** Every account signs in with a password plus an authenticator app (TOTP).
 - **Passwords and tokens.**
   - Passwords are hashed with argon2id.
   - Access tokens are short-lived EdDSA JWTs, held only in browser memory.
