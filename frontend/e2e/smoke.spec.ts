@@ -149,7 +149,7 @@ test("/search?q=x redirects to /threats?q=x and the Threats nav link is current"
   await expect(page.getByTestId("search-row")).toHaveCount(1);
   await page.getByRole("tab", { name: "News" }).click();
   await expect(page).toHaveURL(/\/threats\?tab=news$/);
-  await expect(page.getByTestId("history-story")).toHaveCount(1);
+  await expect(page.getByTestId("news-story")).toHaveCount(1);
 });
 
 test("the range control shows on the Dashboard only and writes ?range=", async ({ page }) => {
