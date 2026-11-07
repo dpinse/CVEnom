@@ -196,7 +196,7 @@ test.describe("country side panel", () => {
     // Tabbing on from the map canvas passes the legend's attribution link, then enters the side list.
     await page.locator(".globe-map canvas").first().focus();
     await page.keyboard.press("Tab");
-    await expect(page.locator(".geo-attrib")).toBeFocused();
+    await expect(page.locator(".map-legend .geo-attrib")).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(buttons.first()).toBeFocused();
     const de = buttons.filter({ hasText: "Germany" });
@@ -231,7 +231,13 @@ test.describe("country side panel", () => {
   test("the legend and the DB-IP credit show", async ({ page }) => {
     await loaded(page);
     await expect(page.locator(".map-legend")).toContainText(/more alerts · 5 countries · 7 days/);
-    await expect(page.getByRole("link", { name: "IP geolocation by DB-IP.com" })).toBeVisible();
+    await expect(page.locator(".map-legend").getByRole("link", { name: "IP geolocation by DB-IP.com" })).toBeVisible();
+    // The side panel carries its own credit (stacked layouts can scroll the legend away).
+    await expect(
+      page
+        .getByRole("complementary", { name: "Country detail" })
+        .getByRole("link", { name: "IP geolocation by DB-IP.com" }),
+    ).toBeVisible();
   });
 
   test("no horizontal overflow at 400px with a country selected", async ({ page }) => {
