@@ -343,12 +343,33 @@ uv pip compile pyproject.toml --generate-hashes --python-platform linux --python
 Then re-add the three-line comment header at the top of the file (it is checked by the tests), run
 the test suite, and rebuild: `docker build -t cvenom-backend backend`.
 
-There is no dependency vulnerability scan in CI yet. Run one periodically (and before each
-release) against the lock file:
+CI scans the lock files and both built images with Trivy on every push (see below).
 
-```sh
-pip-audit -r backend/requirements.lock
-```
+## CI/CD and published images
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+- backend `pytest` (Postgres 16 and Redis 7 service containers), frontend lint, typecheck and Vitest,
+  and the full Playwright e2e suite in Chromium and Firefox;
+- a Trivy repo scan (dependencies, secrets, Dockerfile misconfigurations);
+- both images built and scanned with Trivy. Any fixable HIGH or CRITICAL finding fails the run.
+
+Nothing is published unless every one of those passes. Then:
+
+| Trigger | Images (`ghcr.io/dpinse/cvenom-backend`, `…/cvenom-frontend`) | GitHub release |
+| --- | --- | --- |
+| push to `main` | `:edge`, `:sha-<short>` | the `rolling` prerelease (tag moved to the commit) |
+| push of tag `vX.Y.Z` | `:X.Y.Z`, `:X.Y`, `:latest` | `vX.Y.Z`, with generated notes |
+| push of tag `vX.Y.Z-rc.N` | `:X.Y.Z-rc.N` | `vX.Y.Z-rc.N`, marked prerelease |
+
+To cut a release: `git tag v1.2.3 && git push origin v1.2.3`. Images carry SBOM and provenance
+attestations. Every action is pinned to a commit SHA; Trivy is installed from its GitHub release
+with a pinned version and SHA-256 (`.github/actions/setup-trivy`). To bump Trivy, change both
+`version` and `sha256` there (the hash is in the release's `trivy_<version>_checksums.txt`).
+
+To run the published images instead of building locally, point the `image:` keys in
+`deploy/docker-compose.prod.yml` at the GHCR tags and drop `build:`. New GHCR packages are
+private: make them public in the package settings, or `docker login ghcr.io` on the host first.
 
 ## Security notes
 

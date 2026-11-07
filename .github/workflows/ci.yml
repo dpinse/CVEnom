@@ -1,0 +1,318 @@
+# CI/CD for CVEnom.
+#
+#   every push / PR   backend tests, frontend lint+typecheck+unit, Playwright e2e (chromium on
+#                     Linux, firefox on Windows),
+#                     Trivy repo scan, both images built and Trivy-scanned (nothing is pushed)
+#   push to main      the above, then the images go to GHCR as :edge and :sha-<short>, and the
+#                     "rolling" GitHub prerelease is moved to that commit
+#   push tag v*       the above, then the images go to GHCR as :<version>, :<major>.<minor> and
+#                     (non-prerelease tags only) :latest, and a GitHub release is created
+#
+# Every third-party action is pinned to a full commit SHA (the tag is in the trailing comment).
+# Trivy itself is installed by .github/actions/setup-trivy with a pinned version and SHA-256.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Superseded branch/PR runs are cancelled; main and tags run to completion so every commit
+  # gets its rolling release and every tag its release.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  PYTHON_VERSION: "3.14"
+  NODE_VERSION: "26.13.0"
+  # Same severity gate everywhere: fixable HIGH/CRITICAL findings fail the build.
+  TRIVY_SEVERITY: HIGH,CRITICAL
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cvenom_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cvenom_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.lock
+            backend/pyproject.toml
+      - name: Install dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          # runtime deps are already satisfied by the hash-pinned lock; this adds only the dev extras
+          python -m pip install -e ".[dev]"
+      - name: pytest
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend lint, typecheck, unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+  e2e:
+    name: E2E (${{ matrix.browser }})
+    # The globe specs need real WebGL. Headless Chromium on Linux has it (SwiftShader); headless
+    # Firefox on Linux has no WebGL at all, so Firefox runs on Windows (WARP software renderer).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            os: ubuntu-24.04
+          - browser: firefox
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Run all e2e specs
+        run: npm run e2e -- --project=${{ matrix.browser }}
+      - name: Upload traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-traces-${{ matrix.browser }}
+          path: frontend/test-results/
+          retention-days: 7
+
+  trivy-repo:
+    name: Trivy repo scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-trivy
+      # backend/Dockerfile.dev is skipped: it is the local hot-reload image (bind-mounted source,
+      # root on purpose) and is never built or published here.
+      - name: Scan dependencies, secrets and IaC
+        run: >-
+          trivy fs
+          --scanners vuln,secret,misconfig
+          --skip-files backend/Dockerfile.dev
+          --severity "$TRIVY_SEVERITY"
+          --ignore-unfixed
+          --exit-code 1
+          --no-progress
+          .
+
+  images:
+    name: Image ${{ matrix.image }}
+    needs: [backend, frontend, e2e, trivy-repo]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [backend, frontend]
+    env:
+      PUBLISH: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+      SCAN_TAG: cvenom-${{ matrix.image }}:scan
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-trivy
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Image name
+        id: name
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: echo "image=ghcr.io/${REPO_OWNER,,}/cvenom-${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.name.outputs.image }}
+          flavor: latest=false
+          tags: |
+            type=edge,branch=main
+            type=sha,format=short,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+
+      - name: Build (for scanning)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.image }}
+          load: true
+          push: false
+          tags: ${{ env.SCAN_TAG }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Trivy image scan
+        run: >-
+          trivy image
+          --scanners vuln,secret
+          --severity "$TRIVY_SEVERITY"
+          --ignore-unfixed
+          --exit-code 1
+          --no-progress
+          "$SCAN_TAG"
+
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Every layer comes from the cache the scanned build just wrote, so this pushes the image
+      # that was scanned, plus SBOM and provenance attestations.
+      - name: Push
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.image }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          provenance: mode=max
+          sbom: true
+
+  rolling-release:
+    name: Rolling release
+    needs: images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    # one writer at a time: the newest main commit wins
+    concurrency:
+      group: rolling-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Move the rolling tag to this commit
+        run: |
+          git tag -f rolling "$GITHUB_SHA"
+          git push -f origin refs/tags/rolling
+      - name: Release notes
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          short="${GITHUB_SHA::7}"
+          owner="${REPO_OWNER,,}"
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          Rolling build of \`main\` at ${GITHUB_SHA}. Replaced on every push to \`main\`; not a stable release.
+
+          \`\`\`
+          docker pull ghcr.io/${owner}/cvenom-backend:sha-${short}
+          docker pull ghcr.io/${owner}/cvenom-frontend:sha-${short}
+          \`\`\`
+
+          \`:edge\` always tracks the newest \`main\` build.
+          EOF
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          tag_name: rolling
+          name: Rolling (main)
+          body_path: ${{ runner.temp }}/notes.md
+          prerelease: true
+          make_latest: false
+
+  release:
+    name: Tagged release
+    needs: images
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Release notes
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          owner="${REPO_OWNER,,}"
+          version="${TAG#v}"
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          \`\`\`
+          docker pull ghcr.io/${owner}/cvenom-backend:${version}
+          docker pull ghcr.io/${owner}/cvenom-frontend:${version}
+          \`\`\`
+          EOF
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: ${{ runner.temp }}/notes.md
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
