@@ -778,3 +778,54 @@ async def test_sort_priority_boost_expires_as_the_date_ages(db_session):
 async def test_sort_priority_with_status_exploited(db_session):
     expected = _prio_fixture(db_session)
     assert ids(await get(db_session, "/api/cves?status=exploited&sort=priority")) == expected
+
+
+# ---------------------------------------------------------------- priority parity (Python key vs SQL)
+
+
+def _parity_fixture(db):
+    t = TODAY
+
+    def k(n, added=t, **kw):
+        cve(db, f"CVE-2024-{n:04d}", kev=True, kev_added=added, **kw)
+
+    y = t - timedelta(days=1)
+    k(101, kev_ransomware=True)
+    k(102, y, kev_ransomware=True, epss_percentile=0.1)
+    k(103, kev_ransomware=False, epss_percentile=0.9)
+    k(104, epss_percentile=0.9, cvss=5.0)                       # ransomware NULL
+    k(105, epss_percentile=0.9, cvss=5.0, poc_badge=False)      # equal to 104 but the id
+    k(106, epss_percentile=0.9, cvss=5.0, poc_badge=True)
+    k(107, epss_percentile=0.9, cvss=5.0, poc_badge=True, patch_available=False)
+    k(108, y, epss_percentile=0.9, cvss=5.0, poc_badge=True, patch_available=True)
+    k(109, epss_percentile=0.9, cvss=5.0, poc_badge=True)       # equal to 106 but the id
+    k(110, epss_percentile=0.5, cvss=9.9)
+    k(111)                                                       # nothing at all
+    o3, o5 = t - timedelta(days=3), t - timedelta(days=5)       # not recent
+    k(120, o3, epss_percentile=0.99, cvss=9.8)
+    k(121, o5, epss_percentile=0.99, cvss=9.8)
+    k(122, o5, epss_percentile=0.99, cvss=9.8)                  # equal to 121 but the id
+    k(123, o3)
+    return [f"CVE-2024-{n:04d}" for n in (
+        102, 101, 107, 106, 109, 108, 104, 105, 103, 110, 111,   # recent: ransomware, EPSS, CVSS, PoC, no patch, KEV date, id
+        120, 121, 122, 123,                                       # older: same order, no boost
+    )]
+
+
+async def test_priority_python_key_and_sql_order_agree(db_session):
+    from cvenom.pipeline import lane_views
+    from cvenom.scoring import Lane
+
+    expected = _parity_fixture(db_session)
+    py = [v.cve_id for v in lane_views(db_session, NOW, "30d")[Lane.EXPLOITED]]
+    sql = ids(await get(db_session, "/api/cves?sort=priority&page_size=100"))
+    assert py == sql
+    assert sql == expected  # hand-written, so a bug shared by both cannot hide
+
+
+async def test_priority_paging_returns_each_row_exactly_once(db_session):
+    expected = _parity_fixture(db_session)
+    got = []
+    for page in range(1, 10):
+        got += ids(await get(db_session, f"/api/cves?sort=priority&page_size=2&page={page}"))
+    assert got == expected and len(set(got)) == len(expected)
