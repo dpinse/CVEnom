@@ -1,53 +1,39 @@
 import { useEffect, useMemo, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, RateLimited } from "../lib/api";
 import { useCveSearch } from "../lib/queries";
 import { relTime } from "../lib/relTime";
-import { useSelection } from "../lib/selection";
 import { Text } from "../lib/text";
-import type { CveItem, CveQuery, Lane } from "../lib/types";
-import { severityOf } from "../components/LaneRow";
+import type { CveItem } from "../lib/types";
+import { severityOf, type Sev } from "../components/LaneRow";
 import {
-  cleanQ,
+  FILTER_KEYS,
+  parseThreatFilters,
+  SEVERITIES,
+  SORTS,
+  STATUSES,
+  toCveQuery,
+  type ThreatFilters,
+} from "./threatFilters";
+import {
+  AddedSelect,
   DEBOUNCE_MS,
   MAX_Q,
   OutOfRange,
   PAGE_SIZE,
   Pager,
-  parsePage,
+  SkipToPagination,
   useDebouncedQ,
   usePager,
   useUpdateParams,
-  validDate,
   type Patch,
 } from "./threatsShared";
 import ThreatsNews, { STORY_FILTER_KEYS } from "./ThreatsNews";
 
-export { DEBOUNCE_MS, MAX_Q, PAGE_SIZE };
+export { DEBOUNCE_MS, MAX_Q, PAGE_SIZE, parseThreatFilters, toCveQuery };
+export type { ThreatFilters };
 
-const LANES: Lane[] = ["EXPLOITED", "LIKELY", "LOUD", "FRESH"];
-const SOURCES = ["cisa", "vulncheck"] as const;
-const SORTS = ["kev_added", "published", "cvss"] as const;
-type Sort = (typeof SORTS)[number];
-const SORT_LABELS: Record<Sort, string> = {
-  kev_added: "Newest KEV listing",
-  published: "Newest published",
-  cvss: "Highest CVSS",
-};
-const FILTER_KEYS = [
-  "q",
-  "lane",
-  "source",
-  "min_cvss",
-  "kev",
-  "from",
-  "to",
-  "kev_from",
-  "kev_to",
-  "sort",
-  "page",
-] as const;
 /** Every param either tab owns; switching tabs clears them (the cve / story / country selection survives). */
 const TAB_PARAMS = [...new Set<string>([...FILTER_KEYS, ...STORY_FILTER_KEYS, "tab"])];
 
@@ -57,86 +43,55 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "news", label: "News" },
 ];
 
-function validCvss(s: string | null): number | undefined {
-  if (s === null || s.trim() === "") return undefined;
-  const n = Number(s);
-  return Number.isFinite(n) && n >= 0 && n <= 10 ? n : undefined;
-}
+const SEV_NAME: Record<Sev, string> = { crit: "Critical", high: "High", med: "Medium", low: "Low" };
 
-/** Pure: reads filters from URL params, silently dropping every invalid value. */
-export function parseFilters(sp: URLSearchParams): CveQuery & { page: number } {
-  const out: CveQuery & { page: number } = { page: parsePage(sp.get("page")) };
-  const q = cleanQ(sp.get("q"));
-  if (q) out.q = q;
-  const lane = sp.get("lane");
-  if (lane && (LANES as string[]).includes(lane)) out.lane = lane as Lane;
-  const source = sp.get("source");
-  if (source && (SOURCES as readonly string[]).includes(source)) out.source = source as (typeof SOURCES)[number];
-  const cvss = validCvss(sp.get("min_cvss"));
-  if (cvss !== undefined) out.min_cvss = cvss;
-  if (sp.get("kev") === "true") out.kev = true;
-  const from = validDate(sp.get("from"));
-  if (from) out.from = from;
-  const to = validDate(sp.get("to"));
-  if (to) out.to = to;
-  const kevFrom = validDate(sp.get("kev_from"));
-  if (kevFrom) out.kev_from = kevFrom;
-  const kevTo = validDate(sp.get("kev_to"));
-  if (kevTo) out.kev_to = kevTo;
-  const sort = sp.get("sort");
-  if (sort && (SORTS as readonly string[]).includes(sort)) out.sort = sort as CveQuery["sort"];
-  return out;
-}
-
-function ResultRow({ item, now, onSelect }: { item: CveItem; now: Date; onSelect: (id: string) => void }) {
+function ResultRow({ item, filters, now }: { item: CveItem; filters: ThreatFilters; now: Date }) {
+  const navigate = useNavigate();
+  const scored = item.cvss !== null;
   const sev = severityOf(item.cvss);
+  const addedAt = filters.status === "exploited" && item.kev_added ? item.kev_added : item.published;
+  const to = `/threats/${item.cve_id}`;
   return (
-    <tr className="srow" role="row" data-sev={sev} data-testid="search-row" onClick={() => onSelect(item.cve_id)}>
-      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
-      <td role="cell" className="c-id" data-label="CVE">
-        <button
-          type="button"
-          className="sid"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect(item.cve_id);
-          }}
-        >
+    <tr
+      className="srow"
+      data-testid="search-row"
+      onClick={(e) => {
+        if (!(e.target as HTMLElement).closest("a")) navigate(to);
+      }}
+    >
+      <td>
+        <span className="sevpill" data-sev={scored ? sev : "none"}>
+          <i aria-hidden="true" />
+          <span className="score">{item.cvss === null ? "–" : item.cvss.toFixed(1)}</span>
+          <span className="sevname">{scored ? SEV_NAME[sev] : "Unscored"}</span>
+        </span>
+      </td>
+      <td>
+        <Link className="sid" to={to}>
           {item.cve_id}
-        </button>
+        </Link>
       </td>
-      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
-      <td role="cell" data-label="CVSS">
-        {item.cvss !== null && <span className={`chip num ${sev}`}>{item.cvss.toFixed(1)}</span>}
-      </td>
-      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
-      <td role="cell" data-label="EPSS">
-        {item.epss_percentile !== null && <span className="chip num">p{Math.round(item.epss_percentile * 100)}</span>}
-      </td>
-      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
-      <td role="cell" data-label="KEV">
-        {item.kev && (
-          <span className="chip kev" title={item.kev_source ?? undefined}>
-            KEV{item.kev_added ? ` · ${item.kev_added}` : ""}
-          </span>
-        )}
-      </td>
-      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
-      <td role="cell" className="c-pub" data-label="Published">
-        {relTime(item.published, now)}
-      </td>
-      {/* eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role -- mobile display:block table semantics */}
-      <td role="cell" className="c-sum" data-label="Summary">
+      <td className="c-issue">
+        {item.product && <Text className="prod" value={item.product} />}
         <Text className="sum" value={item.summary} />
+      </td>
+      <td>
+        {item.kev && <span className="tag kev">KEV</span>}
+        {item.poc_badge && <span className="tag poc">PoC</span>}
+        {item.patch_available === false && <span className="tag">no patch</span>}
+        {item.recent_story_count > 0 && <span className="tag">news ×{item.recent_story_count}</span>}
+      </td>
+      <td className="num">{item.epss_percentile !== null && `p${Math.round(item.epss_percentile * 100)}`}</td>
+      <td className="num c-added" title={addedAt ?? undefined}>
+        {relTime(addedAt, now)}
       </td>
     </tr>
   );
 }
 
-function HistoryCves() {
+function ThreatsCves() {
   const [sp, setSp] = useSearchParams();
-  const { select } = useSelection();
-  const filters = useMemo(() => parseFilters(sp), [sp]);
+  const filters = useMemo(() => parseThreatFilters(sp), [sp]);
   const { page } = filters;
 
   // Sticky: the 422 notice outlives the automatic page reset's refetch; any user edit clears it.
@@ -146,20 +101,10 @@ function HistoryCves() {
     setInvalidSeen(false);
     write(patch, push);
   };
+  const [more, setMore] = useState(filters.poc || filters.nopatch);
 
   const q = useDebouncedQ(filters.q ?? "", (v) => update({ q: v }));
-
-  // min CVSS: local text so partial input ("7.") survives.
-  const [cvssText, setCvssText] = useState(filters.min_cvss === undefined ? "" : String(filters.min_cvss));
-  const [seenCvss, setSeenCvss] = useState(filters.min_cvss);
-  if (seenCvss !== filters.min_cvss) {
-    setSeenCvss(filters.min_cvss);
-    if (validCvss(cvssText) !== filters.min_cvss)
-      setCvssText(filters.min_cvss === undefined ? "" : String(filters.min_cvss));
-  }
-
-  const params: CveQuery = { ...filters, page_size: PAGE_SIZE };
-  const { data, error, isFetching, isPlaceholderData } = useCveSearch(params);
+  const { data, error, isFetching, isPlaceholderData } = useCveSearch(toCveQuery(filters));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const now = useMemo(() => new Date(), [data]);
 
@@ -178,15 +123,10 @@ function HistoryCves() {
   }, [invalid, page, setSp]);
 
   const { countRef, setPage } = usePager(update);
-  const dateOrder = filters.from && filters.to && filters.from > filters.to;
-  const kevOrder = filters.kev_from && filters.kev_to && filters.kev_from > filters.kev_to;
   const total = data?.total ?? 0;
   const items = data?.items ?? [];
-  const first = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const last = Math.min(page * PAGE_SIZE, total);
-  // The server's default order follows the backend rule (kev_added only for KEV without a lane), so only a differing choice goes in the URL.
-  const defaultSort: Sort = filters.kev && !filters.lane ? "kev_added" : "published";
-  const shownSort = (filters.sort as Sort | undefined) ?? defaultSort;
+  const outOfRange = data !== undefined && items.length === 0 && total > 0 && page > 1;
+  const sortHint = SORTS.find((s) => s.key === filters.sort)?.hint;
 
   let errorText: string | null = null;
   if (error || invalidSeen) {
@@ -195,10 +135,24 @@ function HistoryCves() {
     else errorText = "Couldn't load results. Try again shortly.";
   }
 
+  const toggleSev = (key: string) => {
+    const on = new Set<string>(filters.sev);
+    if (on.has(key)) on.delete(key);
+    else on.add(key);
+    update(
+      {
+        sev:
+          SEVERITIES.map((s) => s.key)
+            .filter((k) => on.has(k))
+            .join(",") || undefined,
+      },
+      true,
+    );
+  };
+
   const clear = () => {
     q.reset();
     setInvalidSeen(false);
-    setCvssText("");
     setSp((prev) => {
       const next = new URLSearchParams(prev);
       for (const k of FILTER_KEYS) next.delete(k);
@@ -206,104 +160,134 @@ function HistoryCves() {
     });
   };
 
-  const outOfRange = data !== undefined && items.length === 0 && total > 0 && page > 1;
+  const active: { label: string; remove: Patch }[] = [];
+  if (filters.excludeKev) active.push({ label: "Not in KEV", remove: { exclude_kev: undefined } });
+  if (filters.due) active.push({ label: "KEV due within 7 days", remove: { due: undefined } });
+
+  const countText = data
+    ? outOfRange
+      ? `${total} CVEs in total`
+      : `${total} ${total === 1 ? "CVE" : "CVEs"}`
+    : isFetching
+      ? "Loading…"
+      : "";
 
   return (
     <>
-      <form className="sfilters" role="search" onSubmit={(e) => e.preventDefault()}>
-        <label className="f f-q">
-          <span>Search CVEs</span>
-          <input
-            type="search"
-            maxLength={MAX_Q}
-            value={q.qText}
-            onChange={(e) => q.onChange(e.target.value)}
-            autoComplete="off"
-          />
-        </label>
-        <label className="f">
-          <span>Lane</span>
-          <select value={filters.lane ?? ""} onChange={(e) => update({ lane: e.target.value }, true)}>
-            <option value="">All lanes</option>
-            {LANES.map((l) => (
-              <option key={l} value={l}>
-                {l}
-              </option>
+      <form className="tfilters" role="search" onSubmit={(e) => e.preventDefault()}>
+        <div className="frow">
+          <label className="f-q">
+            <span className="sr-only">Search CVEs</span>
+            <input
+              type="search"
+              placeholder="Search CVE, vendor or product"
+              maxLength={MAX_Q}
+              value={q.qText}
+              onChange={(e) => q.onChange(e.target.value)}
+              autoComplete="off"
+            />
+          </label>
+          <AddedSelect value={filters.added} onChange={(v) => update({ added: v === "any" ? undefined : v }, true)} />
+          <div className="sevchips" role="group" aria-label="Severity">
+            {SEVERITIES.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                className="sev-chip"
+                data-sev={s.key}
+                aria-pressed={filters.sev.includes(s.key)}
+                onClick={() => toggleSev(s.key)}
+              >
+                <i aria-hidden="true" />
+                {s.label}
+              </button>
             ))}
-          </select>
-        </label>
-        <label className="f">
-          <span>Source</span>
-          <select value={filters.source ?? ""} onChange={(e) => update({ source: e.target.value }, true)}>
-            <option value="">Any source</option>
-            <option value="cisa">CISA</option>
-            <option value="vulncheck">VulnCheck</option>
-          </select>
-        </label>
-        <label className="f">
-          <span>Min CVSS</span>
-          <input
-            type="number"
-            step={0.1}
-            min={0}
-            max={10}
-            value={cvssText}
-            onChange={(e) => {
-              setCvssText(e.target.value);
-              const n = validCvss(e.target.value);
-              update({ min_cvss: n === undefined ? undefined : String(n) });
-            }}
-          />
-        </label>
-        <label className="f">
-          <span>From</span>
-          <input type="date" value={filters.from ?? ""} onChange={(e) => update({ from: e.target.value })} />
-        </label>
-        <label className="f">
-          <span>To</span>
-          <input type="date" value={filters.to ?? ""} onChange={(e) => update({ to: e.target.value })} />
-        </label>
-        <label className="f">
-          <span>KEV added from</span>
-          <input type="date" value={filters.kev_from ?? ""} onChange={(e) => update({ kev_from: e.target.value })} />
-        </label>
-        <label className="f">
-          <span>KEV added to</span>
-          <input type="date" value={filters.kev_to ?? ""} onChange={(e) => update({ kev_to: e.target.value })} />
-        </label>
-        <label className="f">
-          <span>Sort</span>
-          <select
-            value={shownSort}
-            onChange={(e) => update({ sort: e.target.value === defaultSort ? undefined : e.target.value }, true)}
+          </div>
+          <div className="sortbox">
+            <label>
+              <span className="sr-only">Sort</span>
+              <select
+                value={filters.sort}
+                onChange={(e) => update({ sort: e.target.value === "newest" ? undefined : e.target.value }, true)}
+              >
+                {SORTS.map((s) => (
+                  <option key={s.key} value={s.key}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="sort-desc">{sortHint}</span>
+          </div>
+        </div>
+        <div className="frow">
+          <div className="statuschips" role="group" aria-label="Status">
+            {STATUSES.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                className="chip-btn"
+                aria-pressed={filters.status === s.key}
+                onClick={() => update({ status: s.key === "all" ? undefined : s.key }, true)}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="chip-btn"
+            aria-expanded={more}
+            aria-controls="more-filters"
+            onClick={() => setMore((m) => !m)}
           >
-            {SORTS.map((s) => (
-              <option key={s} value={s}>
-                {SORT_LABELS[s]}
-              </option>
+            All filters
+          </button>
+          {more && (
+            <span className="morefilters" id="more-filters">
+              <button
+                type="button"
+                className="chip-btn"
+                aria-pressed={filters.poc}
+                onClick={() => update({ poc: filters.poc ? undefined : "1" }, true)}
+              >
+                Public exploit
+              </button>
+              <button
+                type="button"
+                className="chip-btn"
+                aria-pressed={filters.nopatch}
+                onClick={() => update({ nopatch: filters.nopatch ? undefined : "1" }, true)}
+              >
+                No patch
+              </button>
+            </span>
+          )}
+          <button type="button" className="sclear" onClick={clear}>
+            Clear filters
+          </button>
+          <SkipToPagination />
+        </div>
+        {active.length > 0 && (
+          <ul className="active-filters" aria-label="Active filters">
+            {active.map((a) => (
+              <li key={a.label}>
+                <button
+                  type="button"
+                  className="achip"
+                  aria-label={`Remove filter: ${a.label}`}
+                  onClick={() => update(a.remove, true)}
+                >
+                  {a.label} <span aria-hidden="true">×</span>
+                </button>
+              </li>
             ))}
-          </select>
-        </label>
-        <label className="f f-check">
-          <input
-            type="checkbox"
-            checked={filters.kev === true}
-            onChange={(e) => update({ kev: e.target.checked ? "true" : undefined }, true)}
-          />
-          <span>KEV only</span>
-        </label>
-        <button type="button" className="sclear" onClick={clear}>
-          Clear filters
-        </button>
+          </ul>
+        )}
       </form>
-      {dateOrder && (
+      {data?.exact_match_filtered_out && (
         <p className="shint" role="note">
-          The From date is after the To date, so nothing can match.
-        </p>
-      )}
-      {kevOrder && (
-        <p className="shint" role="note">
-          The KEV added from date is after the KEV added to date, so nothing can match.
+          Showing the exact match for {filters.q}. It is outside your current filters.
         </p>
       )}
       {errorText && (
@@ -311,56 +295,34 @@ function HistoryCves() {
           {errorText}
         </p>
       )}
-      <p className="scount" aria-live="polite" tabIndex={-1} ref={countRef}>
-        {data
-          ? total === 0
-            ? "0 results"
-            : outOfRange
-              ? `${total} results in total`
-              : `Showing ${first}–${last} of ${total}`
-          : isFetching
-            ? "Loading…"
-            : ""}
-      </p>
       {data &&
         items.length === 0 &&
         !errorText &&
         (outOfRange ? <OutOfRange /> : <p className="sempty">No CVEs match these filters</p>)}
       {items.length > 0 && (
-        <div className="stable-wrap" aria-busy={isPlaceholderData}>
-          <table className="stable" role="table">
-            {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- mobile display:block table semantics */}
-            <thead role="rowgroup">
-              <tr role="row">
-                <th scope="col" role="columnheader">
-                  CVE
-                </th>
-                <th scope="col" role="columnheader">
-                  CVSS
-                </th>
-                <th scope="col" role="columnheader">
-                  EPSS
-                </th>
-                <th scope="col" role="columnheader">
-                  KEV
-                </th>
-                <th scope="col" role="columnheader">
-                  Published
-                </th>
-                <th scope="col" role="columnheader">
-                  Summary
-                </th>
+        <div className="tbl-wrap" aria-busy={isPlaceholderData}>
+          <table className="ttable">
+            <thead>
+              <tr>
+                <th scope="col">Severity</th>
+                <th scope="col">CVE</th>
+                <th scope="col">Product and issue</th>
+                <th scope="col">Signals</th>
+                <th scope="col">EPSS</th>
+                <th scope="col">Added</th>
               </tr>
             </thead>
-            {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- mobile display:block table semantics */}
-            <tbody role="rowgroup">
+            <tbody>
               {items.map((it) => (
-                <ResultRow key={it.cve_id} item={it} now={now} onSelect={(id) => select({ kind: "cve", id })} />
+                <ResultRow key={it.cve_id} item={it} filters={filters} now={now} />
               ))}
             </tbody>
           </table>
         </div>
       )}
+      <p className="scount" aria-live="polite" tabIndex={-1} ref={countRef}>
+        {countText}
+      </p>
       <Pager page={page} total={total} setPage={setPage} />
     </>
   );
@@ -394,6 +356,7 @@ export default function Threats() {
   return (
     <section className="page gutter search">
       <h1>Threats</h1>
+      <p className="tsub">Every CVE and story CVEnom has recorded. Filter by when it was added, severity and status.</p>
       <div className="htabs" role="tablist" aria-label="Threats">
         {TABS.map((t, i) => (
           <button
@@ -413,7 +376,7 @@ export default function Threats() {
         ))}
       </div>
       <div id="htab-panel" role="tabpanel" aria-labelledby={`htab-${tab}`} className="htab-panel">
-        {tab === "news" ? <ThreatsNews /> : <HistoryCves />}
+        {tab === "news" ? <ThreatsNews /> : <ThreatsCves />}
       </div>
     </section>
   );

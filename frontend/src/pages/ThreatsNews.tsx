@@ -16,10 +16,12 @@ import {
   useDebouncedQ,
   usePager,
   useUpdateParams,
-  validDate,
+  AddedSelect,
+  parseAdded,
+  SkipToPagination,
 } from "./threatsShared";
 
-export const STORY_FILTER_KEYS = ["q", "source", "from", "to", "page"] as const;
+export const STORY_FILTER_KEYS = ["q", "source", "added", "page"] as const;
 const MAX_SOURCE = 64;
 
 /** Pure: reads the Stories filters from URL params, silently dropping every invalid value. */
@@ -29,10 +31,8 @@ export function parseStoryFilters(sp: URLSearchParams): StoryQuery & { page: num
   if (q) out.q = q;
   const source = sp.get("source")?.trim().slice(0, MAX_SOURCE).trim();
   if (source) out.source = source;
-  const from = validDate(sp.get("from"));
-  if (from) out.from = from;
-  const to = validDate(sp.get("to"));
-  if (to) out.to = to;
+  const added = parseAdded(sp.get("added"));
+  if (added !== "any") out.added = added;
   return out;
 }
 
@@ -49,7 +49,7 @@ function Row({
 }) {
   const ids = story.cve_ids ?? [];
   return (
-    <li className="hrow" data-testid="history-story">
+    <li className="hrow" data-testid="news-story">
       <button type="button" className="hrow-open" onClick={() => onOpen(story.url)}>
         <Text className="hrow-title" value={story.title} />
         <span className="hrow-src">
@@ -69,7 +69,7 @@ function Row({
   );
 }
 
-export default function HistoryStories() {
+export default function ThreatsNews() {
   const [sp, setSp] = useSearchParams();
   const { select } = useSelection();
   const filters = useMemo(() => parseStoryFilters(sp), [sp]);
@@ -84,9 +84,6 @@ export default function HistoryStories() {
 
   const total = data?.total ?? 0;
   const items = data?.items ?? [];
-  const first = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const last = Math.min(page * PAGE_SIZE, total);
-  const dateOrder = filters.from && filters.to && filters.from > filters.to;
   const outOfRange = data !== undefined && items.length === 0 && total > 0 && page > 1;
 
   let errorText: string | null = null;
@@ -113,64 +110,49 @@ export default function HistoryStories() {
 
   return (
     <>
-      <form className="sfilters" role="search" onSubmit={(e) => e.preventDefault()}>
-        <label className="f f-q">
-          <span>Search stories</span>
-          <input
-            type="search"
-            maxLength={MAX_Q}
-            value={q.qText}
-            onChange={(e) => q.onChange(e.target.value)}
-            autoComplete="off"
+      <form className="tfilters" role="search" onSubmit={(e) => e.preventDefault()}>
+        <div className="frow">
+          <label className="f-q">
+            <span className="sr-only">Search stories</span>
+            <input
+              type="search"
+              placeholder="Search stories"
+              maxLength={MAX_Q}
+              value={q.qText}
+              onChange={(e) => q.onChange(e.target.value)}
+              autoComplete="off"
+            />
+          </label>
+          <AddedSelect
+            value={filters.added ?? "any"}
+            onChange={(v) => update({ added: v === "any" ? undefined : v }, true)}
           />
-        </label>
-        <label className="f">
-          <span>Story source</span>
-          <input
-            type="text"
-            maxLength={MAX_SOURCE}
-            defaultValue={filters.source ?? ""}
-            key={filters.source ?? ""}
-            onBlur={(e) => commitSource(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitSource(e.currentTarget.value);
-            }}
-            autoComplete="off"
-          />
-        </label>
-        <label className="f">
-          <span>From</span>
-          <input type="date" value={filters.from ?? ""} onChange={(e) => update({ from: e.target.value })} />
-        </label>
-        <label className="f">
-          <span>To</span>
-          <input type="date" value={filters.to ?? ""} onChange={(e) => update({ to: e.target.value })} />
-        </label>
-        <button type="button" className="sclear" onClick={clear}>
-          Clear filters
-        </button>
+          <label className="f-src">
+            <span className="sr-only">Story source</span>
+            <input
+              type="text"
+              placeholder="Source"
+              maxLength={MAX_SOURCE}
+              defaultValue={filters.source ?? ""}
+              key={filters.source ?? ""}
+              onBlur={(e) => commitSource(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitSource(e.currentTarget.value);
+              }}
+              autoComplete="off"
+            />
+          </label>
+          <button type="button" className="sclear" onClick={clear}>
+            Clear filters
+          </button>
+          <SkipToPagination />
+        </div>
       </form>
-      {dateOrder && (
-        <p className="shint" role="note">
-          The From date is after the To date, so nothing can match.
-        </p>
-      )}
       {errorText && (
         <p className="serror" role="alert">
           {errorText}
         </p>
       )}
-      <p className="scount" aria-live="polite" tabIndex={-1} ref={countRef}>
-        {data
-          ? total === 0
-            ? "0 results"
-            : outOfRange
-              ? `${total} results in total`
-              : `Showing ${first}–${last} of ${total}`
-          : isFetching
-            ? "Loading…"
-            : ""}
-      </p>
       {data &&
         items.length === 0 &&
         !errorText &&
@@ -188,6 +170,15 @@ export default function HistoryStories() {
           ))}
         </ul>
       )}
+      <p className="scount" aria-live="polite" tabIndex={-1} ref={countRef}>
+        {data
+          ? outOfRange
+            ? `${total} stories in total`
+            : `${total} ${total === 1 ? "story" : "stories"}`
+          : isFetching
+            ? "Loading…"
+            : ""}
+      </p>
       <Pager page={page} total={total} setPage={setPage} />
     </>
   );
