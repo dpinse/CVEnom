@@ -14,6 +14,7 @@ import "./styles/lanes.css";
 import "./styles/dashboard.css";
 import "./styles/drawer.css";
 import "./styles/search.css";
+import "./styles/threat.css";
 import "./styles/auth.css";
 import "./styles/admin.css";
 import { initTheme } from "./lib/theme";

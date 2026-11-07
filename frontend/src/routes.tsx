@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { PublicOrUser, RequireAdmin, RequireUser } from "./components/guards";
 import { isIso3166Alpha2 } from "./lib/iso3166";
@@ -12,10 +13,12 @@ import ChangePassword from "./pages/ChangePassword";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
-import ThreatPlaceholder from "./pages/ThreatPlaceholder";
 import Sessions from "./pages/Sessions";
 import Threats from "./pages/Threats";
 import TwoFactor from "./pages/TwoFactor";
+
+// The threat page (and the CWE name map it pulls in) stay out of the initial bundle.
+const ThreatPage = lazy(() => import("./pages/ThreatPage"));
 
 const sevForMinCvss = (n: number) => (n >= 9 ? "crit" : n >= 7 ? "high,crit" : null);
 
@@ -54,7 +57,14 @@ export function AppRoutes() {
         <Route element={<PublicOrUser />}>
           <Route index element={<Dashboard />} />
           <Route path="threats" element={<Threats />} />
-          <Route path="threats/:cveId" element={<ThreatPlaceholder />} />
+          <Route
+            path="threats/:cveId"
+            element={
+              <Suspense fallback={<div className="shell-loading gutter" role="status" aria-busy="true" />}>
+                <ThreatPage />
+              </Suspense>
+            }
+          />
           <Route path="history" element={<LegacyThreatsRedirect />} />
           <Route path="search" element={<LegacyThreatsRedirect />} />
         </Route>

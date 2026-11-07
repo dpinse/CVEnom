@@ -103,11 +103,16 @@ describe("guards", () => {
     expect(screen.getByTestId("loc")).toHaveTextContent("/threats?cve=CVE-2026-1096");
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
-  test("/threats/CVE-2026-0001 renders; a bad id is the not-found view", async () => {
+  test("/threats/CVE-2026-0001 loads the threat page; a bad id is the not-found view", async () => {
     handlers({ publicRead: true });
+    server.use(
+      http.get("http://localhost/api/cves/CVE-2026-0001", () =>
+        HttpResponse.json({ error: "not_found" }, { status: 404 }),
+      ),
+    );
     guest();
     at("/threats/CVE-2026-0001");
-    expect(await screen.findByRole("heading", { name: "CVE-2026-0001" })).toBeInTheDocument();
+    expect(await screen.findByText("We have no record of CVE-2026-0001.")).toBeInTheDocument();
     cleanup();
     at("/threats/nope");
     expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
