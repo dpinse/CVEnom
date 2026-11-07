@@ -334,7 +334,10 @@ def persist_events(session: Session, events: list[dict], *, source_default: str)
 
 
 def lane_views(
-    session: Session, now: datetime, rng: RangeKey = DEFAULT_RANGE
+    session: Session,
+    now: datetime,
+    rng: RangeKey = DEFAULT_RANGE,
+    exclude_sources: frozenset[str] = frozenset(),
 ) -> dict[Lane, list[CveView]]:
     cfg = get_settings()
     now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
@@ -345,7 +348,11 @@ def lane_views(
     recent_link = (
         select(StoryCveLink.cve_id)
         .join(Story, Story.id == StoryCveLink.story_id)
-        .where(StoryCveLink.cve_id == Cve.cve_id, Story.published >= loud_cutoff)
+        .where(
+            StoryCveLink.cve_id == Cve.cve_id,
+            Story.published >= loud_cutoff,
+            Story.source.not_in(exclude_sources),
+        )
     )
     candidates = select(Cve).where(
         or_(
@@ -374,6 +381,7 @@ def lane_views(
                 .where(
                     StoryCveLink.cve_id.in_([r.cve_id for r in rows]),
                     Story.published >= loud_cutoff,
+                    Story.source.not_in(exclude_sources),
                 )
                 .group_by(StoryCveLink.cve_id)
             ).all()

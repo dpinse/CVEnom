@@ -542,7 +542,8 @@ async def test_detail_ransomware_anon_excluded_authed_included(db_session):
     authed = (await get(db_session, "/api/cves/CVE-2024-7777", headers=h)).json()
     assert {s["source"] for s in authed["stories"]} == {"src", "ransomware.live"}
     assert [g["label"] for g in authed["geo_events"]] == ["grp: Victim Inc"]
-    assert authed["recent_story_count"] == anon["recent_story_count"] == 2
+    assert anon["recent_story_count"] == 1  # restricted story not counted for anonymous
+    assert authed["recent_story_count"] == 2
 
 
 async def test_public_read_off_everyone_authed_sees_ransomware(db_session):

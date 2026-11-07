@@ -630,3 +630,43 @@ async def test_detail_updated_at_utc(db_session):
     cve(db_session, "CVE-2024-0001")
     body = (await get(db_session, "/api/cves/CVE-2024-0001")).json()
     assert body["updated_at"].endswith(("Z", "+00:00"))
+
+
+# ---------------------------------------------------------------- restricted stories in counts
+
+
+def _restricted_story_dataset(db):
+    cve(db, "CVE-2024-0701", published=OLD)
+    cve(db, "CVE-2024-0702", published=OLD)
+    rl = story(db, 701, ["CVE-2024-0701"], published=NOW - timedelta(hours=1))
+    rl.source = "ransomware.live"
+    story(db, 702, ["CVE-2024-0702"], published=NOW - timedelta(hours=1))
+    db.flush()
+
+
+async def test_lanes_loud_ignores_restricted_stories_for_anonymous(db_session):
+    _restricted_story_dataset(db_session)
+    anon = (await get(db_session, "/api/lanes?range=7d")).json()["LOUD"]
+    assert anon["total"] == 1
+    assert [i["cve_id"] for i in anon["items"]] == ["CVE-2024-0702"]
+    assert [i["recent_story_count"] for i in anon["items"]] == [1]
+
+    h, _ = bearer(db_session, mk_user(db_session))
+    authed = (await get(db_session, "/api/lanes?range=7d", headers=h)).json()["LOUD"]
+    assert authed["total"] == 2
+
+
+async def test_recent_story_count_ignores_restricted_stories_for_anonymous(db_session):
+    _restricted_story_dataset(db_session)
+    items = {i["cve_id"]: i for i in (await get(db_session, "/api/cves")).json()["items"]}
+    assert items["CVE-2024-0701"]["recent_story_count"] == 0
+    assert items["CVE-2024-0702"]["recent_story_count"] == 1
+    d = (await get(db_session, "/api/cves/CVE-2024-0701")).json()
+    assert d["recent_story_count"] == 0
+
+    h, _ = bearer(db_session, mk_user(db_session))
+    own = {i["cve_id"]: i for i in (await get(db_session, "/api/cves", headers=h)).json()["items"]}
+    assert own["CVE-2024-0701"]["recent_story_count"] == 1
+    assert (await get(db_session, "/api/cves/CVE-2024-0701", headers=h)).json()[
+        "recent_story_count"
+    ] == 1

@@ -127,14 +127,20 @@ def _item(c: Cve, story_count: int, last_seen: datetime | None) -> dict:
     }
 
 
-def _recent_counts(session: Session, ids: list[str], since: datetime) -> dict[str, int]:
+def _recent_counts(
+    session: Session, ids: list[str], since: datetime, hidden: frozenset[str] = frozenset()
+) -> dict[str, int]:
     if not ids:
         return {}
     return dict(
         session.execute(
             select(StoryCveLink.cve_id, func.count())
             .join(Story, Story.id == StoryCveLink.story_id)
-            .where(StoryCveLink.cve_id.in_(ids), Story.published >= since)
+            .where(
+                StoryCveLink.cve_id.in_(ids),
+                Story.published >= since,
+                Story.source.not_in(hidden),
+            )
             .group_by(StoryCveLink.cve_id)
         ).all()
     )
@@ -145,15 +151,16 @@ def lanes(
     range_: Annotated[RangeKey, Query(alias="range")] = DEFAULT_RANGE,
     limit: Annotated[int, Query(ge=1, le=100)] = 5,
     session: Session = SessionDep,
+    user: User | None = Depends(current_user),  # gated by the router-level public_or_user
 ) -> dict:
-    views = lane_views(session, _now(), range_)
+    hidden = restricted_sources(user)  # signed-in requests bypass the response cache
+    views = lane_views(session, _now(), range_, hidden)
     capped = {lane: v[:limit] for lane, v in views.items()}
     ids = list({v.cve_id for vs in capped.values() for v in vs})
     rows: dict[str, Cve] = {}
     if ids:  # ONE query for the fields CveView lacks
         rows = {c.cve_id: c for c in session.scalars(select(Cve).where(Cve.cve_id.in_(ids)))}
-    # The lanes response is cached for everyone: last_seen always uses the anonymous view.
-    seen = last_seen_map(session, ids, restricted_sources(None))
+    seen = last_seen_map(session, ids, hidden)
     out: dict[str, dict] = {}
     for lane in Lane:
         items = []
@@ -285,7 +292,7 @@ def search_cves(
         .offset((page - 1) * page_size)
     ).all()
     ids = [r.cve_id for r in rows]
-    counts = _recent_counts(session, ids, _loud_since())
+    counts = _recent_counts(session, ids, _loud_since(), hidden)
     seen = last_seen_map(session, ids, hidden)
     return {
         "items": [_item(r, counts.get(r.cve_id, 0), seen.get(r.cve_id)) for r in rows],
@@ -392,7 +399,7 @@ def cve_detail(
         .order_by(GeoEvent.observed_at.desc(), GeoEvent.id.desc())
         .limit(100)
     ).all()
-    counts = _recent_counts(session, [cve_id], _loud_since())
+    counts = _recent_counts(session, [cve_id], _loud_since(), hidden)
     seen = last_seen_map(session, [cve_id], hidden)
     events = session.execute(
         select(CveEvent.kind, CveEvent.occurred_at, CveEvent.source, CveEvent.detail)
