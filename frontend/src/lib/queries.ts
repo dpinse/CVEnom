@@ -22,7 +22,6 @@ import type {
   StoryListOut,
   StoryQuery,
   SummaryOut,
-  VelocityOut,
   VolumeOut,
 } from "./types";
 import { DEFAULT_RANGE, type RangeKey } from "./range";
@@ -32,7 +31,6 @@ export const qk = {
   lanes: (range: RangeKey, limit: number) => ["lanes", range, limit] as const,
   summary: (range: RangeKey) => ["summary", range] as const,
   volume: (range: RangeKey) => ["volume", range] as const,
-  velocity: (days: number) => ["velocity", days] as const,
   geo: (range: RangeKey) => ["geo", range] as const,
   loud: (range: RangeKey, limit: number) => ["loud", range, limit] as const,
   cve: (id: string, range: RangeKey) => ["cve", id, range] as const,
@@ -205,14 +203,6 @@ export function useVolume(range: RangeKey) {
   return useRead({
     queryKey: qk.volume(range),
     queryFn: ({ signal }) => api<VolumeOut>(`/volume?range=${range}`, { signal }),
-    refetchInterval: errorRefetchInterval,
-  });
-}
-
-export function useVelocity(days = 30) {
-  return useRead({
-    queryKey: qk.velocity(days),
-    queryFn: ({ signal }) => api<VelocityOut>(`/velocity?days=${days}`, { signal }),
     refetchInterval: errorRefetchInterval,
   });
 }

@@ -1,9 +1,9 @@
 import { Lanes } from "../components/Lanes";
 import { LazyGlobe } from "../components/LazyGlobe";
-import { Velocity } from "../components/Velocity";
+import { Volume } from "../components/Volume";
 
 /**
- * The radar: globe (full width), then the velocity strip, then the four lanes. The alert bar and the
+ * The radar: globe (full width), then the volume chart, then the four lanes. The alert bar and the
  * drawer live in the shell, so they are not repeated here.
  */
 export default function Dashboard() {
@@ -11,7 +11,7 @@ export default function Dashboard() {
     <div className="dash gutter">
       <h1 className="sr-only">Dashboard</h1>
       <LazyGlobe />
-      <Velocity />
+      <Volume />
       <Lanes />
     </div>
   );

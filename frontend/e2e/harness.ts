@@ -46,7 +46,6 @@ async function mockApi(page: Page, unexpected: string[]) {
     if (path === "/api/lanes") return route.fulfill(json(fixture("lanes")));
     if (path === "/api/summary") return route.fulfill(json(fixture("summary")));
     if (path === "/api/volume") return route.fulfill(json(fixture("volume")));
-    if (path === "/api/velocity") return route.fulfill(json(fixture("velocity")));
     if (path === "/api/geo") return route.fulfill(json(fixture("geo")));
     const geoCc = /^\/api\/geo\/([A-Z]{2})$/.exec(path)?.[1]; // anonymous: events is null
     if (geoCc) return route.fulfill(json(JSON.stringify({ ...JSON.parse(fixture("geo-DE")), country_code: geoCc })));
@@ -174,7 +173,9 @@ export const MIN_CANVAS = 200;
 
 /** Standard deviation of luminance over a centre crop of the globe canvas, measured from a real screenshot. 0 for a missing or collapsed canvas. */
 export async function canvasCentreStdDev(page: Page): Promise<number> {
-  const box = await page.locator(".globe-map canvas").first().boundingBox();
+  const canvas = page.locator(".globe-map canvas").first();
+  await canvas.scrollIntoViewIfNeeded(); // a taller page above the lanes can leave the globe scrolled out of the clip
+  const box = await canvas.boundingBox();
   if (!box || box.width < MIN_CANVAS || box.height < MIN_CANVAS) return 0;
   const size = 120;
   const clip = {

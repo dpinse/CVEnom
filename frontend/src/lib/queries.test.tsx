@@ -25,7 +25,6 @@ import {
   useGeo,
   useLanes,
   useLoudStories,
-  useVelocity,
 } from "./queries";
 
 const B = "http://localhost/api";
@@ -63,7 +62,6 @@ describe("keys", () => {
     expect(qk.lanes("7d", 5)).toEqual(["lanes", "7d", 5]);
     expect(qk.summary("24h")).toEqual(["summary", "24h"]);
     expect(qk.volume("30d")).toEqual(["volume", "30d"]);
-    expect(qk.velocity(7)).toEqual(["velocity", 7]);
     expect(qk.geo("14d")).toEqual(["geo", "14d"]);
     expect(qk.loud("7d", 20)).toEqual(["loud", "7d", 20]);
     expect(qk.cve("CVE-1", "7d")).toEqual(["cve", "CVE-1", "7d"]);
@@ -171,7 +169,7 @@ describe("hooks", () => {
     expect(seen.sort()).toEqual(["/api/lanes?range=24h&limit=5", "/api/summary?range=14d", "/api/volume?range=30d"]);
   });
 
-  test("paths: velocity, geo, loud, cve, search", async () => {
+  test("paths: geo, loud, cve, search", async () => {
     fresh();
     const seen: string[] = [];
     server.use(
@@ -181,7 +179,6 @@ describe("hooks", () => {
         return HttpResponse.json({});
       }),
     );
-    const v = renderHook(() => useVelocity(7), { wrapper });
     const g = renderHook(() => useGeo("7d"), { wrapper });
     const l = renderHook(() => useLoudStories("24h", 10), { wrapper });
     const c = renderHook(() => useCve("CVE-2025-1", "14d"), { wrapper });
@@ -189,18 +186,17 @@ describe("hooks", () => {
       wrapper,
     });
     await waitFor(() => {
-      for (const h of [v, g, l, c, s]) expect(h.result.current.isSuccess).toBe(true);
+      for (const h of [g, l, c, s]) expect(h.result.current.isSuccess).toBe(true);
     });
     expect(seen.sort()).toEqual(
       [
-        "/api/velocity?days=7",
         "/api/geo?range=7d",
         "/api/stories/loud?range=24h&limit=10",
         "/api/cves/CVE-2025-1?range=14d",
         "/api/cves?q=log4j&kev=true&min_cvss=7&page=2",
       ].sort(),
     );
-    expect(qc.getQueryData(qk.velocity(7))).toBeDefined();
+    expect(qc.getQueryData(qk.geo("7d"))).toBeDefined();
   });
 
   test("useCve is disabled without an id; search path omits empty params", () => {

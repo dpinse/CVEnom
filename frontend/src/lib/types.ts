@@ -214,15 +214,6 @@ export interface CveDetail extends CveItem {
   geo_top: GeoTop[];
   updated_at: string;
 }
-export interface VelocityPoint {
-  day: string;
-  count: number;
-}
-export interface VelocityOut {
-  series: VelocityPoint[];
-  current: number;
-  rising: boolean;
-}
 export interface GeoSummaryItem {
   country_code: string;
   kind: string;

@@ -90,7 +90,6 @@ function setup(o: { publicRead?: boolean; token?: string | null; refresh?: () =>
     lanes: qk.lanes("7d", 5),
     summary: qk.summary("7d"),
     volume: qk.volume("7d"),
-    velocity: qk.velocity(30),
     geo: qk.geo("7d"),
     loud: qk.loud("7d", 20),
     cve: qk.cve("CVE-2025-1", "7d"),
@@ -203,14 +202,14 @@ describe("url and auth", () => {
 });
 
 describe("messages and invalidation", () => {
-  test("updated:[lanes] refetches lanes, velocity, summary, volume, cve, cves but not loud or geo", async () => {
+  test("updated:[lanes] refetches lanes, summary, volume, cve, cves but not loud or geo", async () => {
     const r = await live({ publicRead: true });
     const before = { ...r.counts };
     last().msg({ type: "updated", what: ["lanes"] });
     await vi.advanceTimersByTimeAsync(499);
     expect(r.counts).toEqual(before); // debounced
     await vi.advanceTimersByTimeAsync(2);
-    for (const k of ["lanes", "velocity", "summary", "volume", "cve", "cves"]) expect(r.counts[k]).toBe(before[k] + 1);
+    for (const k of ["lanes", "summary", "volume", "cve", "cves"]) expect(r.counts[k]).toBe(before[k] + 1);
     for (const k of ["loud", "geo"]) expect(r.counts[k]).toBe(before[k]);
     r.ctl.stop();
   });
@@ -252,19 +251,7 @@ describe("messages and invalidation", () => {
     await vi.advanceTimersByTimeAsync(200);
     last().msg({ type: "updated", what: ["stories"] });
     await vi.advanceTimersByTimeAsync(1000);
-    for (const k of [
-      "lanes",
-      "velocity",
-      "summary",
-      "volume",
-      "cve",
-      "cves",
-      "geo",
-      "loud",
-      "stories",
-      "story",
-      "country",
-    ])
+    for (const k of ["lanes", "summary", "volume", "cve", "cves", "geo", "loud", "stories", "story", "country"])
       expect(r.counts[k]).toBe(before[k] + 1);
     r.ctl.stop();
   });
@@ -323,7 +310,7 @@ describe("messages and invalidation", () => {
     last().msg({ type: "updated", what: ["lanes"] });
     await vi.advanceTimersByTimeAsync(1000);
     expect(r.counts.lanes).toBe(before);
-    expect(r.counts.velocity).toBeGreaterThan(0);
+    expect(r.counts.volume).toBeGreaterThan(0);
     r.ctl.stop();
   });
 

@@ -50,7 +50,7 @@ export const HEALTHY_MS = 10_000;
 /** Server `what` value -> query-key roots to invalidate. Unknown values are ignored. */
 const INVALIDATES = new Map<string, readonly string[]>(
   Object.entries({
-    lanes: ["lanes", "velocity", "summary", "volume", "cve", "cves"],
+    lanes: ["lanes", "summary", "volume", "cve", "cves"],
     stories: ["loud", "stories", "story", "lanes"],
     geo: ["geo"],
   }),
