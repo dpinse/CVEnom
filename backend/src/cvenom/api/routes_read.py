@@ -38,7 +38,13 @@ from cvenom.ranges import DEFAULT_RANGE, RANGE_DAYS, RangeKey, range_start
 from cvenom.schemas import CVE_ID_RE, AffectedVersion, validate_http_url
 from cvenom.scoring import Lane
 
-from .deps import SessionDep, current_user, public_or_user, restricted_sources
+from .deps import (
+    RESTRICTED_SOURCES,
+    SessionDep,
+    current_user,
+    public_or_user,
+    restricted_sources,
+)
 from .ratelimit import rate_limit
 from .schemas_api import (
     AffectedVersionOut,
@@ -70,7 +76,7 @@ CACHE_PATHS: dict[str, frozenset[str]] = {
     "/api/geo": frozenset({"window_hours", "range"}),
     "/api/stories/loud": frozenset({"limit", "range"}),
     # free-text `q` is not allowed: it bypasses the cache so arbitrary strings cannot fill Redis
-    "/api/stories": frozenset({"source", "from", "to", "added", "page", "page_size"}),
+    "/api/stories": frozenset({"source", "kind", "from", "to", "added", "page", "page_size"}),
 }
 
 def _utf8_query(request: Request) -> None:
@@ -534,6 +540,7 @@ def stories_loud(
 def stories_search(
     q: Annotated[str | None, Query(max_length=200)] = None,
     source: Annotated[str | None, Query(max_length=64)] = None,
+    kind: Literal["news", "ransomware"] = "news",
     from_: Annotated[date | None, Query(alias="from")] = None,
     to: date | None = None,
     added: AddedKey = "any",
@@ -549,6 +556,9 @@ def stories_search(
     end = None
     if to is not None and to < date.max:
         end = datetime.combine(to + timedelta(days=1), time.min, tzinfo=UTC)
+    hidden = restricted_sources(user)
+    # news excludes ransomware sources; ransomware keeps only them. For anonymous callers the
+    # restricted filter still applies in SQL, so kind=ransomware yields no rows and a zero total.
     items, total = search_stories(
         session,
         q=q,
@@ -557,7 +567,8 @@ def stories_search(
         end=end,
         page=page,
         page_size=page_size,
-        exclude_sources=restricted_sources(user),
+        exclude_sources=hidden if kind == "ransomware" else hidden | RESTRICTED_SOURCES,
+        include_sources=RESTRICTED_SOURCES if kind == "ransomware" else frozenset(),
     )
     return {"items": items, "page": page, "page_size": page_size, "total": total}
 

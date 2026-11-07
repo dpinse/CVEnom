@@ -362,9 +362,13 @@ def search_stories(
     page: int,
     page_size: int,
     exclude_sources: frozenset[str] = frozenset(),
+    include_sources: frozenset[str] = frozenset(),
 ) -> tuple[list[dict], int]:
-    """History search. `end` is exclusive. exclude_sources applies to page and count."""
+    """History search. `end` is exclusive. exclude_sources applies to page and count;
+    a non-empty include_sources keeps only those sources (exclude still wins)."""
     conds = []
+    if include_sources:
+        conds.append(Story.source.in_(include_sources))
     if exclude_sources:
         conds.append(Story.source.not_in(exclude_sources))
     if q:
