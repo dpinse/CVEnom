@@ -95,6 +95,14 @@ describe("guards", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Threats" })).toBeInTheDocument();
     expect(screen.getByTestId("loc")).toHaveTextContent(/^\/threats\?q=x$/);
   });
+  test("/history?cve=CVE-2026-1096 keeps the drawer selection", async () => {
+    handlers({ publicRead: true });
+    guest();
+    at("/history?cve=CVE-2026-1096");
+    expect(await screen.findByRole("heading", { level: 1, name: "Threats" })).toBeInTheDocument();
+    expect(screen.getByTestId("loc")).toHaveTextContent("/threats?cve=CVE-2026-1096");
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
   test("/threats/CVE-2026-0001 renders; a bad id is the not-found view", async () => {
     handlers({ publicRead: true });
     guest();
@@ -165,6 +173,12 @@ describe("legacyThreatsSearch", () => {
     ["?min_cvss=7", "?sev=high%2Ccrit"],
     ["?min_cvss=5&from=2026-01-01&lane=LOUD", ""],
     ["?min_cvss=abc", ""],
+    ["?cve=CVE-2026-1096&q=x", "?q=x&cve=CVE-2026-1096"],
+    ["?cve=bogus", ""],
+    ["?country=DE", "?country=DE"],
+    ["?country=Germany", ""],
+    ["?story=https%3A%2F%2Fexample.com%2Fa", "?story=https%3A%2F%2Fexample.com%2Fa"],
+    ["?story=javascript%3Aalert(1)", ""],
   ])("%s -> %s", (input, out) => {
     expect(legacyThreatsSearch(input)).toBe(out);
   });

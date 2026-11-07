@@ -1,5 +1,8 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { PublicOrUser, RequireAdmin, RequireUser } from "./components/guards";
+import { isIso3166Alpha2 } from "./lib/iso3166";
+import { CVE_ID_RE } from "./lib/selection";
+import { safeHref } from "./lib/text";
 import { Shell } from "./components/Shell";
 import AcceptInvite from "./pages/AcceptInvite";
 import AdminAlerts from "./pages/AdminAlerts";
@@ -27,6 +30,13 @@ export function legacyThreatsSearch(search: string): string {
   const sev = raw !== null && raw.trim() !== "" && Number.isFinite(Number(raw)) ? sevForMinCvss(Number(raw)) : null;
   if (sev) out.set("sev", sev);
   if (sp.get("tab") === "stories") out.set("tab", "news");
+  // drawer selection survives, each param only when valid (same gates as parseSelection)
+  const cve = sp.get("cve");
+  if (cve !== null && CVE_ID_RE.test(cve)) out.set("cve", cve);
+  const story = sp.get("story");
+  if (story !== null && safeHref(story) !== null) out.set("story", story);
+  const country = sp.get("country");
+  if (country !== null && isIso3166Alpha2(country)) out.set("country", country);
   const s = out.toString();
   return s ? `?${s}` : "";
 }
