@@ -281,3 +281,19 @@ async def test_circl_server_or_transport_error_fails_run(failure):
     res = await col.run()
     assert col.last_error is not None
     assert res.stories == [] and col.state == state
+
+
+@respx.mock
+async def test_circl_far_future_manifest_timestamp_cannot_wedge_the_collector():
+    now_ts = int(datetime.now(UTC).timestamp())
+    manifest = {
+        U1: {"timestamp": 9999999999},
+        U2: {"timestamp": now_ts - 3600},
+    }
+    _mock_manifest(manifest)
+    _mock_events({U2: _event(U2, now_ts - 3600)})
+    c = CirclOsintCollector()
+    res = await c.run()
+    assert c.last_error is None
+    assert [s.url for s in res.stories] == [EVENT_URL.format(uuid=U2)]
+    assert c.state["last_ts"] == now_ts - 3600

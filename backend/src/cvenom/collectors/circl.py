@@ -33,6 +33,7 @@ MAX_EVENTS_PER_RUN = 50
 MAX_CVES_PER_EVENT = 50
 REQUEST_DELAY = 0.2
 FIRST_RUN_WINDOW = timedelta(days=7)
+MAX_FUTURE = timedelta(days=1)
 SOURCE = "CIRCL OSINT"
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -45,7 +46,9 @@ def _int_ts(value: object) -> int | None:
         ts = int(value)  # MISP stores the timestamp as a string or an int
     except (TypeError, ValueError):
         return None
-    return ts if ts > 0 else None
+    if ts <= 0 or ts > int((datetime.now(UTC) + MAX_FUTURE).timestamp()):
+        return None  # a far-future timestamp would wedge last_ts and skip every later event
+    return ts
 
 
 def _vuln_ids(event: dict) -> list[str]:
