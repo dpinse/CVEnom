@@ -24,7 +24,7 @@ from cvenom.collectors.base import (
     register,
 )
 from cvenom.extract import extract_cve_ids
-from cvenom.schemas import NormalizedCve, NormalizedCveEvent, validate_http_url
+from cvenom.schemas import MAX_FUTURE_SKEW, NormalizedCve, NormalizedCveEvent, validate_http_url
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ MODULES_URL = (
     "https://raw.githubusercontent.com/rapid7/metasploit-framework/master/db/modules_metadata_base.json"
 )
 BLOB_BASE = "https://github.com/rapid7/metasploit-framework/blob/master/"
-MAX_BYTES = 120_000_000  # the real file is ~11 MB; generous headroom, hard ceiling
+MAX_BYTES = 40_000_000  # the real file is ~11 MB; headroom, hard ceiling
 FETCH_TIMEOUT = 120.0
 MAX_REFS_PER_MODULE = 100
 SOURCE = "Metasploit"
@@ -135,6 +135,8 @@ class MetasploitCollector(Collector):
                     log.warning("%s: skipping module %s without a safe path", self.name, fullname)
                     continue
                 occurred = _module_time(rec) or now
+                if occurred - now > MAX_FUTURE_SKEW:
+                    occurred = now
                 rank = rec.get("rank")
                 rank = rank if isinstance(rank, int) and not isinstance(rank, bool) else None
                 for cve_id in ids:

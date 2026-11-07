@@ -80,6 +80,40 @@ def test_future_date_is_capped():
     assert ev.occurred_at <= datetime.now(UTC) + timedelta(minutes=1)
 
 
+def test_near_future_date_is_never_future_dated():
+    rec = {"fullname": "exploit/x/soon", "type": "exploit", "rank": 1,
+           "references": ["CVE-2024-7777"], "disclosure_date": "2027-03-01",
+           "mod_time": "2027-03-01 00:00:00 +0000", "path": "/modules/exploits/x/soon.rb"}
+    res = MetasploitCollector().normalize(json.dumps({"k": rec}).encode())
+    (ev,) = res.cve_events
+    assert ev.occurred_at <= datetime.now(UTC) + timedelta(seconds=5)
+
+
+@respx.mock
+async def test_oversize_body_fails_the_run_and_keeps_state(monkeypatch):
+    from cvenom.collectors import metasploit as m
+
+    monkeypatch.setattr(m, "MAX_BYTES", 100)
+    respx.get(MODULES_URL).mock(
+        return_value=httpx.Response(200, content=b"x" * 500, headers={"ETag": '"new"'})
+    )
+    c = MetasploitCollector(state={"etag": '"old"'})
+    res = await c.run()
+    assert res.cve_events == [] and isinstance(c.last_error, base.ResponseTooLarge)
+    assert c.state == {"etag": '"old"'}
+
+
+@respx.mock
+async def test_invalid_json_200_leaves_state_unchanged():
+    respx.get(MODULES_URL).mock(
+        return_value=httpx.Response(200, content=b"<html>", headers={"ETag": '"new"'})
+    )
+    c = MetasploitCollector(state={"etag": '"old"', "cve_count": 3, "last_cve_count": 3})
+    res = await c.run()
+    assert res.cve_events == []
+    assert c.state == {"etag": '"old"', "cve_count": 3, "last_cve_count": 3}
+
+
 def test_text_is_not_trusted_and_bad_input_is_safe():
     c = MetasploitCollector()
     assert c.normalize(None).cve_events == []
