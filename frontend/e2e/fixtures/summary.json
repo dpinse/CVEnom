@@ -6,8 +6,8 @@
   "public_exploits": 2,
   "latest_kev_added": "2026-11-04",
   "situation": {
-    "level": "Elevated",
-    "lit": 2,
-    "reason": "4 KEV additions this week, 1.3x the 90-day norm"
+    "level": "Severe",
+    "lit": 4,
+    "reason": "Ransomware-linked KEV addition with EPSS in the top 1%"
   }
 }

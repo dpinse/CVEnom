@@ -303,3 +303,27 @@ test.describe("country side panel", () => {
     await expect(side.getByRole("heading", { name: "Germany" })).toBeVisible();
   });
 });
+
+test("the longest Situation reason never wraps or overflows the header at 1280, 1366 and 1440", async ({ page }) => {
+  for (const width of [1280, 1366, 1440]) {
+    await page.setViewportSize({ width, height: 800 });
+    await loaded(page);
+    const reason = page.locator(".sreason");
+    await expect(reason).toBeVisible();
+    await expect(reason).toContainText("Ransomware-linked KEV addition");
+    const measure = () =>
+      page.locator("header.command").evaluate((h) => ({
+        overflow: h.scrollWidth - h.clientWidth,
+        height: h.getBoundingClientRect().height,
+        tops: Array.from(h.querySelectorAll<HTMLElement>(".cnav a, .seg button")).map((e) =>
+          Math.round(e.getBoundingClientRect().top),
+        ),
+      }));
+    const withReason = await measure();
+    await reason.evaluate((e) => ((e as HTMLElement).style.display = "none"));
+    const without = await measure();
+    expect(withReason.overflow, `no horizontal overflow at ${width}`).toBeLessThanOrEqual(0);
+    expect(withReason.height, `header height unchanged at ${width}`).toBe(without.height);
+    expect(withReason.tops, `nav and range controls stay on their rows at ${width}`).toEqual(without.tops);
+  }
+});

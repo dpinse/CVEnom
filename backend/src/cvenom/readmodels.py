@@ -7,14 +7,15 @@ from sqlalchemy import DateTime, Text, and_, case, cast, exists, func, literal, 
 
 from cvenom.config import get_settings
 from cvenom.models import Cve, CveEvent, GeoEvent, Story, StoryCveLink
-from cvenom.scoring import recent_kev_cutoff
-from cvenom.situation import situation_for
 from cvenom.ranges import (
     DEFAULT_RANGE,
     RANGE_DAYS,
     RangeKey,
     range_start,
 )
+from cvenom.scoring import recent_kev_cutoff
+from cvenom.situation import situation_for
+from cvenom.situation import situation_for
 
 
 def _utc(now: datetime) -> datetime:
