@@ -227,13 +227,6 @@
   color: var(--scope);
   white-space: nowrap;
 }
-/* Also styles the summary line in the drawer (CveDetail). */
-.sum {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .c-issue {
   min-width: 240px;
   max-width: 460px;

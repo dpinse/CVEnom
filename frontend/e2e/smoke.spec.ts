@@ -12,7 +12,7 @@ test("dashboard renders the four lanes with fixture rows", async ({ page }) => {
   }
 });
 
-test("dashboard shows the summary line, the map panel, at most 5 rows per lane and the volume chart", async ({
+test("dashboard shows the summary line, the map panel, compact lanes that scroll inside themselves and the volume chart", async ({
   page,
 }) => {
   await loaded(page);
@@ -20,7 +20,15 @@ test("dashboard shows the summary line, the map panel, at most 5 rows per lane a
   await expect(page.locator(".today")).toBeVisible();
   await expect(page.getByRole("region", { name: "Threat geography" })).toBeVisible();
   for (const k of ["exploited", "likely", "loud", "fresh"]) {
-    expect(await page.locator(`.lane[data-k="${k}"] [data-testid="lane-row"]`).count()).toBeLessThanOrEqual(5);
+    // the list is capped at ~5 rows of height and scrolls inside the lane; the page never grows with it
+    const m = await page.locator(`.lane[data-k="${k}"] .lane-items`).evaluate((el) => ({
+      overflowY: getComputedStyle(el).overflowY,
+      height: el.clientHeight,
+      rowH: el.querySelector<HTMLElement>(".row")?.getBoundingClientRect().height ?? 0,
+    }));
+    expect(m.overflowY).toBe("auto");
+    expect(m.height).toBeLessThanOrEqual(5 * 52);
+    expect(m.rowH, "compact two-line row").toBeLessThanOrEqual(56);
   }
   await expect(page.getByRole("heading", { level: 2, name: /New CVEs per/ })).toBeVisible();
   await expect(page.getByRole("img", { name: /New CVEs per .*, stacked by severity/ })).toBeVisible();

@@ -17,14 +17,14 @@ const STATUS_TEXT: Record<LiveStatus, string> = {
 const hhmm = (ms: number) =>
   new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
 
+/** The CVEnom mark: a radar scope with a sweep line. */
 function Radar() {
   return (
-    <svg className="mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-      <circle cx="16" cy="16" r="13" />
-      <ellipse cx="16" cy="16" rx="6" ry="13" />
-      <path d="M3 16h26" />
-      <path d="M16 16 L25.5 10.5" />
-      <circle cx="16" cy="16" r="2.4" fill="currentColor" stroke="none" />
+    <svg className="mark" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="10" cy="10" r="8.25" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="10" cy="10" r="4.25" stroke="currentColor" strokeWidth="1.5" opacity=".6" />
+      <path d="M10 10 L16.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="10" cy="10" r="1.5" fill="currentColor" />
     </svg>
   );
 }
@@ -81,10 +81,7 @@ export function CommandBar() {
     <header className="command gutter">
       <Link className="brand" to="/">
         <Radar />
-        <span>
-          <span className="name">CVEnom</span>
-          <span className="kicker">vulnerability threat radar</span>
-        </span>
+        <span className="name">CVEnom</span>
       </Link>
       <nav className="cnav" aria-label="Main">
         <NavLink to={{ pathname: "/", search: `?range=${range}` }} end>

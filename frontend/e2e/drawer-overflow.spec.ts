@@ -107,7 +107,7 @@ for (const size of SIZES) {
         const sum = Array.from(body.querySelectorAll<HTMLElement>(".sum")).find((e) =>
           e.textContent?.includes("ENDOFSUMMARY"),
         );
-        sum?.scrollIntoView();
+        sum?.scrollIntoView({ block: "end" });
         const s = sum?.getBoundingClientRect();
         return {
           scrollable,
@@ -115,7 +115,7 @@ for (const size of SIZES) {
           dlgBottom: dlg.getBoundingClientRect().bottom,
           dlgRight: dlg.getBoundingClientRect().right,
           dlgLeft: dlg.getBoundingClientRect().left,
-          sumInView: !!s && s.bottom <= innerHeight + 1 && s.top >= 0,
+          sumInView: !!s && s.bottom <= innerHeight + 1 && s.bottom > 0,
           innerWidth,
           innerHeight,
         };
@@ -132,6 +132,35 @@ for (const size of SIZES) {
         return body.lastElementChild!.getBoundingClientRect().bottom <= innerHeight + 1;
       });
       expect(bottom, "last section not cut off").toBe(true);
+    });
+
+    test("CVE drawer summary wraps onto several lines instead of running off one clipped line", async ({ page }) => {
+      const base = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", `cve-${CVE_ID}.json`), "utf8"));
+      const summary =
+        "Improper processing of some parameters of installed_emanual_list.html and installed_emanual_down.html leads to a path traversal vulnerability. As for the details of affected product names, model numbers, and versions, refer to the information provided by the respective vendors listed under [References].";
+      await page.route(`**/api/cves/${CVE_ID}?*`, (route) =>
+        route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...base, summary }) }),
+      );
+      await page.goto(`/?cve=${CVE_ID}`);
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toContainText("listed under [References].");
+      await dialog.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((an) => an.finished)));
+      const m = await page.evaluate(() => {
+        const sum = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"] .sum')).find((e) =>
+          e.textContent?.includes("path traversal"),
+        )!;
+        const cs = getComputedStyle(sum);
+        return { whiteSpace: cs.whiteSpace, overflow: cs.overflow, fits: sum.scrollWidth <= sum.clientWidth + 1 };
+      });
+      expect(m.whiteSpace, "summary may wrap").toBe("normal");
+      expect(m.overflow, "summary is not clipped").toBe("visible");
+      expect(m.fits, "no text runs past the summary box").toBe(true);
+      // the whole sentence is visible: the box is taller than a single line
+      const lineH = await dialog
+        .locator(".sum")
+        .filter({ hasText: "path traversal" })
+        .evaluate((el) => ({ h: el.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(el).lineHeight) }));
+      expect(lineH.h).toBeGreaterThan(lineH.lh * 2);
     });
 
     test("story drawer with long unbroken title and summary", async ({ page }) => {

@@ -10,7 +10,7 @@ import { parseSelection, useSelection } from "../lib/selection";
 import type { CveItem, Lane, LanesOut, LoudStory } from "../lib/types";
 import { item } from "../test/shell";
 import { laneMeta, productIssue } from "./LaneRow";
-import { LANE_ROWS, LanesView } from "./Lanes";
+import { LANE_FETCH, LanesView } from "./Lanes";
 
 afterEach(cleanup);
 
@@ -56,7 +56,7 @@ describe("LanesView copy", () => {
 });
 
 describe("LanesView totals, rows and footer", () => {
-  test("shows at most 5 rows and the total in the header; footer says View all 37", () => {
+  test("shows every loaded row and the total in the header; footer says View all 37", () => {
     const five = Array.from({ length: 5 }, (_, i) => cve(i));
     const { container } = render(
       <LanesView lanes={ln({ EXPLOITED: five }, { EXPLOITED: 37 })} range="7d" onSelect={noop} now={NOW} />,
@@ -67,12 +67,16 @@ describe("LanesView totals, rows and footer", () => {
     const link = within(ex).getByRole("link", { name: "View all 37 in Threats →" });
     expect(link).toHaveAttribute("href", "/threats?status=exploited&added=week");
   });
-  test("a response with more than 5 items still renders only 5 rows", () => {
+  test("a lane renders all of its loaded rows (it scrolls) up to the fetch cap", () => {
     const many = Array.from({ length: 9 }, (_, i) => cve(i));
     render(<LanesView lanes={ln({ FRESH: many })} onSelect={noop} now={NOW} />);
-    expect(within(lane("Fresh criticals")).getAllByTestId("lane-row")).toHaveLength(LANE_ROWS);
+    expect(within(lane("Fresh criticals")).getAllByTestId("lane-row")).toHaveLength(9);
+    const tooMany = Array.from({ length: LANE_FETCH + 5 }, (_, i) => cve(i));
+    cleanup();
+    render(<LanesView lanes={ln({ FRESH: tooMany })} onSelect={noop} now={NOW} />);
+    expect(within(lane("Fresh criticals")).getAllByTestId("lane-row")).toHaveLength(LANE_FETCH);
   });
-  test("total <= 5 gives Open in Threats", () => {
+  test("when everything in the lane is loaded the footer says Open in Threats", () => {
     render(<LanesView lanes={ln({ LIKELY: [cve(1), cve(2)] })} onSelect={noop} now={NOW} />);
     expect(within(lane("Likely next")).getByRole("link", { name: "Open in Threats →" })).toHaveAttribute(
       "href",
@@ -93,15 +97,15 @@ describe("LanesView totals, rows and footer", () => {
     expect(href("Loud now")).toBe(`/threats?status=news&added=${added}`);
     expect(href("Fresh criticals")).toBe(`/threats?status=critical&exclude_kev=1&added=${added}`);
   });
-  test("loud story-only rows fill to 5 after the CVE rows", () => {
+  test("loud story-only rows follow the CVE rows, up to the fetch cap", () => {
     const stories = Array.from({ length: 8 }, (_, i) =>
       story({ title: `s${i}`, url: `https://n.example/${i}`, published: `2026-11-0${1 + (i % 4)}T00:00:00Z` }),
     );
     render(<LanesView lanes={ln({ LOUD: [cve(1)] })} stories={stories} onSelect={noop} now={NOW} />);
     const rows = lane("Loud now").querySelectorAll(".row");
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(9);
     expect(rows[0].textContent).toContain("CVE-2026-1001");
-    expect(within(lane("Loud now")).getAllByTestId("story-row")).toHaveLength(4);
+    expect(within(lane("Loud now")).getAllByTestId("story-row")).toHaveLength(8);
   });
   test("loud stories are newest first", () => {
     render(
