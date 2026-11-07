@@ -1,5 +1,6 @@
 """Threats search: GET /api/cves added/status/sev/poc/nopatch/due/sort/q + GET /api/stories added."""
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -16,6 +17,7 @@ from test_read_api import (  # noqa: F401  (secrets_key is an autouse fixture)
 
 from cvenom.api.routes_read import CACHE_PATHS
 from cvenom.models import Cve, CveEvent, Story
+from cvenom.pipeline import ingest
 from cvenom.readmodels import product_label
 
 TODAY = NOW.date()
@@ -697,3 +699,24 @@ async def test_lane_totals_match_their_threats_links(db_session, rng, added):
         assert r.status_code == 200, r.text
         assert lanes[lane]["total"] == r.json()["total"], (lane, rng)
         assert lanes[lane]["total"] > 0, (lane, rng)
+
+
+async def test_metasploit_only_cve_has_poc_badge_filter_and_reference(db_session):
+    from cvenom.collectors.metasploit import MetasploitCollector
+
+    cve(db_session, "CVE-2021-44228")
+    cve(db_session, "CVE-2024-0001")
+    module = {
+        "fullname": "exploit/a/b", "type": "exploit", "rank": 600,
+        "references": ["CVE-2021-44228"], "disclosure_date": "2021-12-09",
+        "path": "/modules/exploits/a/b.rb",
+    }
+    res = MetasploitCollector().normalize(json.dumps({"exploit_a/b": module}).encode())
+    ingest(db_session, res, enrich_only=True, collector="metasploit")
+    db_session.flush()
+    assert ids(await get(db_session, "/api/cves?poc=1")) == ["CVE-2021-44228"]
+    body = (await get(db_session, "/api/cves/CVE-2021-44228")).json()
+    assert body["poc_badge"] is True
+    url = "https://github.com/rapid7/metasploit-framework/blob/master/modules/exploits/a/b.rb"
+    assert {"url": url, "tags": ["Exploit"]} in body["references"]
+    assert (await get(db_session, "/api/cves/CVE-2024-0001")).json()["poc_badge"] is False

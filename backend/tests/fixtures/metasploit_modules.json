@@ -1,0 +1,92 @@
+{
+  "exploit_multi/http/log4shell_header_injection": {
+    "name": "Log4Shell HTTP Header Injection",
+    "fullname": "exploit/multi/http/log4shell_header_injection",
+    "aliases": [],
+    "rank": 600,
+    "disclosure_date": "2021-12-09",
+    "type": "exploit",
+    "description": "Detects <b>and</b> exploits Log4Shell <script>alert(1)</script>.",
+    "references": ["CVE-2021-44228", "CVE-2021-45046", "URL-https://logging.apache.org/log4j/2.x/security.html"],
+    "mod_time": "2025-05-21 08:32:40 +0000",
+    "path": "/modules/exploits/multi/http/log4shell_header_injection.rb",
+    "ref_name": "multi/http/log4shell_header_injection"
+  },
+  "exploit_windows/smb/ms17_010_eternalblue": {
+    "name": "MS17-010 EternalBlue SMB Remote Windows Kernel Pool Corruption",
+    "fullname": "exploit/windows/smb/ms17_010_eternalblue",
+    "rank": 300,
+    "disclosure_date": "2017-03-14",
+    "type": "exploit",
+    "references": ["CVE-2017-0144", "MSB-MS17-010", "EDB-42315"],
+    "mod_time": "2024-01-02 03:04:05 +0000",
+    "path": "/modules/exploits/windows/smb/ms17_010_eternalblue.rb"
+  },
+  "exploit_windows/smb/ms17_010_psexec": {
+    "name": "MS17-010 EternalRomance/EternalSynergy/EternalChampion SMB Remote Windows Code Execution",
+    "fullname": "exploit/windows/smb/ms17_010_psexec",
+    "rank": 300,
+    "disclosure_date": "2017-03-14",
+    "type": "exploit",
+    "references": ["CVE-2017-0143", "CVE-2017-0144"],
+    "mod_time": "2024-01-02 03:04:05 +0000",
+    "path": "/modules/exploits/windows/smb/ms17_010_psexec.rb"
+  },
+  "exploit_linux/http/future_dated": {
+    "name": "Future dated module",
+    "fullname": "exploit/linux/http/future_dated",
+    "rank": 500,
+    "disclosure_date": "2999-01-01",
+    "type": "exploit",
+    "references": ["CVE-2026-76461"],
+    "mod_time": "2999-01-01 00:00:00 +0000",
+    "path": "/modules/exploits/linux/http/future_dated.rb"
+  },
+  "exploit_linux/http/no_cve": {
+    "name": "EDB only",
+    "fullname": "exploit/linux/http/no_cve",
+    "rank": 200,
+    "disclosure_date": "2019-01-01",
+    "type": "exploit",
+    "references": ["EDB-12345", "URL-https://example.com/x"],
+    "mod_time": "2024-01-02 03:04:05 +0000",
+    "path": "/modules/exploits/linux/http/no_cve.rb"
+  },
+  "auxiliary_scanner/http/log4shell_scanner": {
+    "name": "Log4Shell HTTP Scanner",
+    "fullname": "auxiliary/scanner/http/log4shell_scanner",
+    "rank": 300,
+    "disclosure_date": "2021-12-09",
+    "type": "auxiliary",
+    "references": ["CVE-2021-44228"],
+    "mod_time": "2024-01-02 03:04:05 +0000",
+    "path": "/modules/auxiliary/scanner/http/log4shell_scanner.rb"
+  },
+  "post_linux/gather/foo": {
+    "name": "post",
+    "fullname": "post/linux/gather/foo",
+    "type": "post",
+    "references": ["CVE-2020-1111"],
+    "path": "/modules/post/linux/gather/foo.rb"
+  },
+  "exploit_bad/record": {
+    "name": "Malformed",
+    "fullname": "exploit/bad/record",
+    "rank": "high",
+    "disclosure_date": 12345,
+    "type": "exploit",
+    "references": "CVE-2020-0001",
+    "path": ["not", "a", "string"]
+  },
+  "exploit_bad/not_an_object": "oops",
+  "exploit_bad/weird_refs": {
+    "name": "weird refs",
+    "fullname": "exploit/bad/weird_refs",
+    "rank": 300,
+    "disclosure_date": "1066-10-14",
+    "type": "exploit",
+    "references": [null, 7, "cve-2020-5555", "CVE-2020-5555", "CVE-20-1"],
+    "mod_time": "2023-03-04 05:06:07 +0000",
+    "path": "/modules/exploits/bad/weird_refs.rb"
+  }
+}

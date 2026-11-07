@@ -296,6 +296,7 @@ async def http_get_conditional(
     last_modified: str | None = None,
     headers: dict[str, str] | None = None,
     max_bytes: int = 25_000_000,
+    timeout: float = 20,
 ) -> tuple[int, bytes, dict[str, str]]:
     """Conditional GET. Returns (status, body, lower-cased headers); 304 has an empty body."""
     hdrs = dict(headers or {})
@@ -308,7 +309,7 @@ async def http_get_conditional(
         headers=hdrs,
         params=None,
         retries=3,
-        timeout=20,
+        timeout=timeout,
         max_bytes=max_bytes,
         accept_304=True,
     )
