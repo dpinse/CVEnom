@@ -16,11 +16,20 @@ RUN pip install --no-cache-dir --require-hashes -r build-constraints.lock
 COPY pyproject.toml ./
 COPY src ./src
 RUN pip install --no-cache-dir --no-deps --no-build-isolation .
+# Install-time tooling has no job at runtime: drop it from the venv (pip vendors its own urllib3
+# and msgpack, which image scanners rightly report).
+RUN python -m pip uninstall -y setuptools wheel pip
 
 FROM python:3.14-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
+# Debian security fixes land before the next python:*-slim rebuild; take them now. The base
+# image's own pip is removed too (nothing installs packages at runtime).
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall -y pip
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY alembic.ini ./
