@@ -4,5 +4,10 @@
   "kev_due_soon": 1,
   "new_critical": 3,
   "public_exploits": 2,
-  "latest_kev_added": "2026-11-04"
+  "latest_kev_added": "2026-11-04",
+  "situation": {
+    "level": "Elevated",
+    "lit": 2,
+    "reason": "4 KEV additions this week, 1.3x the 90-day norm"
+  }
 }

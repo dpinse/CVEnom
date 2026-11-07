@@ -137,6 +137,19 @@ header.command {
   font-size: 10.5px;
   color: var(--faint);
 }
+.sreason {
+  display: none;
+}
+@media (min-width: 1280px) {
+  .sreason {
+    display: inline-block;
+    vertical-align: bottom;
+    max-width: 30ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
 .slevel {
   font-family: var(--font-display);
   font-weight: 700;

@@ -7,7 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { authStore } from "../lib/api";
 import { createQueryClient } from "../lib/queries";
-import type { CveItem, Lane, LaneOut, LanesOut, Me, SummaryOut } from "../lib/types";
+import type { CveItem, Lane, LaneOut, LanesOut, Me, Situation, SummaryOut } from "../lib/types";
 
 export const server = setupServer();
 
@@ -80,15 +80,23 @@ const summaryOf = (l: LanesOut): SummaryOut => ({
       .map((c) => c.kev_added ?? "")
       .sort()
       .at(-1) || null,
+  situation: { level: "Calm", lit: 1, reason: "0 KEV additions this week, within the usual range" },
 });
 
-export function handlers(opts: { publicRead?: boolean; lanes?: LanesOut } = {}) {
+export function handlers(opts: { publicRead?: boolean; lanes?: LanesOut; situation?: Situation | null } = {}) {
   server.use(
     http.get("http://localhost/api/health", () =>
       HttpResponse.json({ status: "ok", public_read: opts.publicRead ?? true }),
     ),
     http.get("http://localhost/api/lanes", () => HttpResponse.json(opts.lanes ?? lanes())),
-    http.get("http://localhost/api/summary", () => HttpResponse.json(summaryOf(opts.lanes ?? lanes()))),
+    http.get("http://localhost/api/summary", () =>
+      opts.situation === null
+        ? HttpResponse.json({ detail: "boom" }, { status: 500 })
+        : HttpResponse.json({
+            ...summaryOf(opts.lanes ?? lanes()),
+            ...(opts.situation ? { situation: opts.situation } : {}),
+          }),
+    ),
     http.post("http://localhost/api/auth/logout", () => new HttpResponse(null, { status: 204 })),
   );
 }

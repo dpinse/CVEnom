@@ -2,9 +2,7 @@ import { Link, NavLink, useLocation } from "react-router-dom";
 import { useLiveUpdates, type LiveStatus } from "../lib/live";
 import { useRange } from "../lib/range";
 import { useSummary } from "../lib/queries";
-import { situationLevel } from "../lib/situation";
 import { useTheme } from "../lib/theme";
-import { useNow } from "../lib/useNow";
 import { RangeControl } from "./RangeControl";
 import { UserMenu } from "./UserMenu";
 
@@ -32,14 +30,13 @@ function Radar() {
 function Situation() {
   // fixed 7-day window: the gauge is not driven by the Dashboard range control
   const summary = useSummary("7d");
-  const now = useNow();
-  const s = summary.data ? situationLevel(summary.data, now) : null;
-  const label = s ? s.level : "Unavailable";
+  const s = summary.data?.situation ?? null;
+  const label = s ? `${s.level}. ${s.reason}` : "Unavailable";
   return (
     <div
       className="situation"
       data-level={s?.level ?? "Unknown"}
-      title="Situation level, driven by live-exploited vulnerabilities"
+      title={s ? `${s.level}: ${s.reason}` : "Situation level, relative to this install's own normal"}
     >
       <div className="sgauge" role="img" aria-label={`Situation: ${label}`}>
         {[0, 1, 2, 3].map((i) => (
@@ -47,7 +44,10 @@ function Situation() {
         ))}
       </div>
       <div className="stext" aria-hidden="true">
-        <div className="slabel">Situation</div>
+        <div className="slabel">
+          Situation
+          {s && <span className="sreason"> · {s.reason}</span>}
+        </div>
         <div className="slevel">{s ? s.level : "…"}</div>
       </div>
     </div>
