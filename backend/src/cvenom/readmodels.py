@@ -15,7 +15,6 @@ from cvenom.ranges import (
 )
 from cvenom.scoring import recent_kev_cutoff
 from cvenom.situation import situation_for
-from cvenom.situation import situation_for
 
 
 def _utc(now: datetime) -> datetime:
