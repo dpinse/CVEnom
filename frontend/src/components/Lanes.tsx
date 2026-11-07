@@ -13,7 +13,7 @@ export const LANE_CAP = 100;
 /** Rows a lane shows before it scrolls (sets the lane's visible height). */
 export const LANE_ROWS = 5;
 /** Rows a lane loads and renders; the rest of the range is behind "View all in Threats". */
-export const LANE_FETCH = 30;
+export const LANE_FETCH = 10;
 
 interface LaneDef {
   key: Lane;
@@ -40,7 +40,8 @@ export function threatsHref(k: LaneDef["k"], range: RangeKey): string {
   // Likely is "published within likely_window_days (30)" whatever the range, so it always
   // links to added=month; the other lanes follow the range.
   const added = k === "likely" ? "month" : ADDED[range];
-  return `/threats?${STATUS[k]}&added=${added}`;
+  // Exploited is ranked by priority on the dashboard, so its link opens Threats in that order.
+  return `/threats?${STATUS[k]}&added=${added}${k === "exploited" ? "&sort=priority" : ""}`;
 }
 
 /** Stories newest first, minus those whose CVEs are all already shown as LOUD CVE rows. */

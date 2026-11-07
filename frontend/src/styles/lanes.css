@@ -177,6 +177,9 @@
 .row[data-sev="crit"] .sev {
   background: var(--sev-crit);
 }
+.row[data-sev="unscored"] .sev {
+  background: var(--muted);
+}
 .row .id {
   font-family: var(--font-mono);
   font-weight: 500;
@@ -189,6 +192,11 @@
   font-weight: 500;
   font-size: 12px;
   color: var(--text);
+}
+.row[data-sev="unscored"] .score {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 .row[data-sev="crit"] .score {
   color: var(--sev-crit);

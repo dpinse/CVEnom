@@ -27,6 +27,11 @@ test("Threats filters live in the URL; severity chips are colour-coded toggles",
   await page.getByRole("button", { name: "Exploited" }).click();
   await expect(page).toHaveURL(/added=month/);
   await expect(page).toHaveURL(/status=exploited/);
+  await page.getByLabel("Sort").selectOption("priority");
+  await expect(page).toHaveURL(/sort=priority/);
+  await expect
+    .poll(() => guards.apiRequests.some((r) => r.startsWith("/api/cves?") && r.includes("sort=priority")))
+    .toBe(true);
   await page.getByLabel("Sort").selectOption("due");
   await expect(page.getByText("Soonest CISA deadline first")).toBeVisible();
   // The URL state reaches the API as the matching query.

@@ -49,13 +49,20 @@ export function LaneRow({
   now: Date;
   onSelect: (id: string) => void;
 }) {
+  const unscored = item.cvss === null || !Number.isFinite(item.cvss);
   const sev = severityOf(item.cvss);
   const text = productIssue(item);
   return (
-    <button type="button" className="row" data-sev={sev} data-testid="lane-row" onClick={() => onSelect(item.cve_id)}>
-      <span className="sev" aria-label={item.cvss === null ? "Unscored" : SEV_NAME[sev]} role="img" />
+    <button
+      type="button"
+      className="row"
+      data-sev={unscored ? "unscored" : sev}
+      data-testid="lane-row"
+      onClick={() => onSelect(item.cve_id)}
+    >
+      <span className="sev" aria-label={unscored ? "Unscored" : SEV_NAME[sev]} role="img" />
       <span className="id">{item.cve_id}</span>
-      <span className="score">{item.cvss === null ? "–" : item.cvss.toFixed(1)}</span>
+      <span className="score">{unscored ? "unscored" : item.cvss!.toFixed(1)}</span>
       <span className="t" title={decodeEntities(text)}>
         <Text value={text} />
       </span>

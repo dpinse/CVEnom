@@ -322,6 +322,22 @@ describe("Threats page (CVEs)", () => {
     await waitFor(() => expect(lastUrl).toBe("/threats"));
   });
 
+  test("Priority sort is parsed, URL-synced and sent to the API as sort=priority", async () => {
+    expect(parseThreatFilters(new URLSearchParams("status=exploited&sort=priority"))).toMatchObject({
+      status: "exploited",
+      sort: "priority",
+    });
+    expect(toCveQuery(parseThreatFilters(new URLSearchParams("sort=priority")))).toMatchObject({ sort: "priority" });
+    api(() => list());
+    renderAt(ui, "/threats?status=exploited&sort=priority");
+    await screen.findByText("CVE-2026-0001");
+    expect(screen.getByLabelText("Sort")).toHaveValue("priority");
+    fireEvent.change(screen.getByLabelText("Sort"), { target: { value: "newest" } });
+    await waitFor(() => expect(lastUrl).toBe("/threats?status=exploited"));
+    fireEvent.change(screen.getByLabelText("Sort"), { target: { value: "priority" } });
+    await waitFor(() => expect(lastUrl).toBe("/threats?status=exploited&sort=priority"));
+  });
+
   test("a row shows severity, link, product, signals, EPSS and the added date", async () => {
     api(() =>
       list([

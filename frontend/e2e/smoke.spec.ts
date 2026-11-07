@@ -3,8 +3,10 @@ import { canvasCentreStdDev, CVE_ID, expect, loaded, STDDEV_MIN, test } from "./
 
 const LANES = ["Exploited now", "Likely next", "Loud now", "Fresh criticals"];
 
-test("dashboard renders the four lanes with fixture rows", async ({ page }) => {
+test("dashboard renders the four lanes with fixture rows", async ({ page, guards }) => {
   await loaded(page);
+  expect(guards.apiRequests.some((r) => r.startsWith("/api/lanes") && r.includes("limit=10"))).toBe(true);
+  await expect(page.locator('.lane[data-k="exploited"] .lane-foot a')).toHaveAttribute("href", /&sort=priority$/);
   for (const name of LANES) await expect(page.getByRole("heading", { level: 2, name })).toBeVisible();
   await expect(page.locator(".lane")).toHaveCount(4);
   for (const k of ["exploited", "likely", "loud", "fresh"]) {

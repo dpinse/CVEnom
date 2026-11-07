@@ -65,7 +65,13 @@ describe("LanesView totals, rows and footer", () => {
     expect(within(ex).getAllByTestId("lane-row")).toHaveLength(5);
     expect(container.querySelector('[data-k="exploited"] .n')).toHaveTextContent("37");
     const link = within(ex).getByRole("link", { name: "View all 37 in Threats →" });
-    expect(link).toHaveAttribute("href", "/threats?status=exploited&added=week");
+    expect(link).toHaveAttribute("href", "/threats?status=exploited&added=week&sort=priority");
+  });
+  test("a lane shows 'View all' whenever the total exceeds the rows shown", () => {
+    const ten = Array.from({ length: LANE_FETCH }, (_, i) => cve(i));
+    render(<LanesView lanes={ln({ FRESH: ten }, { FRESH: 11 })} onSelect={noop} now={NOW} />);
+    expect(LANE_FETCH).toBe(10);
+    expect(within(lane("Fresh criticals")).getByRole("link", { name: "View all 11 in Threats →" })).toBeInTheDocument();
   });
   test("a lane renders all of its loaded rows (it scrolls) up to the fetch cap", () => {
     const many = Array.from({ length: 9 }, (_, i) => cve(i));
@@ -91,7 +97,7 @@ describe("LanesView totals, rows and footer", () => {
   ] as const)("footer links map range %s to added=%s and lane to status", (range, added) => {
     render(<LanesView lanes={EMPTY} range={range} onSelect={noop} now={NOW} />);
     const href = (name: string) => within(lane(name)).getByRole("link").getAttribute("href");
-    expect(href("Exploited now")).toBe(`/threats?status=exploited&added=${added}`);
+    expect(href("Exploited now")).toBe(`/threats?status=exploited&added=${added}&sort=priority`);
     // Likely is "published within likely_window_days (30)", independent of the range.
     expect(href("Likely next")).toBe("/threats?status=likely&added=month");
     expect(href("Loud now")).toBe(`/threats?status=news&added=${added}`);
@@ -196,12 +202,15 @@ describe("LaneRow", () => {
     expect(t).toHaveAttribute("title", "A &lt;b&gt; & C");
     expect(t).toHaveTextContent("A &lt;b&gt; & C");
   });
-  test("null cvss renders a dash and the dot is named by severity", () => {
+  test("unscored rows say unscored, with a neutral dot (not the green low one)", () => {
     render(
       <LanesView lanes={ln({ FRESH: [cve(1, { cvss: null }), cve(2, { cvss: 9.8 })] })} onSelect={noop} now={NOW} />,
     );
     const [a, b] = screen.getAllByTestId("lane-row");
-    expect(a.querySelector(".score")).toHaveTextContent("–");
+    expect(a.querySelector(".score")).toHaveTextContent("unscored");
+    expect(a).toHaveAttribute("data-sev", "unscored");
+    expect(within(a).getByLabelText("Unscored")).toBeInTheDocument();
+    expect(b).toHaveAttribute("data-sev", "crit");
     expect(b.querySelector(".score")).toHaveTextContent("9.8");
     expect(within(b).getByLabelText("Critical")).toBeInTheDocument();
     expect(a.querySelector(".id")).toHaveTextContent("CVE-2026-1001");

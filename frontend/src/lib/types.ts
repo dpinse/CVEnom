@@ -245,7 +245,7 @@ export interface StoryDetailOut extends StoryItem {
 export type AddedKey = "any" | "day" | "week" | "14d" | "month" | "90d" | "year";
 export type StatusKey = "all" | "exploited" | "likely" | "news" | "critical";
 export type SevKey = "low" | "med" | "high" | "crit";
-export type ThreatsSort = "newest" | "hot" | "trending" | "due";
+export type ThreatsSort = "newest" | "hot" | "trending" | "priority" | "due";
 export interface StoryQuery {
   added?: AddedKey;
   q?: string;
