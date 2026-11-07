@@ -8,6 +8,7 @@ from sqlalchemy import DateTime, Text, and_, case, cast, exists, func, literal, 
 from cvenom.config import get_settings
 from cvenom.models import Cve, CveEvent, GeoEvent, Story, StoryCveLink
 from cvenom.scoring import recent_kev_cutoff
+from cvenom.situation import situation_for
 from cvenom.ranges import (
     DEFAULT_RANGE,
     RANGE_DAYS,
@@ -118,6 +119,8 @@ def summary_counts(session, now: datetime, rng: RangeKey) -> dict:
         "latest_kev_added": session.scalar(
             select(func.max(Cve.kev_added)).where(Cve.kev.is_(True))
         ),
+        # always the 7-day view, whatever `rng` is
+        "situation": situation_for(session, now),
     }
 
 

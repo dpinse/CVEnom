@@ -138,6 +138,12 @@ class VelocityOut(BaseModel):
     rising: bool
 
 
+class SituationOut(BaseModel):
+    level: Literal["Calm", "Elevated", "High", "Severe"]
+    lit: Literal[1, 2, 3, 4]
+    reason: str
+
+
 class SummaryOut(BaseModel):
     range: str
     new_kev: int
@@ -145,6 +151,7 @@ class SummaryOut(BaseModel):
     new_critical: int
     public_exploits: int
     latest_kev_added: date | None
+    situation: SituationOut
 
 
 class VolumeBucket(BaseModel):
