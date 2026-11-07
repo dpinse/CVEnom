@@ -150,6 +150,20 @@ test("theme toggle and the drawer under the production CSP: still zero violation
   expect(guards.consoleErrors).toEqual([]);
 });
 
+test("/threats and the threat page under the production CSP: zero violations, no console errors", async ({
+  page,
+  guards,
+}) => {
+  await page.goto("/threats");
+  await expect(page.getByTestId("search-row")).toHaveCount(1);
+  await page.getByTestId("search-row").getByText("Acme Gateway 4.2 remote code execution").click();
+  await expect(page).toHaveURL(new RegExp(`/threats/${CVE_ID}$`));
+  await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
+  await expect(page.getByText("Improper Authentication")).toBeVisible(); // the lazy CWE chunk loaded
+  expect(await violations(page)).toEqual([]);
+  expect(guards.consoleErrors).toEqual([]);
+});
+
 test("connect-src 'self' permits a same-origin WebSocket (no ws:/wss: needed)", async ({ page }) => {
   await loaded(page);
   const result = await page.evaluate(

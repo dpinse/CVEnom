@@ -12,6 +12,29 @@ test("dashboard renders the four lanes with fixture rows", async ({ page }) => {
   }
 });
 
+test("dashboard shows the summary line, the map panel, at most 5 rows per lane and the volume chart", async ({
+  page,
+}) => {
+  await loaded(page);
+  await expect(page.getByRole("heading", { level: 1, name: "Last 7 days" })).toBeVisible();
+  await expect(page.locator(".today")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Threat geography" })).toBeVisible();
+  for (const k of ["exploited", "likely", "loud", "fresh"]) {
+    expect(await page.locator(`.lane[data-k="${k}"] [data-testid="lane-row"]`).count()).toBeLessThanOrEqual(5);
+  }
+  await expect(page.getByRole("heading", { level: 2, name: /New CVEs per/ })).toBeVisible();
+  await expect(page.getByRole("img", { name: /New CVEs per .*, stacked by severity/ })).toBeVisible();
+});
+
+test("the 24h range sets ?range=24h and the lanes request carries range=24h", async ({ page, guards }) => {
+  await loaded(page);
+  await page.getByRole("button", { name: "24h" }).click();
+  await expect(page).toHaveURL(/[?&]range=24h/);
+  await expect
+    .poll(() => guards.apiRequests.some((r) => r.startsWith("/api/lanes") && r.includes("range=24h")))
+    .toBe(true);
+});
+
 test("globe canvas exists and WebGL actually drew (centre pixels are not uniform)", async ({ page }) => {
   await loaded(page);
   await expect(page.locator(".globe-map canvas").first()).toBeVisible({ timeout: 20_000 });
