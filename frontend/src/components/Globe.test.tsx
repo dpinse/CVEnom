@@ -6,12 +6,13 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { qk } from "../lib/queries";
 import type { GeoSummaryItem } from "../lib/types";
+import { useSelection } from "../lib/selection";
 import { server, setupMsw } from "../test/shell";
 import Globe from "./Globe";
 import { GlobeProvider, useGlobe } from "./GlobeContext";
 import { GlobeBoundary } from "./LazyGlobe";
-import { GEO_KINDS, KIND_TOKEN } from "./geoSummary";
-import { CANVAS_LABEL, DATA_DEADLINE_MS, ERROR_GRACE_MS, IDLE_RESUME_MS } from "./globeMap";
+import { CHORO_STEPS, mixColor } from "./geoSummary";
+import { CANVAS_LABEL, DATA_DEADLINE_MS, ERROR_GRACE_MS, IDLE_RESUME_MS, dataLayers, type MapMode } from "./globeMap";
 
 type Handler = (e?: unknown) => void;
 
@@ -96,6 +97,11 @@ vi.mock("maplibre-gl", () => {
       (this.paint[layer] ??= {})[prop] = value;
     }
     setSky = vi.fn();
+    setProjection = vi.fn();
+    featureStates: { source: string; id: string; state: Record<string, boolean> }[] = [];
+    setFeatureState = vi.fn((f: { source: string; id: string }, state: Record<string, boolean>) => {
+      this.featureStates.push({ ...f, state });
+    });
     getCenter() {
       return this.center;
     }
@@ -129,6 +135,8 @@ interface FakeMapT {
   paintCalls: [string, string, unknown][];
   removed: boolean;
   easeTo: ReturnType<typeof vi.fn>;
+  setProjection: ReturnType<typeof vi.fn>;
+  featureStates: { source: string; id: string; state: Record<string, boolean> }[];
   jumpTo: ReturnType<typeof vi.fn>;
   resize: ReturnType<typeof vi.fn>;
   scrollZoom: { enable: ReturnType<typeof vi.fn>; disable: ReturnType<typeof vi.fn> };
@@ -162,19 +170,28 @@ function Search() {
   return <output data-testid="search">{useLocation().search}</output>;
 }
 
-function renderGlobe(data: GeoSummaryItem[] | undefined = fixture, extra?: ReactNode, qc = seeded(data)) {
-  return render(
+function renderGlobe(
+  data: GeoSummaryItem[] | undefined = fixture,
+  extra?: ReactNode,
+  qc = seeded(data),
+  mode: MapMode = "flat",
+) {
+  const tree = (m: MapMode) => (
     <QueryClientProvider client={qc}>
       <MemoryRouter>
         <GlobeProvider>
-          <Globe />
+          <Globe mode={m} />
           {extra}
         </GlobeProvider>
         <Search />
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const r = render(tree(mode));
+  return { ...r, setMode: (m: MapMode) => r.rerender(tree(m)) };
 }
+const renderGlobeMode = (extra?: ReactNode, data: GeoSummaryItem[] | undefined = fixture) =>
+  renderGlobe(data, extra, seeded(data), "globe");
 
 // ---- environment controls ---------------------------------------------------
 let reducedMotion = false;
@@ -190,6 +207,7 @@ const DARK = {
   "--sev-med": "#ecc14a",
   "--live": "#ff2f45",
   "--scope": "#6fb0d4",
+  "--text": "#e9eef4",
 };
 
 function runFrames(n: number, stepMs = 16) {
@@ -260,11 +278,11 @@ describe("<Globe> map wiring", () => {
     expect(url).not.toMatch(/^(https?:|blob:|data:)/);
   });
 
-  it("creates a globe-projection map with attribution and logo controls off", () => {
+  it("creates a flat (mercator) map by default, with attribution and logo controls off", () => {
     renderGlobe();
     expect(maps()).toHaveLength(1);
     const o = lastMap().options;
-    expect((o.style as { projection: unknown }).projection).toEqual({ type: "globe" });
+    expect((o.style as { projection: unknown }).projection).toEqual({ type: "mercator" });
     expect(o.attributionControl).toBe(false);
     expect(o.maplibreLogo).toBeFalsy();
     expect(o.scrollZoom).toBe(false);
@@ -272,17 +290,23 @@ describe("<Globe> map wiring", () => {
     expect(o.pitchWithRotate).toBe(false);
   });
 
-  it("adds sources and layers only after the load event", () => {
+  it("starts in the globe projection when the mode is globe", () => {
+    renderGlobeMode();
+    expect((lastMap().options.style as { projection: unknown }).projection).toEqual({ type: "globe" });
+  });
+
+  it("adds one source and the fill, border and hover-outline layers only after the load event", () => {
     renderGlobe();
     const m = lastMap();
     expect(Object.keys(m.sources)).toEqual([]);
     expect(m.layers).toEqual([]);
     loadMap();
-    expect(Object.keys(m.sources).sort()).toEqual(["countries", "hotspots"]);
+    expect(Object.keys(m.sources)).toEqual(["countries"]);
+    expect((m.sources.countries.spec as { promoteId: string }).promoteId).toBe("iso2");
     expect(m.layers.map((l) => [l.id, l.type])).toEqual([
       ["countries", "fill"],
       ["borders", "line"],
-      ["hotspots", "circle"],
+      ["hover-outline", "line"],
     ]);
     const style = m.options.style as { layers: { id: string; type: string }[] };
     expect(style.layers.map((l) => [l.id, l.type])).toEqual([["background", "background"]]);
@@ -310,128 +334,133 @@ describe("<Globe> map wiring", () => {
     for (const l of m.layers) expect(l.type).not.toBe("symbol");
   });
 
-  it("countries render even with no data, and shading/hotspots follow the data", () => {
+  it("countries render even with no data (Antarctica excluded), all with no bucket", () => {
     renderGlobe([]);
     loadMap();
     const m = lastMap();
-    expect(m.sources.countries.data.features).toHaveLength(177);
-    expect(m.sources.hotspots.data.features).toHaveLength(0);
+    expect(m.sources.countries.data.features).toHaveLength(176);
+    expect(m.sources.countries.data.features.every((f) => f.properties.bucket === -1)).toBe(true);
   });
 
-  it("pushes shading levels and hotspots from useGeo into the sources", () => {
+  it("pushes each country's bucket and event count from useGeo into the source", () => {
     renderGlobe();
     loadMap();
     const m = lastMap();
-    const level = (iso: string) =>
-      m.sources.countries.data.features.find((f) => f.properties.iso2 === iso)?.properties.level;
-    expect(level("US")).toBe(3);
-    expect(level("JP")).toBe(1);
-    expect(level("NL")).toBe(0);
-    const hs = m.sources.hotspots.data.features.map((f) => `${f.properties.iso2}:${f.properties.kind}`).sort();
-    expect(hs).toEqual(["JP:outage", "NL:c2", "US:outage", "US:scan"]);
+    const prop = (iso: string) => m.sources.countries.data.features.find((f) => f.properties.iso2 === iso)?.properties;
+    // totals: US 320 + 3, NL 9, JP 1 (the null-country row is ignored); max 323
+    expect(prop("US")).toMatchObject({ bucket: 4, n: 323 });
+    expect(prop("NL")).toMatchObject({ bucket: 0, n: 9 });
+    expect(prop("JP")).toMatchObject({ bucket: 0, n: 1 });
+    expect(prop("DE")).toMatchObject({ bucket: -1, n: 0 });
   });
 
-  it("colours hotspots by kind from the tokens and tints shading over --land", () => {
+  it("dataLayers has no circle layer and the fill matches on bucket (land colour otherwise)", () => {
     renderGlobe();
     loadMap();
     const m = lastMap();
-    const hot = m.layers.find((l) => l.id === "hotspots")!;
-    const color = JSON.stringify(hot.paint!["circle-color"]);
-    expect(KIND_TOKEN).toEqual({
-      scan: "--live",
-      outage: "--sev-high",
-      victim: "--scope",
-      c2: "--sev-med",
-      bgp: "--sev-low",
-    });
-    for (const kind of GEO_KINDS) {
-      expect(color).toContain(`"${kind}","${DARK[KIND_TOKEN[kind] as keyof typeof DARK]}"`);
-    }
+    expect(m.layers.some((l) => l.type === "circle")).toBe(false);
+    expect(
+      dataLayers({ ocean: "#000", land: "#2b3f54", border: "#4d7093", alert: "#ff2f45", text: "#fff" }).map(
+        (l) => l.type,
+      ),
+    ).toEqual(["fill", "line", "line"]);
     const fill = m.layers.find((l) => l.id === "countries")!.paint!["fill-color"] as unknown[];
-    expect(fill[0]).toBe("match");
+    expect(fill.slice(0, 2)).toEqual(["match", ["get", "bucket"]]);
+    CHORO_STEPS.forEach((p, i) => {
+      expect(fill[2 + i * 2]).toBe(i);
+      expect(fill[3 + i * 2]).toBe(mixColor(DARK["--land"], DARK["--live"], p));
+    });
     expect(fill[fill.length - 1]).toBe(DARK["--land"]);
     const border = m.layers.find((l) => l.id === "borders")!.paint!;
     expect(border["line-color"]).toBe(DARK["--border-geo"]);
     expect(border["line-width"]).toBe(0.5);
+    expect(m.layers.find((l) => l.id === "hover-outline")!.paint!["line-color"]).toBe(DARK["--text"]);
   });
 });
 
-describe("<Globe> chrome and accessibility", () => {
-  it("renders the DB-IP attribution as a safe external link", () => {
-    renderGlobe();
-    const link = screen.getByRole("link", { name: "IP geolocation by DB-IP.com" });
-    expect(link).toHaveAttribute("href", "https://db-ip.com/");
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
-    expect(link).toHaveAttribute("target", "_blank");
-  });
-
+describe("<Globe> accessibility and interaction", () => {
   it("labels the focusable canvas and links it to the data summary, with no role=img around it", () => {
     renderGlobe();
     expect(screen.queryByRole("img")).toBeNull();
     const region = screen.getByRole("region", { name: CANVAS_LABEL });
     expect(region).toHaveAttribute("tabindex", "0");
     expect(summary()).toBe(
-      "Global threat map: 2 countries with outages, 1 country with exploit scanning, 1 country with C2 infrastructure",
+      "Threat map: 3 countries with activity in the last 7 days; most active United States, 323 events",
     );
-    const list = screen.getByRole("list", { name: /top threat hotspots/i });
-    expect(list.querySelectorAll("li")).toHaveLength(4);
-    expect(list.textContent).toContain("United States");
   });
 
-  it("hotspot list items are real buttons (Enter/Space activate them natively) that select ?country=", () => {
-    renderGlobe([{ country_code: "DE", kind: "scan", magnitude: 7, events: 12, last_seen: "2026-11-05T10:00:00Z" }]);
-    const btn = screen.getByRole("button", { name: /Germany: .*scan/i });
-    expect(btn).toHaveAttribute("type", "button");
-    // jsdom has no native button activation: Enter/Space on a real <button> is covered by the e2e keyboard test.
-    fireEvent.click(btn);
-    expect(screen.getByTestId("search")).toHaveTextContent("?country=DE");
-  });
-
-  it("clicking the hotspots layer selects ?country=; an unknown code does nothing", () => {
+  it("clicking a country with activity selects ?country=; one without activity or an unknown code does nothing", () => {
     renderGlobe();
     loadMap();
     const m = lastMap();
-    act(() => m.fire("click", { features: [{ properties: { iso2: "DE" } }] }, "hotspots"));
+    act(() => m.fire("click", { features: [{ properties: { iso2: "DE", bucket: 2 } }] }, "countries"));
     expect(screen.getByTestId("search")).toHaveTextContent("?country=DE");
-    act(() => m.fire("click", { features: [{ properties: { iso2: "QQ" } }] }, "hotspots"));
+    act(() => m.fire("click", { features: [{ properties: { iso2: "FR", bucket: -1 } }] }, "countries"));
+    expect(screen.getByTestId("search")).toHaveTextContent("?country=DE");
+    act(() => m.fire("click", { features: [{ properties: { iso2: "QQ", bucket: 1 } }] }, "countries"));
     expect(screen.getByTestId("search")).toHaveTextContent("?country=DE");
   });
 
-  it("a click with no iso2 does nothing, and hovering a hotspot sets a pointer cursor", () => {
+  it("a click with no iso2 does nothing", () => {
     renderGlobe();
     loadMap();
     const m = lastMap();
-    act(() => m.fire("click", { features: [{ properties: {} }] }, "hotspots"));
-    act(() => m.fire("click", { features: [] }, "hotspots"));
+    act(() => m.fire("click", { features: [{ properties: {} }] }, "countries"));
+    act(() => m.fire("click", { features: [] }, "countries"));
     expect(screen.getByTestId("search")).toHaveTextContent("");
-    act(() => m.fire("mouseenter", {}, "hotspots"));
+  });
+
+  it("hovering a country with activity shows 'Country · N events', outlines it and sets a pointer cursor", () => {
+    renderGlobe();
+    loadMap();
+    const m = lastMap();
+    act(() =>
+      m.fire(
+        "mousemove",
+        { features: [{ properties: { iso2: "NL", bucket: 0 } }], point: { x: 40, y: 50 } },
+        "countries",
+      ),
+    );
+    expect(screen.getByText("Netherlands · 9 events")).toBeInTheDocument();
     expect(m.getCanvas().style.cursor).toBe("pointer");
-    act(() => m.fire("mouseleave", {}, "hotspots"));
+    expect(m.featureStates.at(-1)).toEqual({ source: "countries", id: "NL", state: { hover: true } });
+    // moving onto land without activity clears everything
+    act(() =>
+      m.fire(
+        "mousemove",
+        { features: [{ properties: { iso2: "FR", bucket: -1 } }], point: { x: 60, y: 50 } },
+        "countries",
+      ),
+    );
+    expect(screen.queryByText(/Netherlands ·/)).toBeNull();
     expect(m.getCanvas().style.cursor).toBe("");
+    expect(m.featureStates.at(-1)).toEqual({ source: "countries", id: "NL", state: { hover: false } });
+    act(() =>
+      m.fire(
+        "mousemove",
+        { features: [{ properties: { iso2: "JP", bucket: 0 } }], point: { x: 1, y: 2 } },
+        "countries",
+      ),
+    );
+    expect(screen.getByText("Japan · 1 event")).toBeInTheDocument();
+    act(() => m.fire("mouseleave", {}, "countries"));
+    expect(screen.queryByText(/Japan ·/)).toBeNull();
   });
 
-  it("legend swatches use the same KIND_TOKEN mapping as the map paint, one distinct token per kind", () => {
-    renderGlobe();
-    expect(new Set(Object.values(KIND_TOKEN)).size).toBe(GEO_KINDS.length);
-    for (const kind of GEO_KINDS) {
-      const sw = document.querySelector(`.globe-legend .swatch[data-kind="${kind}"]`) as HTMLElement;
-      expect(sw, kind).not.toBeNull();
-      expect(sw.style.getPropertyValue("--swatch")).toBe(`var(${KIND_TOKEN[kind]})`);
+  it("outlines the selected country from ?country=", () => {
+    function Pick() {
+      const { select } = useSelection();
+      return (
+        <button type="button" onClick={() => select({ kind: "country", cc: "JP" })}>
+          pick
+        </button>
+      );
     }
-  });
-
-  it("shows the overlay title and legend", () => {
-    renderGlobe();
-    expect(screen.getByText(/Threat geography/)).toBeInTheDocument();
-    for (const label of [
-      "exploit scanning",
-      "infrastructure outage",
-      "victim disclosure",
-      "C2 infrastructure",
-      "BGP anomaly",
-    ]) {
-      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
-    }
+    renderGlobe(fixture, <Pick />);
+    loadMap();
+    const m = lastMap();
+    fireEvent.click(screen.getByRole("button", { name: "pick" }));
+    expect(m.featureStates.at(-1)).toEqual({ source: "countries", id: "JP", state: { selected: true } });
   });
 
   it("survives loading and API error states", async () => {
@@ -441,21 +470,20 @@ describe("<Globe> chrome and accessibility", () => {
     expect(summary()).toMatch(/loading/i);
     await waitFor(() => expect(summary()).toMatch(/unavailable/i));
     loadMap();
-    expect(lastMap().sources.countries.data.features).toHaveLength(177);
+    expect(lastMap().sources.countries.data.features).toHaveLength(176);
   });
 });
 
 describe("<Globe> resilience", () => {
-  it("renders the static fallback (legend + ranked countries) when MapLibre init throws", () => {
+  it("renders the static fallback (ranked countries, SG included) when MapLibre init throws", () => {
     h.throwOnInit = true;
-    renderGlobe();
+    renderGlobe([...fixture, { country_code: "SG", kind: "scan", magnitude: 1, events: 900, last_seen: "x" }]);
     expect(screen.getByText(/couldn't start WebGL 2/i)).toBeInTheDocument();
     const ranked = screen.getByRole("list", { name: /most active countries/i });
     const rows = [...ranked.querySelectorAll("li")].map((li) => li.textContent);
-    expect(rows[0]).toContain("United States");
-    expect(rows).toHaveLength(3);
-    expect(screen.getByRole("link", { name: "IP geolocation by DB-IP.com" })).toBeInTheDocument();
-    expect(screen.getAllByText("exploit scanning").length).toBeGreaterThan(0);
+    expect(rows[0]).toContain("Singapore");
+    expect(rows[1]).toContain("United States");
+    expect(rows).toHaveLength(4);
   });
 
   it("unmount removes the map and disconnects observers and loops", () => {
@@ -474,20 +502,28 @@ describe("<Globe> resilience", () => {
     renderGlobe();
     loadMap();
     const m = lastMap();
-    tokens = { ...DARK, "--ocean": "#bcd4e8", "--land": "#eef4fa", "--live": "#c00f24", "--border-geo": "#7ea3c0" };
+    tokens = {
+      ...DARK,
+      "--ocean": "#bcd4e8",
+      "--land": "#eef4fa",
+      "--live": "#c00f24",
+      "--border-geo": "#7ea3c0",
+      "--text": "#0f1a27",
+    };
     document.documentElement.setAttribute("data-theme", "light");
     await waitFor(() => expect(m.paint.background?.["background-color"]).toBe("#bcd4e8"));
     expect(m.paint.borders?.["line-color"]).toBe("#7ea3c0");
-    expect(JSON.stringify(m.paint.hotspots?.["circle-color"])).toContain('"scan","#c00f24"');
+    expect(m.paint["hover-outline"]?.["line-color"]).toBe("#0f1a27");
     const fill = m.paint.countries?.["fill-color"] as unknown[];
     expect(fill[fill.length - 1]).toBe("#eef4fa");
+    expect(fill[3]).toBe(mixColor("#eef4fa", "#c00f24", CHORO_STEPS[0]));
     expect(maps()).toHaveLength(1);
   });
 });
 
 describe("<Globe> motion", () => {
-  it("auto-rotates eastward via requestAnimationFrame once loaded", () => {
-    renderGlobe();
+  it("auto-rotates eastward via requestAnimationFrame once loaded in globe mode", () => {
+    renderGlobeMode();
     loadMap();
     const m = lastMap();
     runFrames(120);
@@ -496,8 +532,7 @@ describe("<Globe> motion", () => {
     expect(last.center[0]).toBeGreaterThan(0);
   });
 
-  it("prefers-reduced-motion disables rotation entirely", () => {
-    reducedMotion = true;
+  it("flat mode never rotates", () => {
     renderGlobe();
     loadMap();
     runFrames(120);
@@ -505,8 +540,32 @@ describe("<Globe> motion", () => {
     expect(rafQueue).toEqual([]);
   });
 
+  it("setMode('globe') calls setProjection({type:'globe'}) and starts rotating; flat stops it again", () => {
+    const { setMode } = renderGlobe();
+    loadMap();
+    const m = lastMap();
+    act(() => setMode("globe"));
+    expect(m.setProjection).toHaveBeenLastCalledWith({ type: "globe" });
+    expect(rafQueue.length).toBe(1);
+    act(() => setMode("flat"));
+    expect(m.setProjection).toHaveBeenLastCalledWith({ type: "mercator" });
+    expect(rafQueue).toEqual([]);
+    m.jumpTo.mockClear();
+    runFrames(60);
+    expect(m.jumpTo).not.toHaveBeenCalled();
+  });
+
+  it("prefers-reduced-motion disables rotation entirely, even in globe mode", () => {
+    reducedMotion = true;
+    renderGlobeMode();
+    loadMap();
+    runFrames(120);
+    expect(lastMap().jumpTo).not.toHaveBeenCalled();
+    expect(rafQueue).toEqual([]);
+  });
+
   it("pauses on user interaction", () => {
-    renderGlobe();
+    renderGlobeMode();
     loadMap();
     const m = lastMap();
     act(() => m.fire("mousedown", { originalEvent: new MouseEvent("mousedown") }));
@@ -517,7 +576,7 @@ describe("<Globe> motion", () => {
   });
 
   it("stops when the tab is hidden", () => {
-    renderGlobe();
+    renderGlobeMode();
     loadMap();
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
     try {
@@ -542,7 +601,7 @@ describe("<Globe> interaction and flyTo", () => {
   }
 
   it("flyTo is a no-op before load, then eases to the country centroid", () => {
-    renderGlobe(fixture, <FlyButton code="NL" />);
+    renderGlobeMode(<FlyButton code="NL" />);
     const m = lastMap();
     fireEvent.click(screen.getByRole("button", { name: "fly NL" }));
     expect(m.easeTo).not.toHaveBeenCalled();
@@ -556,8 +615,15 @@ describe("<Globe> interaction and flyTo", () => {
     expect(center[1]).toBeLessThan(54);
   });
 
+  it("flyTo does nothing in flat mode", () => {
+    renderGlobe(fixture, <FlyButton code="NL" />);
+    loadMap();
+    fireEvent.click(screen.getByRole("button", { name: "fly NL" }));
+    expect(lastMap().easeTo).not.toHaveBeenCalled();
+  });
+
   it("flyTo ignores unknown countries", () => {
-    renderGlobe(fixture, <FlyButton code="ZZ" />);
+    renderGlobeMode(<FlyButton code="ZZ" />);
     loadMap();
     fireEvent.click(screen.getByRole("button", { name: "fly ZZ" }));
     expect(lastMap().easeTo).not.toHaveBeenCalled();
@@ -573,7 +639,7 @@ describe("<Globe> interaction and flyTo", () => {
   });
 
   it("zooms only on Ctrl/Cmd+wheel; a plain wheel scrolls the page even after focus/drag", () => {
-    renderGlobe();
+    renderGlobeMode();
     loadMap();
     const m = lastMap();
     const canvas = document.querySelector("canvas")!;
@@ -609,7 +675,7 @@ describe("<Globe> interaction and flyTo", () => {
         unobserve() {}
       },
     );
-    renderGlobe();
+    renderGlobeMode();
     loadMap();
     act(() => observed.forEach((cb) => cb([], {} as ResizeObserver)));
     expect(lastMap().resize).toHaveBeenCalled();
@@ -623,7 +689,7 @@ describe("<Globe> rotation scheduling", () => {
 
   it("waits for resume with a timer, not a no-op RAF loop, then restarts RAF after 4 s idle", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    renderGlobe();
+    renderGlobeMode();
     loadMap();
     const m = lastMap();
     expect(rafQueue.length).toBe(1);
@@ -637,7 +703,7 @@ describe("<Globe> rotation scheduling", () => {
   });
 
   it("caps active rotation at ~30 fps by skipping frames", () => {
-    renderGlobe();
+    renderGlobeMode();
     loadMap();
     const m = lastMap();
     runFrames(61, 1000 / 60); // ~1 s of 60 Hz display frames
@@ -655,7 +721,7 @@ describe("<Globe> rotation scheduling", () => {
         </button>
       );
     }
-    renderGlobe(fixture, <Fly />);
+    renderGlobeMode(<Fly />);
     loadMap();
     expect(rafQueue.length).toBe(1);
     fireEvent.click(screen.getByRole("button", { name: "fly" }));

@@ -160,69 +160,84 @@ test("the range control shows on the Dashboard only and writes ?range=", async (
   await expect(page.getByRole("group", { name: "Time range" })).toHaveCount(0);
 });
 
-test.describe("country drawer from the keyboard hotspot list", () => {
-  test("focusing a hotspot button shows the list; Enter opens Germany; Esc closes", async ({ page }) => {
+test.describe("country side panel", () => {
+  const sideList = (page: import("@playwright/test").Page) => page.getByRole("list", { name: "Top countries" });
+
+  test("Tab to Germany in the side list, Enter shows its panel; All countries returns to the list", async ({
+    page,
+  }) => {
     await loaded(page);
     await expect(page.locator(".globe-map canvas").first()).toBeVisible({ timeout: 20_000 });
-    const list = page.getByRole("list", { name: "Top threat hotspots" });
-    const buttons = list.getByRole("button");
-    // Tabbing on from the globe canvas passes the legend's attribution link, then reaches the first hotspot button,
-    // and the hidden list becomes a visible panel.
+    const buttons = sideList(page).getByRole("button");
+    await expect(buttons.first()).toContainText("United States"); // the fixture's busiest country
+    // Tabbing on from the map canvas passes the legend's attribution link, then enters the side list.
     await page.locator(".globe-map canvas").first().focus();
     await page.keyboard.press("Tab");
     await expect(page.locator(".geo-attrib")).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(buttons.first()).toBeFocused();
-    await expect(list).toBeVisible();
-    const box = await list.boundingBox();
-    expect(box!.width).toBeGreaterThan(100);
-    // Tab through the list (ordered by magnitude) to the Germany button.
     const de = buttons.filter({ hasText: "Germany" });
-    for (let n = 0; n < 10 && !(await de.evaluate((el) => el === document.activeElement)); n++) {
+    for (let n = 0; n < 6 && !(await de.evaluate((el) => el === document.activeElement)); n++) {
       await page.keyboard.press("Tab");
     }
     await expect(de).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/[?&]country=DE/);
-    const dialog = page.getByRole("dialog");
-    await expect(dialog.getByRole("heading", { name: "Germany" })).toBeVisible();
-    await expect(dialog.getByText("exploit scanning")).toBeVisible();
-    await expect(dialog.getByText("Sign in to see individual events")).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
+    const side = page.getByRole("complementary", { name: "Country detail" });
+    await expect(side.getByRole("heading", { name: "Germany" })).toBeVisible();
+    await expect(side.getByText("exploit scanning")).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await side.getByRole("button", { name: "All countries" }).click();
     await expect(page).not.toHaveURL(/country=/);
+    await expect(sideList(page)).toBeVisible();
   });
 
-  test("no horizontal overflow at 400px", async ({ page }) => {
+  test("the map defaults to flat, switches to the globe, and the choice survives a reload", async ({ page }) => {
+    await loaded(page);
+    const group = page.getByRole("group", { name: "Map projection" });
+    await expect(group.getByRole("button", { name: "Flat" })).toHaveAttribute("aria-pressed", "true");
+    await group.getByRole("button", { name: "Globe" }).click();
+    await expect(group.getByRole("button", { name: "Globe" })).toHaveAttribute("aria-pressed", "true");
+    await page.reload();
+    await expect(
+      page.getByRole("group", { name: "Map projection" }).getByRole("button", { name: "Globe" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".globe-map canvas").first()).toBeVisible({ timeout: 20_000 });
+  });
+
+  test("the legend and the DB-IP credit show", async ({ page }) => {
+    await loaded(page);
+    await expect(page.locator(".map-legend")).toContainText(/more alerts · 5 countries · 7 days/);
+    await expect(page.getByRole("link", { name: "IP geolocation by DB-IP.com" })).toBeVisible();
+  });
+
+  test("no horizontal overflow at 400px with a country selected", async ({ page }) => {
     await page.setViewportSize({ width: 400, height: 800 });
     await page.goto("/?country=DE");
-    const dialog = page.getByRole("dialog");
-    await expect(dialog.getByRole("heading", { name: "Germany" })).toBeVisible();
-    await expect(dialog.getByText("exploit scanning")).toBeVisible();
+    const side = page.getByRole("complementary", { name: "Country detail" });
+    await expect(side.getByRole("heading", { name: "Germany" })).toBeVisible();
+    await expect(side.getByText("exploit scanning")).toBeVisible();
     const m = await page.evaluate(() => {
-      const dlg = document.querySelector<HTMLElement>('[role="dialog"]')!;
-      const body = document.querySelector<HTMLElement>(".dbody")!;
-      return {
-        dlg: [dlg.scrollWidth, dlg.clientWidth],
-        body: [body.scrollWidth, body.clientWidth],
-        doc: [document.documentElement.scrollWidth, innerWidth],
-      };
+      const el = document.querySelector<HTMLElement>(".side")!;
+      return { side: [el.scrollWidth, el.clientWidth], doc: [document.documentElement.scrollWidth, innerWidth] };
     });
-    expect(m.dlg[0]).toBeLessThanOrEqual(m.dlg[1]);
-    expect(m.body[0]).toBeLessThanOrEqual(m.body[1]);
+    expect(m.side[0]).toBeLessThanOrEqual(m.side[1]);
     expect(m.doc[0]).toBeLessThanOrEqual(m.doc[1]);
   });
 
-  test("CVE -> country by real clicks; Back returns to the CVE dialog, Forward to the country", async ({ page }) => {
+  test("CVE -> country chip lands on the dashboard side panel; Back returns to the CVE dialog, Forward to the country", async ({
+    page,
+  }) => {
     await loaded(page);
     await page.locator('.lane[data-k="exploited"] [data-testid="lane-row"]').first().click();
     await expect(page).toHaveURL(new RegExp(`[?&]cve=${CVE_ID}`));
     const dialog = page.getByRole("dialog");
     await expect(dialog).toHaveCount(1);
-    await dialog.getByRole("button", { name: "United States" }).click();
+    await dialog.getByRole("link", { name: "United States" }).click();
     await expect(page).toHaveURL(/[?&]country=US/);
-    await expect(dialog.getByRole("heading", { name: "United States" })).toBeVisible();
-    await expect(dialog).toHaveCount(1);
+    await expect(dialog).toHaveCount(0);
+    const side = page.getByRole("complementary", { name: "Country detail" });
+    await expect(side.getByRole("heading", { name: "United States" })).toBeVisible();
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`[?&]cve=${CVE_ID}`));
     await expect(dialog).toHaveCount(1);
@@ -230,7 +245,22 @@ test.describe("country drawer from the keyboard hotspot list", () => {
     await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true);
     await page.goForward();
     await expect(page).toHaveURL(/[?&]country=US/);
-    await expect(dialog).toHaveCount(1);
-    await expect(dialog.getByRole("heading", { name: "United States" })).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+    await expect(side.getByRole("heading", { name: "United States" })).toBeVisible();
+  });
+
+  test("opening a CVE from the country panel keeps ?country= and closing returns to the panel (R7)", async ({
+    page,
+  }) => {
+    await page.goto("/?country=DE");
+    const side = page.getByRole("complementary", { name: "Country detail" });
+    await side.getByRole("button", { name: new RegExp(CVE_ID) }).click();
+    await expect(page).toHaveURL(new RegExp(`country=DE.*cve=${CVE_ID}|cve=${CVE_ID}.*country=DE`));
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("Acme Gateway 4.2")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(page).toHaveURL(/[?&]country=DE/);
+    await expect(side.getByRole("heading", { name: "Germany" })).toBeVisible();
   });
 });

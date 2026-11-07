@@ -37,7 +37,7 @@ describe("guards", () => {
     // the real dashboard has its own role=status loading regions, so find the notice by its text
     expect(await screen.findByText(/Admins only/)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Alert rules" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: /^Last / })).toBeInTheDocument();
   });
   test("an admin reaches /admin/alerts", async () => {
     handlers();
@@ -122,13 +122,13 @@ describe("guards", () => {
     guest();
     at("/");
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Dashboard" })).toBeNull();
+    expect(screen.queryByRole("heading", { level: 1, name: /^Last / })).toBeNull();
   });
   test("private server: a signed-in member still sees the dashboard", async () => {
     handlers({ publicRead: false });
     signIn(member);
     at("/");
-    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: /^Last / })).toBeInTheDocument();
   });
   test("invite and reset routes render the AcceptInvite page", async () => {
     handlers();

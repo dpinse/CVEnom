@@ -1,12 +1,11 @@
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../lib/api";
-import { DEFAULT_RANGE } from "../lib/range";
+import { DEFAULT_RANGE, useRange } from "../lib/range";
 import { useCve } from "../lib/queries";
 import { isIso3166Alpha2 } from "../lib/iso3166";
 import { relTime } from "../lib/relTime";
 import { cveOrgUrl, cweUrl, kevUrl, nvdUrl } from "../lib/refLinks";
-import { useSelection } from "../lib/selection";
 import { decodeEntities, ExternalLink, LinkRemoved, safeHref, Text } from "../lib/text";
 import type { CveDetail, GeoEventOut } from "../lib/types";
 import { useAuth } from "../lib/useAuth";
@@ -80,7 +79,7 @@ function Meter({
 function GeoEvent({ ev, now }: { ev: GeoEventOut; now: Date }) {
   const kind = isGeoKind(ev.kind) ? KIND_LABEL[ev.kind] : String(ev.kind);
   const cc = isIso2(ev.country_code) ? ev.country_code : null;
-  const { select } = useSelection();
+  const { range } = useRange();
   const entries = Object.entries(ev.details && typeof ev.details === "object" ? ev.details : {});
   const shown = entries.slice(0, DETAILS_CAP);
   return (
@@ -91,9 +90,9 @@ function GeoEvent({ ev, now }: { ev: GeoEventOut; now: Date }) {
         </span>
         {cc &&
           (isIso3166Alpha2(cc) ? (
-            <button type="button" className="chip linked gev-cc" onClick={() => select({ kind: "country", cc })}>
+            <Link className="chip linked gev-cc" to={`/?country=${cc}&range=${range}`}>
               {countryName(cc)}
-            </button>
+            </Link>
           ) : (
             <span className="gev-cc">{countryName(cc)}</span>
           ))}

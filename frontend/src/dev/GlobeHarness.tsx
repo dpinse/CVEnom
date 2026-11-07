@@ -6,7 +6,7 @@
  *   built:    npm run build:harness && npm run preview:harness
  *                                    -> localhost:4173/globe-harness.html
  *
- * Query params: ?data=empty (no geo data), ?theme=light|dark. Task 11's Playwright Firefox
+ * Query params: ?data=empty (no geo data), ?theme=light|dark, ?mode=globe (default flat). Task 11's Playwright Firefox
  * pixel check targets this page.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -80,7 +80,9 @@ export default function GlobeHarness() {
             </button>
           </div>
           <FlyButtons />
-          <LazyGlobe />
+          <div className="map-stage">
+            <LazyGlobe range="7d" mode={params.get("mode") === "globe" ? "globe" : "flat"} />
+          </div>
         </main>
       </GlobeProvider>
     </QueryClientProvider>

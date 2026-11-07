@@ -123,5 +123,11 @@
   ],
   "events": null,
   "trend_unit": "hour",
-  "top_cves": []
+  "top_cves": [
+    {
+      "cve_id": "CVE-2026-1001",
+      "cvss": 9.8,
+      "events": 4
+    }
+  ]
 }
