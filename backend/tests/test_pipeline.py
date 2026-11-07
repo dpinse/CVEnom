@@ -638,3 +638,29 @@ def test_first_news_event_source_falls_back_to_unknown_when_empty(db_session):
         summary="s", published=NOW)]))
     ev = db_session.query(CveEvent).filter_by(cve_id="CVE-2026-6004", kind="first_news").one()
     assert ev.source == "unknown"
+
+
+def test_year_one_kev_added_does_not_poison_the_batch(db_session):
+    from datetime import date
+
+    bad = NormalizedCve(cve_id="CVE-2026-9701", kev=True, kev_source="vulncheck",
+                        kev_added=date(1, 1, 1), published=datetime(1, 1, 1, tzinfo=timezone.utc))
+    assert bad.kev_added is None and bad.published is None  # bounded at the schema
+    good = NormalizedCve(cve_id="CVE-2026-9702", kev=True, kev_source="cisa",
+                         kev_added=date(2026, 10, 20))
+    ingest(db_session, CollectorResult(cves=[bad, good]), collector="vulncheck_kev")
+    assert db_session.get(Cve, "CVE-2026-9701") is not None
+    assert [e.cve_id for e in _events(db_session, "kev_added")] == ["CVE-2026-9702"]
+
+
+def test_one_invalid_derived_event_is_skipped_not_fatal(db_session, monkeypatch):
+    # Even if a bad value slips past the schema, derivation skips only that event.
+    from cvenom import timeline
+
+    good = NormalizedCve(cve_id="CVE-2026-9704", published=NOW - timedelta(days=1))
+    poisoned = NormalizedCve(cve_id="CVE-2026-9703", published=NOW - timedelta(days=1))
+    object.__setattr__(poisoned, "published", datetime(1, 1, 1, tzinfo=timezone.utc))
+    out = timeline.derived_events(
+        [poisoned, good], collector="nvd", now=NOW, cfg=pipeline.get_settings()
+    )
+    assert [e.cve_id for e in out] == ["CVE-2026-9704"]

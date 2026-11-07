@@ -1,10 +1,12 @@
 """CVE timeline events: derivation at ingest time and idempotent persistence."""
 
 import json
+import logging
 from collections.abc import Iterable
 from datetime import datetime, time, timezone
 from urllib.parse import urlsplit
 
+from pydantic import ValidationError
 from sqlalchemy import case, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -14,6 +16,8 @@ from cvenom.ingestutil import _in_chunks, _sanitize_details
 from cvenom.models import Cve, CveEvent
 from cvenom.schemas import NormalizedCve, NormalizedCveEvent
 from cvenom.textutil import sanitize_text
+
+log = logging.getLogger(__name__)
 
 SOURCE_LABELS = {
     "nvd": "NVD",
@@ -49,10 +53,13 @@ def derived_events(
     for cve in cves:
 
         def add(kind, occurred_at, source, detail=None, cve=cve):
-            out.append(NormalizedCveEvent(
-                cve_id=cve.cve_id, kind=kind, occurred_at=occurred_at, source=source,
-                detail=detail or {},
-            ))
+            try:
+                out.append(NormalizedCveEvent(
+                    cve_id=cve.cve_id, kind=kind, occurred_at=occurred_at, source=source,
+                    detail=detail or {},
+                ))
+            except ValidationError as exc:  # one bad value must not abort the batch
+                log.warning("skipping %s event for %s: %s", kind, cve.cve_id, exc)
 
         if cve.published is not None:
             add("published", cve.published, published_source)

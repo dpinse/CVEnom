@@ -271,6 +271,24 @@ class NormalizedCve(BaseModel):
     def _bound_last_modified(cls, value: datetime | None) -> datetime | None:
         return None if value is None else bound_datetime(value)
 
+    @field_validator("published")
+    @classmethod
+    def _bound_published(cls, value: datetime | None) -> datetime | None:
+        # An out-of-range upstream date (e.g. a Go zero time) becomes "unknown", never a failure.
+        if value is None:
+            return None
+        try:
+            return bound_datetime(value)
+        except ValueError:
+            return None
+
+    @field_validator("kev_added")
+    @classmethod
+    def _bound_kev_added(cls, value: date | None) -> date | None:
+        if value is None or MIN_YEAR <= value.year <= MAX_YEAR:
+            return value
+        return None
+
 
 class NormalizedStory(BaseModel):
     url: str
