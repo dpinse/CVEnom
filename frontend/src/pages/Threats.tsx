@@ -309,7 +309,7 @@ function ThreatsCves() {
                 <th scope="col">Product and issue</th>
                 <th scope="col">Signals</th>
                 <th scope="col">EPSS</th>
-                <th scope="col">Added</th>
+                <th scope="col">{filters.poc || filters.status === "news" ? "Published" : "Added"}</th>
               </tr>
             </thead>
             <tbody>

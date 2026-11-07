@@ -12,7 +12,7 @@ import { useSelection } from "../lib/selection";
 import { Text } from "../lib/text";
 import type { CountryActivity } from "../lib/types";
 import { useNow } from "../lib/useNow";
-import { KindSwatch } from "./GlobeChrome";
+import { GeoAttribution, KindSwatch } from "./GlobeChrome";
 import { useGlobe } from "./GlobeContext";
 import { countryName, countryTotals, isGeoKind, KIND_LABEL, rankCountries } from "./geoSummary";
 import { severityOf } from "./LaneRow";
@@ -69,7 +69,14 @@ function TopCountries({ range }: { range: RangeKey }) {
 function Events({ a }: { a: CountryActivity }) {
   const now = useNow();
   const events = a.events;
-  if (events === null || events.length === 0) return null;
+  if (events === null) {
+    return (
+      <p className="muted hint" data-testid="country-events-hint">
+        Sign in to see individual events.
+      </p>
+    );
+  }
+  if (events.length === 0) return null;
   return (
     <>
       <h3>Latest events</h3>
@@ -187,6 +194,7 @@ export function CountryPanel({ range }: { range: RangeKey }) {
   return (
     <aside className="side" aria-label="Country detail">
       {country ? <CountryView cc={country} range={range} /> : <TopCountries range={range} />}
+      <GeoAttribution />
     </aside>
   );
 }

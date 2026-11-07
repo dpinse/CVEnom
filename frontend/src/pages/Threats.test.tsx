@@ -238,6 +238,18 @@ describe("Threats page (CVEs)", () => {
     await waitFor(() => expect(lastUrl).toBe("/threats?added=month"));
   });
 
+  test.each([
+    ["/threats?poc=1&added=week", "Published"],
+    ["/threats?status=news&added=week", "Published"],
+    ["/threats?status=exploited&added=week", "Added"],
+    ["/threats", "Added"],
+  ])("the time column header is honest about what it shows (%s)", async (url, header) => {
+    api(() => list());
+    renderAt(ui, url);
+    await screen.findByText("CVE-2026-0001");
+    expect(screen.getByRole("columnheader", { name: header })).toBeInTheDocument();
+  });
+
   test("status chip click sets ?status=likely and resets the page; All clears it", async () => {
     api(() => list(many(50), 120));
     renderAt(ui, "/threats?page=2");

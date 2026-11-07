@@ -199,6 +199,17 @@ describe("CountryPanel: one country", () => {
     await screen.findByTestId("country-counts");
     expect(screen.queryByTestId("country-events")).toBeNull();
     expect(screen.queryByTestId("ransomware-credit")).toBeNull();
+    expect(screen.getByTestId("country-events-hint")).toHaveTextContent("Sign in to see individual events.");
+  });
+
+  test("the side panel carries the DB-IP attribution in both states", async () => {
+    serveCountry(country());
+    renderAt(<CountryPanel range="7d" />, "/?country=DE");
+    await screen.findByTestId("country-counts");
+    expect(screen.getByRole("link", { name: "IP geolocation by DB-IP.com" })).toBeInTheDocument();
+    cleanup();
+    renderAt(<CountryPanel range="7d" />, "/");
+    expect(screen.getByRole("link", { name: "IP geolocation by DB-IP.com" })).toBeInTheDocument();
   });
 
   test("signed in: events render as text only (escaped markup stays literal) with the ransomware credit", async () => {

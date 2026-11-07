@@ -10,7 +10,7 @@ const serious = async (page: import("@playwright/test").Page) => {
     .map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.map((n) => n.target.join(" ")) }));
 };
 
-test("Threats filters live in the URL; severity chips are colour-coded toggles", async ({ page }) => {
+test("Threats filters live in the URL; severity chips are colour-coded toggles", async ({ page, guards }) => {
   await page.goto("/threats");
   await expect(page.getByRole("heading", { level: 1, name: "Threats" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Time range" })).toHaveCount(0);
@@ -29,6 +29,18 @@ test("Threats filters live in the URL; severity chips are colour-coded toggles",
   await expect(page).toHaveURL(/status=exploited/);
   await page.getByLabel("Sort").selectOption("due");
   await expect(page.getByText("Soonest CISA deadline first")).toBeVisible();
+  // The URL state reaches the API as the matching query.
+  await expect
+    .poll(() =>
+      guards.apiRequests.some(
+        (r) =>
+          r.startsWith("/api/cves?") &&
+          r.includes("status=exploited") &&
+          r.includes("added=month") &&
+          r.includes("sev=high%2Ccrit"),
+      ),
+    )
+    .toBe(true);
 });
 
 test("a dashboard deep link shows why the list is narrowed and lets the user remove it", async ({ page }) => {

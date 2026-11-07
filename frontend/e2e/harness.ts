@@ -90,8 +90,7 @@ export const test = base.extend<{ guards: Guards }>({
       page.on("request", (r) => {
         const u = r.url();
         const parsed = new URL(u.startsWith("http") ? u : "http://x/");
-        if (parsed.pathname.startsWith("/api/") && !u.startsWith("ws"))
-          guards.apiRequests.push(parsed.pathname + parsed.search);
+        if (parsed.pathname.startsWith("/api/")) guards.apiRequests.push(parsed.pathname + parsed.search);
         // Not network requests to a third party, so they are not "off-origin":
         //  - data:  inline images/fonts the app or MapLibre embeds (no network);
         //  - blob:  same-origin object URLs the page itself minted (e.g. MapLibre's canvas/worker plumbing);
