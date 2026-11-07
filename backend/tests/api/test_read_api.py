@@ -678,3 +678,15 @@ async def test_loud_stories_range(db_session):
     assert len((await get(db_session, "/api/stories/loud?range=24h")).json()) == 1
     assert len((await get(db_session, "/api/stories/loud?range=7d")).json()) == 2
     assert (await get(db_session, "/api/stories/loud?range=90d")).status_code == 422
+
+
+async def test_legacy_lane_excludes_restricted_only_cve_for_anon(db_session):
+    cve(db_session, "CVE-2024-6666")
+    s = story(db_session, 950, ["CVE-2024-6666"], title="Victim Two listed by grp")
+    s.source = "ransomware.live"
+    db_session.flush()
+    anon = await get(db_session, "/api/cves?lane=LOUD&page_size=100")
+    assert "CVE-2024-6666" not in {i["cve_id"] for i in anon.json()["items"]}
+    h, _ = bearer(db_session, mk_user(db_session))
+    authed = await get(db_session, "/api/cves?lane=LOUD&page_size=100", headers=h)
+    assert "CVE-2024-6666" in {i["cve_id"] for i in authed.json()["items"]}

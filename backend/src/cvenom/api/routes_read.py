@@ -183,6 +183,7 @@ def _legacy_conds(
     to: date | None,
     kev_from: date | None,
     kev_to: date | None,
+    hidden: frozenset[str] = frozenset(),
 ) -> list:
     """History-page params, kept until the Threats page replaces it."""
     conds = []
@@ -201,7 +202,7 @@ def _legacy_conds(
     if kev_to is not None:  # inclusive
         conds.append(Cve.kev_added <= kev_to)
     if lane is not None:
-        members = [v.cve_id for v in lane_views(session, _now())[lane]]
+        members = [v.cve_id for v in lane_views(session, _now(), exclude_sources=hidden)[lane]]
         conds.append(Cve.cve_id == any_(literal(members, ARRAY(String))))
     return conds
 
@@ -262,6 +263,7 @@ def search_cves(
                 to=to,
                 kev_from=kev_from,
                 kev_to=kev_to,
+                hidden=hidden,
             ),
         ]
 
