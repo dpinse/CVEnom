@@ -740,9 +740,15 @@ def _prio_fixture(db):
         poc_badge=True, patch_available=False)                                         # older KEV
     cve(db, "CVE-2024-0009", kev=True, kev_added=d - timedelta(days=3), cvss=9.0, epss_percentile=0.20,
         poc_badge=True, patch_available=False)                                         # tie: id order
+    # 48h boost: yesterday still counts as recent; null EPSS/CVSS beats an older p99
+    cve(db, "CVE-2024-0010", kev=True, kev_added=d - timedelta(days=2), cvss=9.8, epss_percentile=0.99)
+    cve(db, "CVE-2024-0011", kev=True, kev_added=d - timedelta(days=1))
     return [
-        "CVE-2024-0003", "CVE-2024-0002", "CVE-2024-0007", "CVE-2024-0008", "CVE-2024-0009",
-        "CVE-2024-0006", "CVE-2024-0005", "CVE-2024-0001", "CVE-2024-0004",
+        # recent (today/yesterday), normal order inside the group
+        "CVE-2024-0003", "CVE-2024-0002", "CVE-2024-0007", "CVE-2024-0006", "CVE-2024-0005",
+        "CVE-2024-0001", "CVE-2024-0004", "CVE-2024-0011",
+        # older, normal order inside the group
+        "CVE-2024-0010", "CVE-2024-0008", "CVE-2024-0009",
     ]
 
 
@@ -754,9 +760,19 @@ async def test_sort_priority_order(db_session):
 async def test_sort_priority_paging_is_stable(db_session):
     expected = _prio_fixture(db_session)
     got = []
-    for page in (1, 2, 3):
-        got += ids(await get(db_session, f"/api/cves?sort=priority&page={page}&page_size=4"))
+    for page in (1, 2, 3, 4):
+        got += ids(await get(db_session, f"/api/cves?sort=priority&page={page}&page_size=3"))
     assert got == expected
+
+
+async def test_sort_priority_boost_expires_as_the_date_ages(db_session):
+    d = TODAY
+    cve(db_session, "CVE-2024-0001", kev=True, kev_added=d - timedelta(days=1))  # no signals, recent
+    cve(db_session, "CVE-2024-0002", kev=True, kev_added=d - timedelta(days=2), epss_percentile=0.99)
+    assert ids(await get(db_session, "/api/cves?sort=priority")) == ["CVE-2024-0001", "CVE-2024-0002"]
+    db_session.get(Cve, "CVE-2024-0001").kev_added = d - timedelta(days=2)  # ages out
+    db_session.flush()
+    assert ids(await get(db_session, "/api/cves?sort=priority")) == ["CVE-2024-0002", "CVE-2024-0001"]
 
 
 async def test_sort_priority_with_status_exploited(db_session):

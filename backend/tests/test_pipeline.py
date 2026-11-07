@@ -505,7 +505,7 @@ def test_lane_views_exploited_ranks_priority_over_date(db_session):
     from datetime import date
     _insert_cve(db_session, "CVE-2026-9400", kev=True, kev_added=date(2026, 10, 1),
                 epss_percentile=0.99, cvss=9.9)
-    _insert_cve(db_session, "CVE-2026-9401", kev=True, kev_added=date(2026, 10, 20),
+    _insert_cve(db_session, "CVE-2026-9401", kev=True, kev_added=date(2026, 10, 10),
                 epss_percentile=0.10, cvss=5.0)
     ids = [v.cve_id for v in lane_views(db_session, NOW, "30d")[Lane.EXPLOITED]]
     assert ids == ["CVE-2026-9400", "CVE-2026-9401"]  # high EPSS beats newer KEV
@@ -683,6 +683,24 @@ def test_exploited_lane_is_ranked_by_priority(db_session):
     assert [v.cve_id for v in views[Lane.EXPLOITED]] == [
         "CVE-2026-7003", "CVE-2026-7002", "CVE-2026-7001", "CVE-2026-7006", "CVE-2026-7004"]
     assert all(v.cve_id not in {x.cve_id for x in views[Lane.EXPLOITED]} for v in views[Lane.LIKELY])
+
+
+def test_exploited_lane_recent_boost_and_expiry(db_session):
+    old = NOW.date() - timedelta(days=2)
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id="CVE-2026-7020", published=NOW, kev=True, kev_added=old,
+                      epss_percentile=0.99, cvss=9.8),
+        NormalizedCve(cve_id="CVE-2026-7021", published=NOW, kev=True,
+                      kev_added=NOW.date() - timedelta(days=1)),          # null EPSS/CVSS, recent
+        NormalizedCve(cve_id="CVE-2026-7022", published=NOW, kev=True, kev_added=NOW.date(),
+                      cvss=5.0, epss_percentile=0.5),
+    ]))
+    ids = [v.cve_id for v in lane_views(db_session, NOW)[Lane.EXPLOITED]]
+    assert ids == ["CVE-2026-7022", "CVE-2026-7021", "CVE-2026-7020"]
+    # a day later the yesterday-row ages out of the boost and falls behind the p99 row
+    later = NOW + timedelta(days=1)
+    ids = [v.cve_id for v in lane_views(db_session, later, "30d")[Lane.EXPLOITED]]
+    assert ids == ["CVE-2026-7022", "CVE-2026-7020", "CVE-2026-7021"]
 
 
 def test_kev_with_high_epss_stays_out_of_likely(db_session):

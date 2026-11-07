@@ -405,7 +405,7 @@ def lane_views(
             lanes[lane].append(view)
     for lane, views in lanes.items():
         if lane is Lane.EXPLOITED:
-            views.sort(key=priority_key)
+            views.sort(key=lambda v: priority_key(v, now))
         else:
             views.sort(key=lambda v: (-heat_rank(v, now, cfg), v.cve_id))
     return lanes

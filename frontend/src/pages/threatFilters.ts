@@ -18,7 +18,11 @@ export const SORTS: { key: ThreatsSort; label: string; hint: string }[] = [
   { key: "newest", label: "Newest", hint: "Most recently published first" },
   { key: "hot", label: "Hot", hint: "Exploited first, then EPSS, CVSS and news" },
   { key: "trending", label: "Trending", hint: "Most news stories in the last 7 days" },
-  { key: "priority", label: "Priority", hint: "Ransomware first, then EPSS, CVSS, PoC and no patch" },
+  {
+    key: "priority",
+    label: "Priority",
+    hint: "Added in the last 48h first, then ransomware, EPSS, CVSS, PoC, no patch",
+  },
   { key: "due", label: "KEV due", hint: "Soonest CISA deadline first" },
 ];
 

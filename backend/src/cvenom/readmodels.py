@@ -7,6 +7,7 @@ from sqlalchemy import DateTime, Text, and_, case, cast, exists, func, literal, 
 
 from cvenom.config import get_settings
 from cvenom.models import Cve, CveEvent, GeoEvent, Story, StoryCveLink
+from cvenom.scoring import recent_kev_cutoff
 from cvenom.ranges import (
     DEFAULT_RANGE,
     RANGE_DAYS,
@@ -574,9 +575,11 @@ def cve_search_filters(
     return conds
 
 
-def priority_order() -> tuple:
+def priority_order(now: datetime) -> tuple:
     """SQL twin of scoring.priority_key (keep in sync); cve_id makes paging deterministic."""
+    recent = func.coalesce(Cve.kev_added >= recent_kev_cutoff(now), False)
     return (
+        recent.desc(),
         Cve.kev_ransomware.is_(True).desc(),
         Cve.epss_percentile.desc().nulls_last(),
         Cve.cvss.desc().nulls_last(),
@@ -600,7 +603,7 @@ def cve_search_order(
             Cve.cve_id,
         )
     if sort == "priority":
-        return priority_order()
+        return priority_order(now)
     if sort == "due":
         return (Cve.kev_due.asc(), Cve.cve_id)
     if sort == "kev_added":  # legacy History order

@@ -30,10 +30,18 @@ class CveView:
     kev_ransomware: bool | None = None
 
 
-def priority_key(v: CveView) -> tuple:
-    """Shared "priority" order (SQL twin: readmodels.priority_order): ransomware first, EPSS desc,
+def recent_kev_cutoff(now: datetime) -> date:
+    """kev_added is a DATE: "recently added" = today or yesterday (UTC). Keep in sync with
+    isRecentKevDate in frontend/src/lib/situation.ts."""
+    return _utc(now).date() - timedelta(days=1)
+
+
+def priority_key(v: CveView, now: datetime) -> tuple:
+    """Shared "priority" order (SQL twin: readmodels.priority_order): recently added KEV first, then ransomware, EPSS desc,
     CVSS desc (NULLs last), PoC first, no-patch first, newest KEV, then CVE id."""
+    recent = v.kev_added is not None and v.kev_added >= recent_kev_cutoff(now)
     return (
+        not recent,  # 48h boost: expires on its own as kev_added ages
         v.kev_ransomware is not True,
         v.epss_percentile is None,
         -(v.epss_percentile or 0.0),
