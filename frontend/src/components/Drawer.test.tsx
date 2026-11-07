@@ -131,6 +131,13 @@ describe("DrawerHost", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  test("quick view links to the threat page with the default range", async () => {
+    serveCve(detail());
+    renderHost(["/?cve=" + CVE]);
+    const link = await screen.findByRole("link", { name: "Open threat page →" });
+    expect(link.getAttribute("href")).toBe(`/threats/${CVE}?range=7d`);
+  });
+
   test("ignores an invalid cve param", () => {
     renderHost(["/?cve=nope"]);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -328,7 +335,8 @@ describe("CveDetail", () => {
     expect(screen.getByText("Bad")).toBeInTheDocument();
     const links = d.querySelectorAll(".slinks a"); // the standard NVD / KEV / cve.org links are covered below
     expect(links).toHaveLength(1);
-    d.querySelectorAll("a").forEach((a) => {
+    // the in-app "Open threat page" link is internal; every external anchor opens safely
+    d.querySelectorAll("a:not([href^='/'])").forEach((a) => {
       expect(a).toHaveAttribute("rel", "noopener noreferrer");
       expect(a).toHaveAttribute("target", "_blank");
     });
@@ -635,7 +643,8 @@ describe("CveDetail sections", () => {
     d = await dialog();
     const kev = await within(d).findByRole("link", { name: "CISA KEV" });
     expect(kev.getAttribute("href")).toContain("cisa.gov/known-exploited-vulnerabilities-catalog");
-    d.querySelectorAll("a").forEach((a) => {
+    // the in-app "Open threat page" link is internal; every external anchor opens safely
+    d.querySelectorAll("a:not([href^='/'])").forEach((a) => {
       expect(a).toHaveAttribute("rel", "noopener noreferrer");
       expect(a).toHaveAttribute("target", "_blank");
     });

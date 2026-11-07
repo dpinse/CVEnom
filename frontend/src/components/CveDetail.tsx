@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { Link } from "react-router-dom";
 import { ApiError } from "../lib/api";
 import { DEFAULT_RANGE } from "../lib/range";
 import { useCve } from "../lib/queries";
@@ -182,6 +183,11 @@ export function CveDetailBody({ d }: { d: CveDetail }) {
     stories.length < BACKEND_STORIES_CAP;
   return (
     <>
+      <div>
+        <Link className="btn" to={`/threats/${encodeURIComponent(d.cve_id)}?range=${DEFAULT_RANGE}`}>
+          Open threat page →
+        </Link>
+      </div>
       <div className="dhdr">
         {d.kev_name ? (
           <p className="dname">
