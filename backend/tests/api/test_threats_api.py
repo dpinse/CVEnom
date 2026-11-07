@@ -670,3 +670,30 @@ async def test_recent_story_count_ignores_restricted_stories_for_anonymous(db_se
     assert (await get(db_session, "/api/cves/CVE-2024-0701", headers=h)).json()[
         "recent_story_count"
     ] == 1
+
+
+# Mirrors frontend Lanes.threatsHref: lane -> status query, range -> added (likely is range-independent).
+LANE_LINKS = {
+    "EXPLOITED": lambda added: f"status=exploited&added={added}",
+    "LIKELY": lambda added: "status=likely&added=month",
+    "LOUD": lambda added: f"status=news&added={added}",
+    "FRESH": lambda added: f"status=critical&exclude_kev=1&added={added}",
+}
+
+
+@pytest.mark.parametrize("rng,added", RANGES)
+async def test_lane_totals_match_their_threats_links(db_session, rng, added):
+    _equality_dataset(db_session)
+    for i, days in enumerate([1, 5, 10, 20, 29, 45]):  # likely: published within 30d, EPSS >= p95
+        cve(db_session, f"CVE-2026-4{i:03d}", published=NOW - timedelta(days=days),
+            epss_percentile=0.99)
+    for i, hours in enumerate([2, 30, 24 * 6, 24 * 12, 24 * 25]):  # loud
+        cid = f"CVE-2026-5{i:03d}"
+        cve(db_session, cid, published=NOW - timedelta(days=300))
+        story(db_session, 500 + i, [cid], published=NOW - timedelta(hours=hours))
+    lanes = (await get(db_session, f"/api/lanes?range={rng}")).json()
+    for lane, link in LANE_LINKS.items():
+        r = await get(db_session, f"/api/cves?{link(added)}&page_size=1")
+        assert r.status_code == 200, r.text
+        assert lanes[lane]["total"] == r.json()["total"], (lane, rng)
+        assert lanes[lane]["total"] > 0, (lane, rng)

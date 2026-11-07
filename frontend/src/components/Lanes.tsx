@@ -34,7 +34,10 @@ const STATUS: Record<LaneDef["k"], string> = {
 };
 /** Dashboard deep link into Threats: lane -> status, range -> added. */
 export function threatsHref(k: LaneDef["k"], range: RangeKey): string {
-  return `/threats?${STATUS[k]}&added=${ADDED[range]}`;
+  // Likely is "published within likely_window_days (30)" whatever the range, so it always
+  // links to added=month; the other lanes follow the range.
+  const added = k === "likely" ? "month" : ADDED[range];
+  return `/threats?${STATUS[k]}&added=${added}`;
 }
 
 /** Stories newest first, minus those whose CVEs are all already shown as LOUD CVE rows. */

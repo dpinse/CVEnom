@@ -76,7 +76,7 @@ describe("LanesView totals, rows and footer", () => {
     render(<LanesView lanes={ln({ LIKELY: [cve(1), cve(2)] })} onSelect={noop} now={NOW} />);
     expect(within(lane("Likely next")).getByRole("link", { name: "Open in Threats →" })).toHaveAttribute(
       "href",
-      "/threats?status=likely&added=week",
+      "/threats?status=likely&added=month",
     );
   });
   test.each([
@@ -88,7 +88,8 @@ describe("LanesView totals, rows and footer", () => {
     render(<LanesView lanes={EMPTY} range={range} onSelect={noop} now={NOW} />);
     const href = (name: string) => within(lane(name)).getByRole("link").getAttribute("href");
     expect(href("Exploited now")).toBe(`/threats?status=exploited&added=${added}`);
-    expect(href("Likely next")).toBe(`/threats?status=likely&added=${added}`);
+    // Likely is "published within likely_window_days (30)", independent of the range.
+    expect(href("Likely next")).toBe("/threats?status=likely&added=month");
     expect(href("Loud now")).toBe(`/threats?status=news&added=${added}`);
     expect(href("Fresh criticals")).toBe(`/threats?status=critical&exclude_kev=1&added=${added}`);
   });
