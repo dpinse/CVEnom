@@ -1,18 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import type { AddedKey } from "../lib/types";
 
-/** Pieces shared by the History tabs (CVEs and Stories). */
+/** Pieces shared by the Threats tabs (CVEs and News). */
 export const PAGE_SIZE = 50;
 export const MAX_Q = 200;
 export const DEBOUNCE_MS = 300;
-
-export function validDate(s: string | null): string | undefined {
-  if (s === null || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return undefined;
-  const [y, m, d] = s.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  const ok = dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
-  return ok ? s : undefined;
-}
 
 /** Same trim-slice-trim for the free-text query on both tabs. */
 export function cleanQ(q: string | null): string | undefined {
@@ -118,16 +111,68 @@ export function usePager(update: (patch: Patch, push?: boolean) => void) {
 }
 
 export function Pager({ page, total, setPage }: { page: number; total: number; setPage: (p: number) => void }) {
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   return (
-    <nav className="spager" aria-label="Pagination">
+    <nav className="spager" id="pager" tabIndex={-1} aria-label="Pagination">
       <button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>
         Previous
       </button>
-      <span className="num">Page {page}</span>
+      <span className="num">
+        Page {page}
+        {total > 0 && page <= pages ? ` of ${pages}` : ""}
+      </span>
       <button type="button" disabled={page * PAGE_SIZE >= total} onClick={() => setPage(page + 1)}>
         Next
       </button>
     </nav>
+  );
+}
+
+/** Keyboard route past the filters and table: moves focus to the pagination nav. */
+export function SkipToPagination() {
+  return (
+    <a
+      className="skip-pager"
+      href="#pager"
+      onClick={(e) => {
+        e.preventDefault();
+        document.getElementById("pager")?.focus();
+      }}
+    >
+      Skip to pagination
+    </a>
+  );
+}
+
+const ADDED: Record<Exclude<AddedKey, "14d">, string> = {
+  any: "Added any time",
+  day: "Added past day",
+  week: "Added past week",
+  month: "Added past month",
+  "90d": "Added past 90 days",
+  year: "Added past year",
+};
+const ADDED_KEYS = [...Object.keys(ADDED), "14d"] as AddedKey[];
+
+/** Pure: a valid `added` param or the default. `14d` is only produced by Dashboard deep links. */
+export function parseAdded(raw: string | null): AddedKey {
+  return raw !== null && (ADDED_KEYS as string[]).includes(raw) ? (raw as AddedKey) : "any";
+}
+
+/** The Added window select. The 14-day option exists only while the URL holds it. */
+export function AddedSelect({ value, onChange }: { value: AddedKey; onChange: (v: AddedKey) => void }) {
+  return (
+    <label className="f-inline">
+      <span className="sr-only">Added</span>
+      <select value={value} onChange={(e) => onChange(e.target.value as AddedKey)}>
+        {(Object.keys(ADDED) as Exclude<AddedKey, "14d">[]).map((k) => (
+          <option key={k} value={k}>
+            {ADDED[k]}
+          </option>
+        ))}
+        {value === "14d" && <option value="14d">Added past 14 days</option>}
+      </select>
+    </label>
   );
 }
 
@@ -140,7 +185,7 @@ export function OutOfRange() {
   return (
     <p className="sempty">
       No results on this page <span aria-hidden="true">·</span>{" "}
-      <Link to={{ pathname: "/history", search: qs ? `?${qs}` : "" }}>Go to page 1</Link>
+      <Link to={{ pathname: "/threats", search: qs ? `?${qs}` : "" }}>Go to page 1</Link>
     </p>
   );
 }

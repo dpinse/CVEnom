@@ -18,7 +18,7 @@ from celery.schedules import crontab
 from celery.signals import worker_process_init, worker_ready
 from sqlalchemy import delete, exists, func, or_, select
 
-from cvenom.collectors import abusech, cfradar, dshield, epss, kev, news, nvd, osv, ransomware, vulncheck  # noqa: F401  (register)
+from cvenom.collectors import abusech, cfradar, circl, dshield, epss, exploitdb, kev, news, nvd, osv, ransomware, vulncheck  # noqa: F401  (register)
 from cvenom.collectors.base import REGISTRY
 from cvenom.config import get_settings
 from cvenom.db import get_engine, session_scope
@@ -136,7 +136,7 @@ def run_collector(name: str, *, session_factory=session_scope, lock: CollectorLo
                 if row in session.new:
                     session.expunge(row)
                 return summary
-            events = ingest(session, result, enrich_only=enrich_only)
+            events = ingest(session, result, enrich_only=enrich_only, collector=name)
             # Outbox: same transaction as the data and the seen-state.
             persisted = persist_events(session, events, source_default=name)
             row.last_run = started_at

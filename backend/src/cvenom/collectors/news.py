@@ -52,16 +52,17 @@ class NewsFeedCollector(Collector):
             self._pending_validators["last_modified"] = headers["last-modified"]
         return body
 
-    def normalize(self, raw: bytes | None) -> CollectorResult:
+    def _entries(self, raw: bytes | None) -> list | None:
+        """Parsed feed entries, or None when the body is empty or refused (guard/bozo)."""
         if not raw:
-            return CollectorResult()
+            return None
         # Entity declarations enable billion-laughs / XXE; no legitimate news feed needs them.
         # Stripping NULs collapses UTF-16/UTF-32 (BOM or BOM-less, either endianness) ASCII-range
         # markup back to ASCII, so the marker is found without decoding. Encodings that do not
         # embed ASCII (e.g. EBCDIC) are not covered by this check.
         if b"<!entity" in raw.replace(b"\x00", b"").lower():
             log.warning("%s: feed contains <!ENTITY declarations; refusing to parse", self.name)
-            return CollectorResult()
+            return None
         # Wrap in a file object: given bytes/str, feedparser first tries to open() it as a local
         # path (and the entity guard above would have checked the path, not the file).
         parsed = feedparser.parse(io.BytesIO(raw))
@@ -69,11 +70,17 @@ class NewsFeedCollector(Collector):
             log.warning(
                 "%s: malformed feed with no entries: %s", self.name, parsed.get("bozo_exception")
             )
+            return None
+        return list(parsed.entries)
+
+    def normalize(self, raw: bytes | None) -> CollectorResult:
+        entries = self._entries(raw)
+        if entries is None:
             return CollectorResult()
 
         now = datetime.now(UTC)
         stories: list[NormalizedStory] = []
-        for entry in parsed.entries:
+        for entry in entries:
             try:
                 link = entry.get("link")
                 title = entry.get("title")
@@ -145,3 +152,87 @@ class SecurityWeekCollector(NewsFeedCollector):
     name = "news_securityweek"
     feed_url = "https://www.securityweek.com/feed/"
     source_name = "SecurityWeek"
+
+
+@register
+class TalosCollector(NewsFeedCollector):
+    name = "news_talos"
+    feed_url = "https://blog.talosintelligence.com/rss/"
+    source_name = "Cisco Talos"
+
+
+@register
+class Unit42Collector(NewsFeedCollector):
+    name = "news_unit42"
+    feed_url = "https://unit42.paloaltonetworks.com/feed/"
+    source_name = "Palo Alto Unit 42"
+
+
+@register
+class CheckPointResearchCollector(NewsFeedCollector):
+    name = "news_checkpoint"
+    feed_url = "https://research.checkpoint.com/feed/"
+    source_name = "Check Point Research"
+
+
+@register
+class SecurelistCollector(NewsFeedCollector):
+    name = "news_securelist"
+    feed_url = "https://securelist.com/feed/"
+    source_name = "Kaspersky Securelist"
+
+
+@register
+class MicrosoftSecurityCollector(NewsFeedCollector):
+    name = "news_msft_security"
+    feed_url = "https://www.microsoft.com/en-us/security/blog/feed/"
+    source_name = "Microsoft Security Blog"
+
+
+@register
+class ZeroDayInitiativeCollector(NewsFeedCollector):
+    name = "news_zdi"
+    feed_url = "https://www.zerodayinitiative.com/blog?format=rss"
+    source_name = "Zero Day Initiative"
+
+
+@register
+class TenableResearchCollector(NewsFeedCollector):
+    name = "news_tenable"
+    feed_url = "https://www.tenable.com/blog/feed"
+    source_name = "Tenable Research"
+
+
+@register
+class CertCCCollector(NewsFeedCollector):
+    name = "news_certcc"
+    feed_url = "https://kb.cert.org/vuls/atomfeed/"
+    source_name = "CERT/CC"
+
+
+@register
+class NcscUkCollector(NewsFeedCollector):
+    name = "news_ncsc_uk"
+    feed_url = "https://www.ncsc.gov.uk/api/1/services/v1/all-rss-feed.xml"
+    source_name = "NCSC UK"
+
+
+@register
+class JvnCollector(NewsFeedCollector):
+    name = "news_jvn"
+    feed_url = "https://jvn.jp/en/rss/jvn.rdf"
+    source_name = "JVN"
+
+
+@register
+class SansIscCollector(NewsFeedCollector):
+    name = "news_sans_isc"
+    feed_url = "https://isc.sans.edu/rssfeed_full.xml"
+    source_name = "SANS ISC"
+
+
+@register
+class ProjectZeroCollector(NewsFeedCollector):
+    name = "news_project_zero"
+    feed_url = "https://projectzero.google/feed.xml"
+    source_name = "Google Project Zero"

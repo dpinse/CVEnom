@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -76,6 +77,59 @@ def _refs(references: object) -> list[dict[str, Any]] | None:
         for r in (references if isinstance(references, list) else [])
         if isinstance(r, dict)
     ]
+    return out or None
+
+
+_CPE_SPLIT = re.compile(r"(?<!\\):")
+_CPE_UNESCAPE = re.compile(r"\\(.)")
+
+
+def parse_cpe(criteria: object) -> tuple[str, str, str] | None:
+    """(vendor, product, version) from a CPE 2.3 URI; None when it is not one."""
+    if not isinstance(criteria, str):
+        return None
+    parts = _CPE_SPLIT.split(criteria)
+    if len(parts) < 6 or parts[0] != "cpe" or parts[1] != "2.3":
+        return None
+    vendor, product, version = (_CPE_UNESCAPE.sub(r"\1", p).replace("_", " ") for p in parts[3:6])
+    if not vendor or not product:
+        return None
+    return vendor, product, version
+
+
+def _cpe_versions(configurations: object) -> list[dict] | None:
+    """Affected version entries from vulnerable ``cpeMatch`` rows, deduped in order."""
+    out: list[dict] = []
+    for conf in configurations if isinstance(configurations, list) else []:
+        nodes = conf.get("nodes") if isinstance(conf, dict) else None
+        for node in nodes if isinstance(nodes, list) else []:
+            matches = node.get("cpeMatch") if isinstance(node, dict) else None
+            for match in matches if isinstance(matches, list) else []:
+                if not isinstance(match, dict) or match.get("vulnerable") is not True:
+                    continue
+                cpe = parse_cpe(match.get("criteria"))
+                if cpe is None:
+                    continue
+                vendor, product, version = cpe
+
+                def _str(key: str, match: dict = match) -> str | None:
+                    value = match.get(key)
+                    return value if isinstance(value, str) and value else None
+
+                introduced = _str("versionStartIncluding") or _str("versionStartExcluding")
+                fixed = _str("versionEndExcluding")
+                last_affected = _str("versionEndIncluding")
+                if not (introduced or fixed or last_affected):
+                    if version in ("*", "-", ""):
+                        continue
+                    introduced = last_affected = version
+                entry = {
+                    "product": product, "vendor": vendor, "ecosystem": None,
+                    "introduced": introduced, "fixed": fixed, "last_affected": last_affected,
+                    "source": "NVD",
+                }
+                if entry not in out:
+                    out.append(entry)
     return out or None
 
 
@@ -162,6 +216,7 @@ class NvdCollector(Collector):
                             cwes=_cwes(cve.get("weaknesses")),
                             references=_refs(cve.get("references")),
                             summary=_summary(cve.get("descriptions") or []),
+                            affected_versions=_cpe_versions(cve.get("configurations")),
                         )
                     )
                 except Exception:

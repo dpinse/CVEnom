@@ -43,7 +43,7 @@ async function signedInApi(page: Page) {
     calls.logout++;
     return route.fulfill({ status: 204 });
   });
-  await page.route(`**/api/cves/${CVE_ID}`, (route) => {
+  await page.route(`**/api/cves/${CVE_ID}?*`, (route) => {
     if (authed(route)) {
       calls.cveAuthed++;
       return json(route, SIGNED_IN_CVE);

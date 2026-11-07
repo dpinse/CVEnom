@@ -1,0 +1,13 @@
+{
+  "Event": {
+    "uuid": "33333333-3333-4333-8333-333333333333",
+    "info": "OSINT no CVEs",
+    "timestamp": "1793200000",
+    "Attribute": [
+      {
+        "type": "ip-dst",
+        "value": "203.0.113.9"
+      }
+    ]
+  }
+}

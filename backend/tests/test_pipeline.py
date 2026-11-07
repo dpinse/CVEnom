@@ -156,7 +156,7 @@ def test_lane_ordering_by_heat_rank_and_multi_lane(db_session):
     ]))
     views = lane_views(db_session, NOW)
     assert [v.cve_id for v in views[Lane.EXPLOITED]] == ["CVE-2026-9101", "CVE-2026-9102", "CVE-2026-9100"]
-    assert [v.cve_id for v in views[Lane.LIKELY]] == ["CVE-2026-9101"]
+    assert views[Lane.LIKELY] == []  # KEV rows are never 'likely next'
 
 
 def test_non_unique_integrity_error_is_not_retried(db_session, monkeypatch):
@@ -247,12 +247,12 @@ def test_exact_boundaries_consistent_between_sql_and_scoring(db_session):
         cves=[
             NormalizedCve(cve_id="CVE-2026-9300", cvss=cfg.fresh_cvss_floor, published=NOW),
             NormalizedCve(cve_id="CVE-2026-9301", cvss=9.9,
-                          published=NOW - timedelta(hours=cfg.fresh_window_hours)),
+                          published=NOW - timedelta(days=7)),
             NormalizedCve(cve_id="CVE-2026-9302", epss_percentile=cfg.epss_percentile_threshold, published=NOW - timedelta(days=cfg.likely_window_days)),
             NormalizedCve(cve_id="CVE-2026-9303"),
         ],
         stories=[_story("https://x/b", "edge CVE-2026-9303",
-                        published=NOW - timedelta(hours=cfg.loud_window_hours))]))
+                        published=NOW - timedelta(days=7))]))
     views = lane_views(db_session, NOW)
     fresh = {v.cve_id for v in views[Lane.FRESH]}
     assert {"CVE-2026-9300", "CVE-2026-9301"} <= fresh
@@ -507,5 +507,160 @@ def test_lane_views_exploited_newest_listing_first(db_session):
                 epss_percentile=0.99, cvss=9.9)
     _insert_cve(db_session, "CVE-2026-9401", kev=True, kev_added=date(2026, 10, 20),
                 epss_percentile=0.10, cvss=5.0)
-    ids = [v.cve_id for v in lane_views(db_session, NOW)[Lane.EXPLOITED]]
+    ids = [v.cve_id for v in lane_views(db_session, NOW, "30d")[Lane.EXPLOITED]]
     assert ids == ["CVE-2026-9401", "CVE-2026-9400"]
+
+
+def test_loud_counts_stories_in_range(db_session):
+    ingest(db_session, CollectorResult(
+        cves=[NormalizedCve(cve_id="CVE-2026-9600")],
+        stories=[_story("https://x/five", "five days CVE-2026-9600", published=NOW - timedelta(days=5))]))
+    loud7 = lane_views(db_session, NOW, "7d")[Lane.LOUD]
+    assert [v.cve_id for v in loud7] == ["CVE-2026-9600"]
+    assert loud7[0].recent_story_count == 1
+    assert lane_views(db_session, NOW, "24h")[Lane.LOUD] == []
+
+
+def test_kev_row_is_never_likely_or_fresh_in_lane_views(db_session):
+    _insert_cve(db_session, "CVE-2026-9610", kev=True, kev_added=NOW.date() - timedelta(days=20),
+                epss_percentile=0.99, cvss=9.8, published=NOW - timedelta(hours=2))
+    v7 = lane_views(db_session, NOW, "7d")
+    assert all(v7[lane] == [] for lane in Lane)
+    v30 = lane_views(db_session, NOW, "30d")
+    assert [v.cve_id for v in v30[Lane.EXPLOITED]] == ["CVE-2026-9610"]
+    assert v30[Lane.LIKELY] == [] and v30[Lane.FRESH] == []
+
+
+# --- cve_event timeline hooks ---
+
+
+def _events(session, kind):
+    from sqlalchemy import select
+
+    from cvenom.models import CveEvent
+    return list(session.scalars(
+        select(CveEvent).where(CveEvent.kind == kind).order_by(CveEvent.source)))
+
+
+def test_ingest_writes_first_news_once(db_session):
+    early, late = NOW - timedelta(days=2), NOW - timedelta(hours=1)
+    stories = [
+        NormalizedStory(url="https://x/a", source="THN", title="CVE-2026-8800 later", summary="s", published=late),
+        NormalizedStory(url="https://x/b", source="THN", title="CVE-2026-8800 earlier", summary="s2", published=early),
+        NormalizedStory(url="https://x/c", source="BC", title="CVE-2026-8800 bc", summary="s3", published=late),
+    ]
+    ingest(db_session, CollectorResult(stories=stories))
+    ingest(db_session, CollectorResult(stories=stories))
+    rows = _events(db_session, "first_news")
+    assert [(r.source, r.occurred_at) for r in rows] == [("BC", late), ("THN", early)]
+    assert rows[1].detail == {"title": "CVE-2026-8800 earlier", "url": "https://x/b"}
+
+
+def test_ingest_passes_collector_label(db_session):
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-8801", published=NOW)]),
+           collector="nvd")
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-8802", published=NOW)]),
+           collector="osv")
+    assert sorted((r.cve_id, r.source) for r in _events(db_session, "published")) == [
+        ("CVE-2026-8801", "NVD"), ("CVE-2026-8802", "OSV")]
+
+
+def test_enrich_only_events_only_for_known_cves(db_session):
+    _insert_cve(db_session, "CVE-2026-8803")
+    ingest(db_session, CollectorResult(cves=[
+        NormalizedCve(cve_id="CVE-2026-8803", epss=0.9, epss_percentile=0.99),
+        NormalizedCve(cve_id="CVE-2026-8804", epss=0.9, epss_percentile=0.99),
+    ]), enrich_only=True, collector="epss")
+    assert [r.cve_id for r in _events(db_session, "epss_crossed")] == ["CVE-2026-8803"]
+
+
+def test_result_cve_events_are_persisted(db_session):
+    from cvenom.schemas import NormalizedCveEvent
+    ev = NormalizedCveEvent(cve_id="CVE-2026-8805", kind="poc_published", occurred_at=NOW,
+                            source="Exploit-DB")
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(cve_id="CVE-2026-8805")], cve_events=[ev]))
+    assert [r.source for r in _events(db_session, "poc_published")] == ["Exploit-DB"]
+
+
+def _av(product, source, **kw):
+    return {"product": product, "source": source, **kw}
+
+
+def test_upsert_replaces_per_source(db_session):
+    from cvenom.db import upsert_cve
+
+    def run(*entries):
+        upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-6001", affected_versions=list(entries)))
+        return db_session.get(Cve, "CVE-2026-6001").affected_versions
+
+    run(_av("a", "NVD", fixed="1"))
+    got = run(_av("b", "OSV", fixed="2"))
+    assert [(e["product"], e["source"]) for e in got] == [("a", "NVD"), ("b", "OSV")]
+    got = run(_av("c", "NVD", fixed="3"), _av("c", "NVD", fixed="3"))
+    assert [(e["product"], e["source"]) for e in got] == [("b", "OSV"), ("c", "NVD")]
+    # None (not provided) leaves the stored entries alone
+    upsert_cve(db_session, NormalizedCve(cve_id="CVE-2026-6001"))
+    assert len(db_session.get(Cve, "CVE-2026-6001").affected_versions) == 2
+
+
+def test_ingest_sanitizes_affected_versions(db_session):
+    ingest(db_session, CollectorResult(cves=[NormalizedCve(
+        cve_id="CVE-2026-6002",
+        affected_versions=[
+            _av("<b>x</b> & y", "NVD", vendor="<i>v</i>", fixed="1.0"),
+            _av("e" * 125 + "&<>", "NVD"),  # escaping pushes it over 128: dropped
+        ],
+    )]))
+    got = db_session.get(Cve, "CVE-2026-6002").affected_versions
+    assert len(got) == 1
+    assert "<" not in got[0]["product"] and "x" in got[0]["product"]
+    assert got[0]["product"].endswith("&amp; y") and got[0]["vendor"] == "v"
+
+
+def test_first_news_event_source_sanitized_and_truncated(db_session):
+    from cvenom.models import CveEvent
+
+    source = "Odd\x07<b>Source</b> " + "z" * 100
+    ingest(db_session, CollectorResult(stories=[NormalizedStory(
+        url="https://example.com/odd", source=source, title="CVE-2026-6003 exploited",
+        summary="s", published=NOW)]))
+    ev = db_session.query(CveEvent).filter_by(cve_id="CVE-2026-6003", kind="first_news").one()
+    assert len(ev.source) == 64
+    assert ev.source == pipeline.sanitize_text(source)[:64]
+    assert "\x07" not in ev.source and "<" not in ev.source
+
+
+def test_first_news_event_source_falls_back_to_unknown_when_empty(db_session):
+    from cvenom.models import CveEvent
+
+    ingest(db_session, CollectorResult(stories=[NormalizedStory(
+        url="https://example.com/nosrc", source="<b></b>", title="CVE-2026-6004 exploited",
+        summary="s", published=NOW)]))
+    ev = db_session.query(CveEvent).filter_by(cve_id="CVE-2026-6004", kind="first_news").one()
+    assert ev.source == "unknown"
+
+
+def test_year_one_kev_added_does_not_poison_the_batch(db_session):
+    from datetime import date
+
+    bad = NormalizedCve(cve_id="CVE-2026-9701", kev=True, kev_source="vulncheck",
+                        kev_added=date(1, 1, 1), published=datetime(1, 1, 1, tzinfo=timezone.utc))
+    assert bad.kev_added is None and bad.published is None  # bounded at the schema
+    good = NormalizedCve(cve_id="CVE-2026-9702", kev=True, kev_source="cisa",
+                         kev_added=date(2026, 10, 20))
+    ingest(db_session, CollectorResult(cves=[bad, good]), collector="vulncheck_kev")
+    assert db_session.get(Cve, "CVE-2026-9701") is not None
+    assert [e.cve_id for e in _events(db_session, "kev_added")] == ["CVE-2026-9702"]
+
+
+def test_one_invalid_derived_event_is_skipped_not_fatal(db_session, monkeypatch):
+    # Even if a bad value slips past the schema, derivation skips only that event.
+    from cvenom import timeline
+
+    good = NormalizedCve(cve_id="CVE-2026-9704", published=NOW - timedelta(days=1))
+    poisoned = NormalizedCve(cve_id="CVE-2026-9703", published=NOW - timedelta(days=1))
+    object.__setattr__(poisoned, "published", datetime(1, 1, 1, tzinfo=timezone.utc))
+    out = timeline.derived_events(
+        [poisoned, good], collector="nvd", now=NOW, cfg=pipeline.get_settings()
+    )
+    assert [e.cve_id for e in out] == ["CVE-2026-9704"]

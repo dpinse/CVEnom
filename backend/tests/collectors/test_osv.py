@@ -481,3 +481,35 @@ def test_truncated_osv_run_does_not_advance_the_window(db_session, respx_mock, m
     assert out["ok"]
     row = db_session.get(CollectorRun, "osv")
     assert row.state["osv_index_backlog"] == [SINCE.isoformat(), "2026-11-04T09:00:00+00:00"]
+
+
+def test_osv_ranges_to_entries():
+    import json
+    from pathlib import Path
+
+    rec = json.loads((Path(__file__).parent.parent / "fixtures" / "osv_ranges.json").read_text())
+    base_entry = {"product": "django", "ecosystem": "PyPI", "vendor": None, "source": "OSV"}
+    assert OsvCollector._versions(rec) == [
+        {**base_entry, "introduced": None, "fixed": "1.2.3", "last_affected": None},
+        {**base_entry, "introduced": "2.0", "fixed": None, "last_affected": "2.0.5"},
+    ]
+    res = OsvCollector().normalize([rec, rec])
+    assert [a.model_dump() for a in res.cves[0].affected_versions] == OsvCollector._versions(rec)
+
+
+def test_osv_open_ended_range_has_only_introduced():
+    rec = {
+        "id": "GHSA-open-open-open",
+        "affected": [
+            {
+                "package": {"ecosystem": "PyPI", "name": "django"},
+                "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "2.0"}]}],
+            }
+        ],
+    }
+    assert OsvCollector._versions(rec) == [
+        {
+            "product": "django", "vendor": None, "ecosystem": "PyPI",
+            "introduced": "2.0", "fixed": None, "last_affected": None, "source": "OSV",
+        }
+    ]

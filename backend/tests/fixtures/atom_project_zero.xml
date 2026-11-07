@@ -1,0 +1,545 @@
+<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="4.3.4">Jekyll</generator><link href="https://projectzero.google/feed.xml" rel="self" type="application/atom+xml" /><link href="https://projectzero.google/" rel="alternate" type="text/html" /><updated>2026-11-03T14:30:54-08:00</updated><id>https://projectzero.google/feed.xml</id><title type="html">Project Zero</title><subtitle>Make zeroday hard</subtitle><entry><title type="html">Fuzzers vs. AI: Comparing Fuzzilli and BigSleep on JavaScript Engines</title><link href="https://projectzero.google/2026/10/fuzzing-v-AI.html" rel="alternate" type="text/html" title="Fuzzers vs. AI: Comparing Fuzzilli and BigSleep on JavaScript Engines" /><published>2026-10-27T00:00:00-07:00</published><updated>2026-10-27T00:00:00-07:00</updated><id>https://projectzero.google/2026/10/fuzzing-v-AI</id><content type="html" xml:base="https://projectzero.google/2026/10/fuzzing-v-AI.html"><![CDATA[<h2 id="summary">Summary</h2>
+
+<p>Project Zero compared two automated tools used by Google to find vulnerabilities in Chrome’s JavaScript engine, V8, on a regular basis. <a href="https://github.com/googleprojectzero/fuzzilli">Fuzzilli</a> is a generative JavaScript engine fuzzer and <a href="https://projectzero.google/2024/10/from-naptime-to-big-sleep.html">BigSleep</a> is an LLM-based bug finding system. In the past six months, BigSleep found more vulnerabilities than Fuzzilli (45 versus 37) with a 25% overlap in the specific bugs reported. Since this comparison methodology has a tendency to underestimate overlap, we also performed dedicated experiments to test theoretical overlap in vulnerabilities reported since 2023. These experiments estimated overlap at roughly 60%. Regardless of which value is accurate, a substantial portion of vulnerabilities were discoverable by only LLMs or only fuzzing. While it is extremely promising that LLMs have become able to find so many vulnerabilities so quickly, fuzzing and LLMs are still complementary approaches. We recommend vendors perform both fuzzing and agentic analysis of their code to maximize the number of vulnerabilities that get reported before they impact users.
+<!--more--></p>
+
+<h2 id="introduction">Introduction</h2>
+
+<p>Fuzzing has long been successfully applied to software projects such as Chrome or V8 (Chrome’s JavaScript engine) to detect bugs. Recently, the arrival of powerful LLMs able to read, reason about, and write code is causing a transformative change to software development and software security. With <a href="https://blog.google/security/chrome-stronger-with-every-update/">hundreds, sometimes thousands of new bugs and vulnerabilities</a> having been discovered in well-fuzzed targets, a natural question arises: how do new LLMs compare to “traditional” fuzzers? Are they starting to replace them or do the two approaches complement each other? To help answer this, we look at three key questions:</p>
+
+<ol>
+  <li>
+    <p>How many bugs does each approach find in the real world?</p>
+  </li>
+  <li>
+    <p>What is the overlap between the two approaches?</p>
+  </li>
+  <li>
+    <p>What is the “shape” of bugs discovered by one system but not the other?</p>
+  </li>
+</ol>
+
+<p>For this blog post, we will limit ourselves to two concrete systems: <a href="https://github.com/googleprojectzero/fuzzilli">Fuzzilli</a>, a JavaScript engine fuzzer, and <a href="https://projectzero.google/2024/10/from-naptime-to-big-sleep.html">BigSleep</a>, an agentic bug finding system. Both of these systems run in production and automatically look for bugs in newly added code, which makes them fairly directly comparable. Specifically, Fuzzilli runs continuously across many instances, with the first ones usually picking up new changes within a few hours, while BigSleep currently runs once per day and is prompted to review new commits and write proof-of-concept testcases for any bugs it discovers. Both systems report bugs through <a href="https://github.com/google/clusterfuzz">Clusterfuzz</a>, which will do basic crash triaging, then file bug reports in <a href="https://issues.chromium.org/home">Chrome’s issue tracker.</a></p>
+
+<p>We also limit ourselves to V8 as a target, a high-performance JavaScript and WebAssembly engine with a sophisticated and mature testing and fuzzing setup. In particular, Fuzzilli is a special-purpose fuzzing tool designed to find bugs in these engines. The usually complicated nature of these bugs makes for an interesting “playground” to compare the two approaches’ ability to find deep and complex bugs in well-tested software. We leave it to future work to perform similar analysis on a broader set of targets, fuzzers, and agentic bug finding systems.</p>
+
+<p>We will now look into each of the three main questions in a dedicated section. Each section will first summarize the general approach, then describe the methodology in detail (often as bullet points, so you can skip those blocks if you don’t care too much about the details) before exploring the results. We conclude with an attempt at interpreting the results to get a picture of the current state of fuzzing vs. AI.</p>
+
+<h1 id="part-1-production-statistics">Part 1: Production Statistics</h1>
+
+<p>This is the simplest part to analyze, although with some caveats we’ll see in a bit. The basic idea is to query issues from <a href="http://issues.chromium.org/">Chromium’s bugtracker</a> (where V8 bugs are tracked) and extract various statistics from there. This is especially easy since there’s a dedicated hotlist for each of the two systems. We limit our analysis to the six months from April to September 2026 as the automatic BigSleep pipeline only became active in April this year. As such, our raw data comes from the following two bug tracker queries:</p>
+
+<ul>
+  <li>
+    <p>Fuzzilli: <a href="https://issues.chromium.org/issues?q=hotlistid:5433121%20created:2026-04-01..2026-09-30">hotlistid:5433121 created:2026-04-01..2026-09-30</a></p>
+  </li>
+  <li>
+    <p>BigSleep: <a href="https://issues.chromium.org/issues?q=hotlistid:8067258%20created:2026-04-01..2026-09-30">hotlistid:8067258 created:2026-04-01..2026-09-30</a></p>
+  </li>
+</ul>
+
+<p>From there, the raw numbers of bug reports are:</p>
+
+<ul>
+  <li>
+    <p>Fuzzilli: 316</p>
+  </li>
+  <li>
+    <p>BigSleep: 441</p>
+  </li>
+</ul>
+
+<p>Small win for BigSleep. However, this includes all types of bugs, and BigSleep initially also found a lot of configuration and integration issues in V8, for example <a href="https://crbug.com/503869331">crbug.com/503869331</a> where the <a href="https://source.chromium.org/chromium/chromium/src/+/main:v8/src/flags/flag-definitions.h;l=4303;drc=4bd243831302ef96b70f7e159e5685bb2eba306f">unsafe flag blocking mechanism</a> didn’t work properly yet. These are legitimate issues, but less relevant for our comparison since there’s little real-world security impact. One easy way to get rid of these is to look specifically at vulnerabilities by limiting the results to <code class="language-plaintext highlighter-rouge">type:vulnerability</code>:</p>
+
+<ul>
+  <li>
+    <p>Fuzzilli: 178</p>
+  </li>
+  <li>
+    <p>BigSleep: 95</p>
+  </li>
+</ul>
+
+<p>Suddenly a clear win for the fuzzers? Not quite. There are still some problems with this data, notably duplicates and unactionable reports (e.g. bugs <a href="https://issues.chromium.org/issues?q=hotlistid:\(8067258%20%7C%205433121\)%20status:intended_behavior">closed as WAI</a>). At first, this seems like a simple thing to fix: just include another constraint such as <code class="language-plaintext highlighter-rouge">status:(fixed | verified)</code>. Unfortunately, things are a bit more complicated. Take for example Fuzzilli bug <a href="https://crbug.com/511935486">crbug.com/511935486</a>. The events on this bug are basically:</p>
+
+<ul>
+  <li>
+    <p>The bug is filed by Clusterfuzz on May 11 and assigned to an engineer</p>
+  </li>
+  <li>
+    <p>The bug is closed by Clusterfuzz as the testcase no longer reproduces later that same day</p>
+  </li>
+</ul>
+
+<p>As such, this bug received zero developer interactions. Most likely what happened here is that this bug was a duplicate of another bug, <a href="https://crbug.com/511210507">crbug.com/511210507</a>, but Clusterfuzz didn’t realize it as the crash signature (derived from the stack trace) was slightly different. When the other bug received a fix, the testcase stopped reproducing on Clusterfuzz, which closed the issue.</p>
+
+<p>Maybe the best thing we can do is to look at “actionable” bugs, defined as those that are not marked as duplicates or WAI <em>and</em> that received at least one fix commit referencing them. Then, looking at only <code class="language-plaintext highlighter-rouge">Type-Vuln</code> bugs filters out a lot of the less-relevant BigSleep bugs, even though these were “actionable”. With that, the final picture looks like this:</p>
+
+<p><img src="/images/2026-10-27-fuzzing-v-AI-image1.png" alt="" /></p>
+
+<p>So in terms of vulnerabilities, it’s roughly a tie (small advantage BigSleep) at the moment: 45 vs. 37.</p>
+
+<p>This naturally raises the question of cost: how expensive is each of the two approaches and what does that mean in terms of cost-per-bug? Unfortunately, it’s challenging to make a comparison at this stage in the research. While some effort has been dedicated to making Clusterfuzz more efficient, similar effort has not been expended for Big Sleep and neither system is particularly calibrated for an optimal cost-per-bug ratio.</p>
+
+<h1 id="part-2-overlap">Part 2: Overlap</h1>
+
+<p>The next question is how much these approaches overlap each other. For this, our approach is twofold: we first attempt to find an answer in the bugtracker, by trying to identify bugs discovered by both systems. Next, we run a dedicated experiment in which we let BigSleep try to rediscover old Fuzzilli bugs.</p>
+
+<h2 id="bugtracker-overlap">Bugtracker Overlap</h2>
+
+<p>The basic idea is to see which bugs were found by both systems, so we’re effectively looking for duplicate bug reports. Similar to part 1, there are a few steps we need to take to ensure we get a somewhat accurate picture:</p>
+
+<ul>
+  <li>
+    <p>First, we look for bugs filed by one system that get deduplicated into a bug filed by the other. For example <a href="https://crbug.com/522410841">crbug.com/522410841</a> which is a duplicate of <a href="https://crbug.com/522860268">crbug.com/522860268</a>. This is a clear overlap.</p>
+  </li>
+  <li>
+    <p>Next, we need to take into account that many “unactionable” reports (those with zero associated fixes) are often duplicates. For those reports, we need to find the commit that fixed them, then look at the bug associated with that commit, and treat these two bugs as duplicates. This can be a multi-prong relationship: both bug X found by BigSleep and bug Y found by Fuzzilli might be a duplicate of bug Z reported by someone/something else. In that case, that bug still counts as overlap.</p>
+  </li>
+  <li>
+    <p>Then, we need to realize that many duplicates never receive a bugtracker entry since they are already deduplicated at the Clusterfuzz level (since both Fuzzilli and BigSleep rely on Clusterfuzz for basic triage and bug filing). As such, we need to query Clusterfuzz’s underlying database to find more duplicates.</p>
+  </li>
+  <li>
+    <p>Finally, we need to decide what to do with separate bugs that get fixed by the same CL, for example the four bugs fixed by <a href="https://crrev.com/c/7965120">crrev.com/c/7965120</a>. While this can legitimately happen for distinct bugs, it’s probably more likely for the bugs to be duplicates (such as in this case), and so we count them as such.</p>
+  </li>
+</ul>
+
+<p>With all the different types of deduplication, we get this final picture:</p>
+
+<p><img src="/images/2026-10-27-fuzzing-v-AI-image2.png" alt="" /></p>
+
+<p>Again, looking at just the actionable vulnerability reports (likely the best measure), we see an overlap of roughly 25% (20 out of a total of 81), with a slight majority of these found first by Fuzzilli and later by BigSleep.</p>
+
+<h2 id="overlap-experiment">Overlap Experiment</h2>
+
+<p>The second way to measure the overlap is to run a dedicated experiment in which we try to re-discover bugs found by one system in the past using the other. Specifically, here we try to re-discover old Fuzzilli bugs using a BigSleep setup that’s as close to the production configuration as possible. For each bug we collect the commit that (likely) introduced the bug, and ask the agent to review those changes just as in the production CI environment. Note that the other direction, trying to rediscover past BigSleep bugs with Fuzzilli is more difficult to set up, since fuzzers cannot easily be given a similar “starting point”. Moreover, for many of these bugs we already know the outcome of such an experiment: the majority of “historic” BigSleep bugs (e.g. <a href="https://issues.chromium.org/issues?q=hotlistid:8067258%20componentid:1456824%2B%20created%3C2026-01-01">those from 2025</a>) were found after fuzzers like Fuzzilli had already been fuzzing vulnerable builds for months, sometimes years. So they would most likely also not rediscover them in an experiment (except perhaps in a few cases where Fuzzilli was since updated to support new language features). Similarly, in production, BigSleep only reports crashes with a delay of 1-2 days (as there’s currently only one run per day). As such, fuzzers also get a head-start there.</p>
+
+<p>In more detail, here is how the experiment is set up:</p>
+
+<ul>
+  <li>
+    <p>We start with a list of historic Fuzzilli bugs (from early 2023 until mid-2026) by querying the bug tracker hotlist. This gives us <a href="https://issues.chromium.org/issues?q=hotlistid:5433121%20status:\(fixed%20%7C%20verified\)%20created%3C2026-08-01">around 1150 raw bugs</a>.</p>
+  </li>
+  <li>
+    <p>We restrict this to only <code class="language-plaintext highlighter-rouge">type:vulnerability</code> as these are the types of bugs we care most about and will remove some “noise” as above. We are left with roughly 600 vulnerabilities.</p>
+  </li>
+  <li>
+    <p>Next, we filter this list down to bugs that reproduce in the environment used by the agent. This involves two parts:</p>
+
+    <ul>
+      <li>
+        <p>Bugs that reproduce on an x64 debug+asan build of the d8 shell as <a href="https://commondatastorage.googleapis.com/v8-asan/index.html?prefix=linux-debug/">provided by Chrome’s public build infrastructure</a>. This is important because many bugs only reproduce in special builds, for example because they are architecture-specific or need certain compile-time features.</p>
+      </li>
+      <li>
+        <p>Bugs that can be reproduced without special flags. The problem here is that fuzzers often set custom flags, either to enable in-development features (e.g. <code class="language-plaintext highlighter-rouge">--experimental-wasm-jspi</code> in <a href="http://crbug.com/361123483">crbug.com/361123483</a>) or to turn on different fuzzing modes that make certain types of bugs easier to discover (e.g. <code class="language-plaintext highlighter-rouge">--deopt-every-n-times</code> in <a href="https://crbug.com/362784006">crbug.com/362784006</a>). However, we can’t let the agent set arbitrary flags on historic V8 builds as these didn’t have a “safe-flags only” mode (leading to many false-positive crashes), and we also don’t want to tell the agent which flags it should use for a given challenge as that would be a hint. As such, for simplicity we limit ourselves to bugs that can reproduce with a standard set of flags (<code class="language-plaintext highlighter-rouge">--fuzzing</code>, <code class="language-plaintext highlighter-rouge">--jit-fuzzing</code>, <code class="language-plaintext highlighter-rouge">--expose-gc</code>) and only allow the agent to set those.</p>
+      </li>
+    </ul>
+  </li>
+  <li>
+    <p>We end up with 132 historic bugs.</p>
+  </li>
+  <li>
+    <p>We now perform some deduplication similar to what we did above to identify implicit duplicates, which we remove. This leaves us with a final number of 112 bugs.</p>
+  </li>
+  <li>
+    <p>For a realistic comparison, we then convert these bugs into “code review challenges” similar to the ones used by the production BigSleep pipeline. For that, we try to identify the commit that (likely) introduced the bug, for example based on bisection. We note that this skews the comparison against BigSleep for two reasons:</p>
+
+    <ul>
+      <li>
+        <p>We likely sometimes identify the wrong commit that is unrelated to the bug in question, making the task harder or even impossible.</p>
+      </li>
+      <li>
+        <p>We only have one commit per bug, while in the real world, the agent might discover the bug from another, subsequent commit that touches a similar part of the codebase.</p>
+      </li>
+    </ul>
+  </li>
+  <li>
+    <p>We now run the agent for 25 attempts on each commit. The agent is asked to find bugs related to the commit and prove their existence by writing a testcase that crashes the vulnerable build. The attempt is terminated once a crash is found, so each attempt can report at most one bug. We use essentially the same configuration that was used in production BigSleep at that time, including the same underlying model: <a href="https://deepmind.google/models/model-cards/gemini-3-6-flash">Gemini 3.6 flash</a>.</p>
+  </li>
+  <li>
+    <p>Finally, we run some post-processing on the results to check if the agent found the “right” bug or an unrelated one. For that, we check that the testcase crashes the pre-fix revision but <em>not</em> the post-fix revision. This is imperfect but fairly easy to implement.</p>
+  </li>
+</ul>
+
+<p>Here are the results from the experiment:</p>
+
+<p><img src="/images/2026-10-27-fuzzing-v-AI-image3.png" alt="" /></p>
+
+<p>Starting from just the commits that (likely) introduced the bugs, BigSleep was able to re-discover ~62% of the original bugs, while finding a different (but by now fixed) bug for another ~12% of commits. On around 26% of the commits it failed to find any bugs.</p>
+
+<h3 id="memorization">Memorization</h3>
+
+<p>One thing to worry about with experiments such as this one is memorization: the LLM remembering specific bugs from its (pre-)training data and as such having an easier time “re-discovering” them during evaluation. We can try to get some idea of the effect of this by looking at the success rates for bugs from different time spans, e.g. every half-year period for which we have bugs in the data set. If there was memorization, we’d expect higher success rates (both for a single attempt and for the combined run) on bugs prior to the learning data cutoff of the model. Here are the results for our experiment:</p>
+
+<p><img src="/images/2026-10-27-fuzzing-v-AI-image4.png" alt="" /></p>
+
+<p>For the model used in this experiment (Gemini 3.6 flash), the <a href="https://deepmind.google/models/model-cards/gemini-3-6-flash/#intended-usage-and-limitations">knowledge cutoff date is March 2026</a>. Combining that with the fact that in early 2026, Chrome bugs would only become publicly visible after ~3 months, the effective knowledge cutoff for Fuzzilli bugs should be around Jan 2026. Looking at the data, there seems to be no statistically significant amount of memorization pre-2026. We note, however, that this may be different for other models or future model generations and as such recommend that this be re-evaluated for similar experiments in the future.</p>
+
+<h3 id="difficulty">Difficulty</h3>
+
+<p>A follow-up question we might ask is how the overlap compares with “difficulty”. For example, in the best case a system like BigSleep would easily find issues that fuzzers struggle with and vice versa. In that case, budget that was previously spent on long fuzzing sessions may now be re-allocated and put to different uses. Here are the results of analysing this, where “bug difficulty” is measured by the time it took Fuzzilli to discover the bug:</p>
+
+<p><img src="/images/2026-10-27-fuzzing-v-AI-image5.png" alt="" /></p>
+
+<p>While we do get a statistically significant result here (although not of particularly great magnitude), it actually points in the other direction! Bugs that are hard to find for a fuzzer are likely <em>also</em> hard to find for an AI agent. As such, those fuzzers should probably be kept running for now.</p>
+
+<h3 id="components">Components</h3>
+
+<p>Another thing we can look at is a per-component breakdown of the bugs and their rediscovery rates:</p>
+
+<p><img src="/images/2026-10-27-fuzzing-v-AI-image6.png" alt="" /></p>
+
+<p>Interestingly, the overlap is significantly smaller for compiler bugs. This is the area where Fuzzilli probably specializes most in, which may explain the results. Later on (in part 3), we’ll also develop another hypothesis for why (some) bugs in the compilers may be more difficult to rediscover for BigSleep.</p>
+
+<h3 id="prompting">Prompting</h3>
+
+<p>A final question is how much the specific prompting played a role in the performance of the AI agent. For that, we run two quick follow-up experiments, only on the bugs that weren’t previously re-discovered and with different prompts:</p>
+
+<ol>
+  <li>
+    <p>Instead of starting from commits, we start from the vulnerable file or function. This may be an easier starting point but is still a fairly realistic setup since both can for example be obtained by extracting modified files and functions from a given commit.</p>
+  </li>
+  <li>
+    <p>Instead of asking the agent to find memory corruption vulnerabilities (what we care most about), we specifically tell it that assertion failures and similar crashes are also desirable.</p>
+  </li>
+</ol>
+
+<p>Running these two experiments with only 5 attempts per bug (instead of the 25 used in the main experiment), the agent re-discovered 10 additional bugs in total: 8 from the different starting points and 7 with the rephrased prompt (with 5 found in both runs).</p>
+
+<p>In total, combining these results with our original experiment, we get the following picture:</p>
+
+<p><img src="/images/2026-10-27-fuzzing-v-AI-image7.png" alt="" /></p>
+
+<p>So the share of “correct” bugs found climbs to ~70%, and we find some kind of bug for ~84% of starting points. However, for fairness it should be noted that equivalent tweaks to a fuzzer could likely also result in higher discovery rates for certain bugs, so the results of this follow-up experiment should be treated with some caution.</p>
+
+<h2 id="summary-1">Summary</h2>
+
+<p>The main results from our two angles are:</p>
+
+<ol>
+  <li>
+    <p>In production, the overlap is noticeable but not substantial at around 25%.</p>
+  </li>
+  <li>
+    <p>In our experiment, overlap was around 60% of historic Fuzzilli bugs (70% with additional runs that used different prompts).</p>
+  </li>
+  <li>
+    <p>The overlap is not uniformly distributed:</p>
+
+    <ol>
+      <li>
+        <p>Bugs that are difficult for a fuzzer to find are more likely to also be difficult to find for an agent, so there’s more overlap on “easy” bugs.</p>
+      </li>
+      <li>
+        <p>The overlap seems to be smaller in the JIT Compilers and higher in the rest of the engine.</p>
+      </li>
+    </ol>
+  </li>
+</ol>
+
+<p>From just the experiment, we might expect a higher overlap in production. However, there are probably a few factors that prevent(ed) this:</p>
+
+<ul>
+  <li>
+    <p>There’s a limited time window for overlaps: once a bug reported by either system is fixed, the other system no longer has a chance to rediscover it (as the bug won’t reproduce on Clusterfuzz and will therefore be discarded).</p>
+  </li>
+  <li>
+    <p>Our experiment only looked at a subset of Fuzzilli bugs that reproduce on a standard x64 d8 fuzzer build and without special flags. In production, each system has access to slightly different and specialized builds, as well as different runtime flag constraints, and there the overlap is potentially smaller.</p>
+  </li>
+  <li>
+    <p>Pipeline hiccups such as overloaded servers or bugs in the automation likely prevented a number of commits from being reviewed by BigSleep in the last months, so bugs introduced by them may have been missed.</p>
+  </li>
+  <li>
+    <p>Since its introduction in April, the model underlying the BigSleep pipeline has been upgraded multiple times. Earlier models likely performed worse, and we expect future models to perform better.</p>
+  </li>
+</ul>
+
+<h1 id="part-3-shape-of-bugs">Part 3: Shape of Bugs</h1>
+
+<p>In this section, we will first look at three case studies of bugs found by one system but not the other, then attempt to draw conclusions from these and other bugs.</p>
+
+<h2 id="bigsleep-chrome-bug-449760249-october-2025">BigSleep: Chrome Bug 449760249 (October 2025)</h2>
+
+<p>This <a href="https://crbug.com/449760249">bug</a> is a nice example of BigSleep benefiting from the underlying model’s reasoning capabilities to discover a variant that was (likely) too complex to trigger by a fuzzer in a reasonable amount of time. It’s also a good example to show the general working of an agentic bug finding system.</p>
+
+<h3 id="background-tdz-and-hole-check-elision">Background: TDZ and Hole Check Elision</h3>
+
+<p>Before diving into the bug specifics, we first need to look at some JavaScript internals, specifically variable initialization. In JavaScript, variables declared with the <code class="language-plaintext highlighter-rouge">let</code> or <code class="language-plaintext highlighter-rouge">const</code> keywords cannot be used before they are initialized, and attempting to do so will lead to an exception (<code class="language-plaintext highlighter-rouge">”ReferenceError: Cannot access 'foobar' before initialization”</code>). In V8’s terminology, these variables reside in a “temporal dead zone” (TDZ) until they are initialized. Internally, V8 sets variables in the TDZ to a special sentinel value, <code class="language-plaintext highlighter-rouge">the_hole</code>, and then checks for this value when accessing the variable’s content.</p>
+
+<p>To limit the performance impact of these hole-checks, V8’s bytecode compiler implements an optimization (behind the <a href="https://source.chromium.org/chromium/chromium/src/+/main:v8/src/flags/flag-definitions.h;l=1215;drc=424b93eb76684237b932b5d79315d00b85297548">default-enabled --ignition-elide-redundant-tdz-checks flag</a>) to identify redundant checks and subsequently remove them. The idea here is to identify “dominating” checks where it can then be guaranteed that a hole-check has already been performed for a given variable on all possible paths leading to the current position.</p>
+
+<p>This is a security-relevant optimization as an incorrectly removed hole-check would result in the internal <code class="language-plaintext highlighter-rouge">the_hole</code> value leaking to JavaScript code, a condition that <a href="https://crbug.com/40057710">has historically been exploitable</a> (although <a href="https://crbug.com/434179415">new mitigations</a> for this bug class have since shipped).</p>
+
+<h3 id="the-original-vulnerability">The Original Vulnerability</h3>
+
+<p>The original bug (<a href="https://crbug.com/40071027">issue 40071027</a> - discovered two years earlier by Fuzzilli!) involved <code class="language-plaintext highlighter-rouge">do-while</code> loops containing a <code class="language-plaintext highlighter-rouge">break</code> statement. In a <code class="language-plaintext highlighter-rouge">do-while</code> loop, the loop condition evaluates after the body. If the condition contains an assignment to a variable, the bytecode compiler will mark the variable as initialized. However, if a <code class="language-plaintext highlighter-rouge">break</code> statement executes in the loop body in the first iteration, then the condition will never execute. The bytecode compiler originally failed to account for this, leading to an incorrectly omitted hole check and subsequent leak of <code class="language-plaintext highlighter-rouge">the_hole</code> value.</p>
+
+<p>To fix this, the implementation of <a href="https://source.chromium.org/chromium/chromium/src/+/main:v8/src/interpreter/bytecode-generator.cc;l=3153;drc=7a23bdae2d6c30b956f4f5803e3b7431a6632667"><code class="language-plaintext highlighter-rouge">BytecodeGenerator::VisitDoWhileStatement</code></a> was modified in the following way:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- VisitForTest(stmt-&gt;cond(), ...);
++ if (!loop_builder.break_labels()-&gt;empty()) {
++   HoleCheckElisionScope elider(this);
++   VisitForTest(stmt-&gt;cond(), ...);
++ } else {
++   VisitForTest(stmt-&gt;cond(), ...);
++ }
+</code></pre></div></div>
+
+<p>Specifically, the patch works by creating a <a href="https://source.chromium.org/chromium/chromium/src/+/main:v8/src/interpreter/bytecode-generator.cc;l=445;drc=7a23bdae2d6c30b956f4f5803e3b7431a6632667"><code class="language-plaintext highlighter-rouge">HoleCheckElisionScope</code></a> for processing the condition code in case the loop contains break statements. This means that any updates to the TDZ state of variables will be discarded once the scope object is destroyed. As such, code after the loop will see the previous TDZ state (which is the correct behavior in this case).</p>
+
+<h3 id="discovery-of-the-variant">Discovery of the Variant</h3>
+
+<p>The BigSleep agent began its analysis by examining the patch to <code class="language-plaintext highlighter-rouge">VisitDoWhileStatement</code>, realizing that the fix relied on <code class="language-plaintext highlighter-rouge">loop_builder.break_labels()-&gt;empty()</code> to decide if a protective <code class="language-plaintext highlighter-rouge">HoleCheckElisionScope</code> was required. It then began creating and testing various hypotheses for scenarios in which no <code class="language-plaintext highlighter-rouge">break</code> statement was registered with a given loop but the condition would still be skipped at runtime. For example, it hypothesized that a try-catch in combination with a <code class="language-plaintext highlighter-rouge">throw</code> inside the loop might confuse the hole-check elision logic. It then investigated how try-catch was implemented in the bytecode compiler and concluded that this was handled correctly.</p>
+
+<p>Eventually, the agent started investigating <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/label">labeled breaks</a>, which allow directly breaking out of inner loops. It hypothesized that these might not be handled correctly and continued to investigate how these were being processed, for example by studying the logic in <code class="language-plaintext highlighter-rouge">BytecodeGenerator::VisitBreakStatement</code>. This time, it seemed to have identified a real flaw: in the case of nested breaks, the inner loop was apparently not being informed of the existence of a break statement! It therefore formulated the following vulnerability hypothesis:</p>
+
+<ol>
+  <li>If a labeled break inside a <code class="language-plaintext highlighter-rouge">do-while</code> loop targets an <em>outer</em> scope, the inner <code class="language-plaintext highlighter-rouge">do-while</code> loop’s <code class="language-plaintext highlighter-rouge">LoopBuilder</code> is not notified.</li>
+  <li>Consequently, <code class="language-plaintext highlighter-rouge">loop_builder.break_labels()-&gt;empty()</code> remains <code class="language-plaintext highlighter-rouge">true</code>.</li>
+  <li>Therefore, when generating the code for the loop condition, the <code class="language-plaintext highlighter-rouge">HoleCheckElisionScope</code> introduced by the patch is <em>not</em> used.</li>
+  <li>The condition is bypassed at runtime, but the bytecode compiler erroneously removed a later hole-check, leading to a leak of <code class="language-plaintext highlighter-rouge">the_hole</code> to JavaScript.</li>
+</ol>
+
+<p>The agent then began writing a testcase to prove the existence of this bug. The initial attempt with simply two nested loops and a label failed, however, as the bytecode compiler would <a href="https://source.chromium.org/chromium/chromium/src/+/main:v8/src/interpreter/bytecode-generator.cc;l=2099;drc=77ce2c33f61b01daac3d9e4299b3d0805bee6461">add another protective scope object for the labeled block</a>. To work around this, the agent decided to use a <code class="language-plaintext highlighter-rouge">switch</code> statement. When handling a <code class="language-plaintext highlighter-rouge">switch</code> statement, the bytecode compiler uses a <code class="language-plaintext highlighter-rouge">HoleCheckElisionMergeScope</code> to compute the intersection of initialization states across all branches. By ensuring that the variable was initialized in a <code class="language-plaintext highlighter-rouge">default</code> case, the merge logic then concluded that the variable was correctly initialized on all paths.</p>
+
+<h3 id="proof-of-concept">Proof of Concept</h3>
+
+<p>With that, the agent had everything in place to produce a testcase to demonstrate the vulnerability. Below is the agent’s PoC:</p>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// Flags: --ignition-elide-redundant-tdz-checks</span>
+<span class="kd">function</span> <span class="nf">trigger</span><span class="p">(</span><span class="nx">cond</span><span class="p">)</span> <span class="p">{</span>
+  <span class="p">{</span>
+    <span class="na">target</span><span class="p">:</span> <span class="k">switch</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+      <span class="k">case</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">do</span> <span class="p">{</span>
+          <span class="c1">// Labeled break targeting the switch. The do-while LoopBuilder remains unaware.</span>
+          <span class="k">if </span><span class="p">(</span><span class="nx">cond</span><span class="p">)</span> <span class="k">break</span> <span class="nx">target</span><span class="p">;</span>
+        <span class="p">}</span> <span class="k">while</span><span class="p">((</span><span class="nx">x</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="kc">false</span><span class="p">);</span> <span class="c1">// Condition performs a check/assignment on x.</span>
+        <span class="k">break</span><span class="p">;</span>
+      <span class="nl">default</span><span class="p">:</span>
+        <span class="nx">x</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span> <span class="c1">// Ensure x is considered initialized across all switch branches for merging.</span>
+    <span class="p">}</span>
+    <span class="c1">// Generator incorrectly believes x is checked/initialized. Elides TDZ check.</span>
+    <span class="nx">x</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="kd">let</span> <span class="nx">x</span><span class="p">;</span>
+  <span class="p">}</span>
+ <span class="p">}</span>
+ <span class="nf">trigger</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
+
+</code></pre></div></div>
+
+<p>Here is how this testcase works:</p>
+
+<ol>
+  <li><code class="language-plaintext highlighter-rouge">trigger(true)</code> executes, entering <code class="language-plaintext highlighter-rouge">case 1</code> of the <code class="language-plaintext highlighter-rouge">switch</code>.</li>
+  <li>The <code class="language-plaintext highlighter-rouge">do-while</code> loop executes <code class="language-plaintext highlighter-rouge">break target</code>.</li>
+  <li>Control flow jumps to the end of the <code class="language-plaintext highlighter-rouge">switch</code>, bypassing the <code class="language-plaintext highlighter-rouge">do-while</code> condition where <code class="language-plaintext highlighter-rouge">x</code> is assigned.</li>
+  <li>At runtime, <code class="language-plaintext highlighter-rouge">x</code> remains uninitialized (holding <code class="language-plaintext highlighter-rouge">the_hole</code>).</li>
+  <li>Because the TDZ check was elided at compile time, the engine leaks the internal <code class="language-plaintext highlighter-rouge">the_hole</code> value to JavaScript code in the <code class="language-plaintext highlighter-rouge">x + 1</code> expression, leading to a potentially exploitable condition.</li>
+</ol>
+
+<p>We can see how this bug would be difficult for a fuzzer to find since the testcase is quite complex. While a coverage-guided fuzzer would have received rewards for triggering individual code paths (such as the handling of labeled break, the switch statement, the do-while loop, etc. in the parser), there is no additional reward for putting these together “in the right way” and so ending up with a testcase like this is quite difficult.</p>
+
+<h2 id="bigsleep-chrome-bug-443765373-september-2025">BigSleep: Chrome Bug 443765373 (September 2025)</h2>
+
+<p>This <a href="https://crbug.com/443765373">bug</a> is an example of a relatively simple bug type that is challenging to discover with standard fuzzing approaches.</p>
+
+<h3 id="background-exception-handling-in-v8">Background: Exception handling in V8</h3>
+
+<p>To understand this bug, it is necessary to briefly look into exception handling in V8. Take the following example JavaScript code:</p>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">function</span> <span class="nf">simple</span><span class="p">()</span> <span class="p">{</span>
+  <span class="k">try</span> <span class="p">{</span>
+    <span class="k">throw</span> <span class="mi">42</span><span class="p">;</span>
+  <span class="p">}</span> <span class="k">catch </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="nx">e</span><span class="p">;</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Here, we have a function consisting of a try-catch block in which an exception is raised. Running this in d8 with <code class="language-plaintext highlighter-rouge">--print-bytecode</code>, we can see the internal bytecode that the engine generates to execute the JavaScript code:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[generated bytecode for function: simple]
+         0x2ad5001000e4 @    0 : 1b ff f9  Mov &lt;context&gt;, r0
+         0x2ad5001000e7 @    3 : 0d 2a     LdaSmi [42]
+         0x2ad5001000e9 @    5 : b5        Throw
+         0x2ad5001000ea @    6 : d1        Star1
+         0x2ad5001000eb @    7 : 8d f8 00  CreateCatchContext r1, [0]
+         0x2ad5001000ee @   10 : d2        ...
+         ...
+         0x2ad5001000f7 @   19 : b7        Return
+Handler Table (size = 16)
+   from   to       hdlr (prediction,   data)
+  (   3,   6)  -&gt;     6 (prediction=1, data=0)
+</code></pre></div></div>
+
+<p>For the purpose of this bug, the relevant part is mostly the last line of the output. Here, the bytecode essentially says “if there is an exception while the PC is between offset 3 and 6 in this bytecode, then execution should continue at offset 6 (the start of the exception handler)”.</p>
+
+<h3 id="the-bug">The Bug</h3>
+
+<p>The agent spotted the bug while looking at the following function, responsible for writing the handler table data structure in memory:</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="n">HandlerTable</span><span class="o">::</span><span class="n">SetRangeHandler</span><span class="p">(</span><span class="kt">int</span> <span class="n">index</span><span class="p">,</span> <span class="kt">int</span> <span class="n">handler_offset</span><span class="p">,</span>
+                                   <span class="n">CatchPrediction</span> <span class="n">prediction</span><span class="p">)</span> <span class="p">{</span>
+  <span class="kt">int</span> <span class="n">value</span> <span class="o">=</span> <span class="n">HandlerOffsetField</span><span class="o">::</span><span class="n">encode</span><span class="p">(</span><span class="n">handler_offset</span><span class="p">)</span> <span class="o">|</span>
+              <span class="n">HandlerWasUsedField</span><span class="o">::</span><span class="n">encode</span><span class="p">(</span><span class="nb">false</span><span class="p">)</span> <span class="o">|</span>
+              <span class="n">HandlerPredictionField</span><span class="o">::</span><span class="n">encode</span><span class="p">(</span><span class="n">prediction</span><span class="p">);</span>
+  <span class="kt">int</span> <span class="n">offset</span> <span class="o">=</span> <span class="n">index</span> <span class="o">*</span> <span class="n">kRangeEntrySize</span> <span class="o">+</span> <span class="n">kRangeHandlerIndex</span><span class="p">;</span>
+  <span class="n">Memory</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">raw_encoded_data_</span> <span class="o">+</span> <span class="n">offset</span> <span class="o">*</span> <span class="k">sizeof</span><span class="p">(</span><span class="kt">int32_t</span><span class="p">))</span> <span class="o">=</span> <span class="n">value</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Here, the <code class="language-plaintext highlighter-rouge">int</code> offset is being combined with a few other bits of data into a new <code class="language-plaintext highlighter-rouge">int</code> value. As such, the <code class="language-plaintext highlighter-rouge">handler_offset</code> cannot have the full integer range in the new field, possibly leading to integer truncation issues. The agent then investigated the specific bounds of these values and realized that the <code class="language-plaintext highlighter-rouge">HandlerOffsetField</code> had only 28 bits (allowing for 256MB) while the maximum bytecode size was 512MB! From there it was relatively simple to craft a testcase that crashes, simply by creating a huge function (resulting in &gt;256MB of bytecode) with an exception handler at the end, then triggering an exception inside of it. The result is a jump to a wrong bytecode offset, a primitive that’s easily exploited. Here is the relevant part of the testcase:</p>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// yield statements turn into a large chunk of bytecode</span>
+<span class="kd">let</span> <span class="nx">kNumYields</span> <span class="o">=</span> <span class="mi">500000</span><span class="p">;</span>
+
+<span class="kd">let</span> <span class="nx">body</span> <span class="o">=</span> <span class="s2">`
+  if ("foo" === "bar") {
+    </span><span class="p">${</span><span class="dl">"</span><span class="s2">yield* 42;</span><span class="dl">"</span><span class="p">.</span><span class="nf">repeat</span><span class="p">(</span><span class="nx">kNumYields</span><span class="p">)}</span><span class="s2">
+  }
+  try {
+    throw 42;
+  } catch (e) {
+     // Will never get here
+  }
+`</span><span class="p">;</span>
+
+</code></pre></div></div>
+
+<p>Such a testcase would again be difficult to craft by a fuzzer as the fuzzer isn’t rewarded for creating large code (at least not with generic coverage feedback). In fact, the fuzzer is likely even actively discouraged from finding this bug since generating and executing large bytecode takes some time (in debug builds, the testcase generated by the agent needs a few seconds to trigger) and would therefore probably have led to timeouts during fuzzing.</p>
+
+<h2 id="fuzzilli-chrome-bug-40076141-november-2023">Fuzzilli: Chrome Bug 40076141 (November 2023)</h2>
+
+<p>This <a href="https://crbug.com/40076141">bug</a> is a good example of a type of bug that is likely difficult to find just by looking at (one part) of the source code. It was originally discovered by Fuzzilli and <em>not</em> rediscovered by any of the experiments from part 2.</p>
+
+<h3 id="background-value-representation-in-v8">Background: Value Representation in V8</h3>
+
+<p>Consider the following piece of JavaScript code:</p>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">let</span> <span class="nx">i</span> <span class="o">=</span> <span class="mi">42</span><span class="p">;</span>
+<span class="kd">let</span> <span class="nx">f</span> <span class="o">=</span> <span class="mf">13.37</span><span class="p">;</span>
+<span class="kd">let</span> <span class="nx">s</span> <span class="o">=</span> <span class="dl">"</span><span class="s2">foobar</span><span class="dl">"</span>
+<span class="nx">i</span> <span class="o">=</span> <span class="nx">s</span><span class="p">;</span>
+</code></pre></div></div>
+
+<p>Here we create multiple variables holding values of different types. Note, however, that we never declare the type of a variable, and that variables can hold values of different types throughout their lifetime (<code class="language-plaintext highlighter-rouge">i</code> first contains an integer, later a string). What we see here is that JavaScript is a <em>dynamically typed</em> language, and so variables (and also object fields, etc.) have no fixed type. However, the actual runtime values still need to have a type: the engine somehow needs to know that <code class="language-plaintext highlighter-rouge">foobar</code> is a string value and that certain operations (e.g. substring search) can therefore be performed on it. Conceptually, this is possible by representing runtime values with a struct such as</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">enum</span> <span class="n">JSType</span> <span class="p">{</span>
+    <span class="n">JS_TYPE_INT</span><span class="p">,</span>
+    <span class="n">JS_TYPE_FLOAT</span><span class="p">,</span>
+    <span class="n">JS_TYPE_STRING</span><span class="p">,</span>
+    <span class="p">...</span>
+<span class="p">};</span>
+
+<span class="k">struct</span> <span class="n">JSValue</span> <span class="p">{</span>
+    <span class="n">JSType</span> <span class="n">type</span><span class="p">;</span>
+    <span class="c1">// Either the raw value or a pointer to another object, e.g a JSString.</span>
+    <span class="kt">uintptr_t</span> <span class="n">value</span><span class="p">;</span>  
+<span class="p">};</span>
+</code></pre></div></div>
+
+<p>However, this is somewhat inefficient since we now need something like 16 bytes to represent a simple 4-byte integer at runtime. As such, modern JS engines use clever tagging schemas, which rely on unused pointer bits to encode type information. Specifically, in V8 the <code class="language-plaintext highlighter-rouge">JSValue</code> type is a tagged pointer (or just <code class="language-plaintext highlighter-rouge">tagged</code> for short) which stores one bit of type information in the least-significant bit:</p>
+
+<ul>
+  <li>If the bit is one, then the value minus 1 is a pointer to another object. This works because objects are aligned and so cannot start at an uneven address.</li>
+  <li>If the bit is zero, then the next 31 bits contain a raw integer value (also called a small integer - Smi)</li>
+</ul>
+
+<p>As such, to figure out the type of a value at runtime, the engine first looks at the least-significant bit. If that is zero, the value can be “untagged” to obtain the integer value by right-shifting by one. On the other hand, if the bit is one, the value is a valid pointer to an object that contains further type information. For more details on V8’s pointer tagging scheme see also <a href="https://v8.dev/blog/pointer-compression#value-tagging-in-v8">this blog post</a>.</p>
+
+<h3 id="the-testcase">The Testcase</h3>
+
+<p>Let’s start by looking at the testcase produced by the fuzzer, which isn’t overly long:</p>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">function</span> <span class="nf">f0</span><span class="p">()</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="nx">v2</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="k">for </span><span class="p">(</span><span class="kd">let</span> <span class="nx">i3</span> <span class="o">=</span> <span class="nx">v2</span><span class="p">;</span> <span class="nx">i3</span> <span class="o">&gt;=</span> <span class="nx">v2</span><span class="p">;</span> <span class="nx">i3</span> <span class="o">+=</span> <span class="nx">v2</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nx">v2</span> <span class="o">=</span> <span class="nx">v2</span> <span class="o">&amp;&amp;</span> <span class="nx">i3</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="nf">f0</span><span class="p">();</span>
+</code></pre></div></div>
+
+<p>The bug is caused during optimization of the loop by the Maglev compiler, specifically due to a conflict between two stages of the compiler pipeline: the initial graph builder and the later MaglevPhiRepresentationSelector.</p>
+
+<h3 id="the-graph-builder">The Graph Builder</h3>
+
+<p>The graph builder is responsible for building the initial Maglev intermediate representation (IR) of the code. For that, it consumes both the input code (in the form of V8 bytecode) as well as runtime feedback that was collected while the code executed in lower tiers such as the interpreter. When processing the loop in this testcase, the following happens:</p>
+
+<ol>
+  <li>Both <code class="language-plaintext highlighter-rouge">i3</code> and <code class="language-plaintext highlighter-rouge">v2</code> are modified during the loop. Since the IR uses <a href="https://en.wikipedia.org/wiki/Static_single-assignment_form">static single-assignment (SSA) form</a>, these turn into Phi nodes, which make the code look like every variable only has a single assignment :)</li>
+  <li>For the <code class="language-plaintext highlighter-rouge">i3 &gt;= v2</code> comparison, the runtime feedback states that <code class="language-plaintext highlighter-rouge">i3</code> was so far always a Smi and therefore speculates that this will be the case in the future. It guards this assumption by emitting a <code class="language-plaintext highlighter-rouge">CheckedSmiUntag</code>, which will extract the raw int from the tagged value and will bail out to the interpreter if the input is ever not a Smi.</li>
+  <li>For the following operations on <code class="language-plaintext highlighter-rouge">v2</code>, the compiler can then rely on the existing check and emit <code class="language-plaintext highlighter-rouge">UnsafeSmiUntag</code> nodes, which avoid the runtime checks but are only safe to use if the input is guaranteed to be a Smi.</li>
+</ol>
+
+<p>The resulting code for the loop now looks roughly like this (in Maglev pseudocode):</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>loop:
+  i3 &lt;- Phi(1, i3_next)                   // loop variable, tagged
+  v2 &lt;- Phi(1, v2_next)                   // loop variable, tagged
+
+  i3_int &lt;- CheckedSmiUntag(i3)           // deopt if i3 is not a Smi
+  v2_int &lt;- CheckedSmiUntag(v2)           // deopt if v2 is not a Smi
+  if i3_int &lt; v2_int: break
+
+  v2_next &lt;- Phi(i3, v2)                  // result of `v2 &amp;&amp; i3`: "known Smi"
+  v2_next_int &lt;- UnsafeSmiUntag(v2_next)  // no (re-)check needed
+  i3_next_int = i3_int + v2_next_int
+  i3_next &lt;- Int32ToNumber(i3_next_int)   // tag the int32 result for the phi
+</code></pre></div></div>
+<h3 id="the-maglevphirepresentationselector">The MaglevPhiRepresentationSelector</h3>
+
+<p>The purpose of this optimizer is to identify Phi nodes where all inputs have the same raw representation (e.g. int32), and if so convert the Phi to that representation to avoid future untagging operations. For the code above, the code sees that both inputs to <code class="language-plaintext highlighter-rouge">i3</code> are int32 and therefore decides to convert the Phi to int32 representation. Following <code class="language-plaintext highlighter-rouge">CheckedSmiUntag</code> operations then become a no-op and can be removed, while consumers that need a tagged value now require a conversion step. With that, the final code now looks like this:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>loop:
+  i3 &lt;- Phi(1, i3_next)                   // all inputs int32, so i3 becomes a raw int32
+  v2 &lt;- Phi(1, v2_next)                   // stays tagged
+
+  v2_int &lt;- CheckedSmiUntag(v2)
+  if i3 &lt; v2_int: break                   // CheckedSmiUntag(i3) removed as a no-op
+
+  i3_tagged = Int32ToNumber(i3)           // HeapNumber if i3 &gt;= 2^30!
+  v2_next &lt;- Phi(i3_tagged, v2)           // stays tagged, needs tagged inputs
+  v2_next_int &lt;- UnsafeSmiUntag(v2_next)  // HeapNumber pointer treated as a Smi
+  i3_next &lt;- i3 + v2_next_int             // tagging no longer needed here
+</code></pre></div></div>
+
+<h3 id="the-conflict">The Conflict</h3>
+
+<p>The bug now occurs because of two optimizations interacting badly with each other:</p>
+
+<ol>
+  <li>The graph builder uses <code class="language-plaintext highlighter-rouge">UnsafeSmiUntag</code> as it believes that the value must be a Smi at this point</li>
+  <li>The representation selector removes a <code class="language-plaintext highlighter-rouge">CheckedSmiUntag</code> as it believes it is no longer required</li>
+</ol>
+
+<p>Specifically, what can happen now is that eventually, <code class="language-plaintext highlighter-rouge">i3</code> becomes larger than the maximum Smi value. At that point, <code class="language-plaintext highlighter-rouge">Int32ToNumber</code> can no longer fit the integer into a <code class="language-plaintext highlighter-rouge">Smi</code> and instead allocates a <code class="language-plaintext highlighter-rouge">HeapNumber</code> object (a container holding a larger number, basically). At this point, however, the <code class="language-plaintext highlighter-rouge">UnsafeSmiUntag</code> is no longer safe as the input is now a pointer. This leads to a corrupted pointer value being extracted and subsequently to memory corruption. Note that in the original code, this could not have happened as the <code class="language-plaintext highlighter-rouge">HeapNumber</code> would’ve been rejected by the <code class="language-plaintext highlighter-rouge">CheckedSmiUntag(i3)</code>.</p>
+
+<p>What may have made this bug difficult to find for BigSleep is the fact that both optimizations are <em>correct in isolation</em>. As such, looking at just one of them would’ve made it difficult to spot the issue. The agent would somehow have needed to hypothesize about the other optimization or stumbled upon the relevant code by chance (or exhaustive search).</p>
+
+<h2 id="overview">Overview</h2>
+
+<p>Looking at the examples above as well as other bugs found by LLMs, we can see a few clear examples of bugs where an LLM has the advantage:</p>
+
+<ul>
+  <li>Bugs that require complex logic to trigger but can be found through progressive logical reasoning and experimentation with the target program, such as <a href="http://crbug.com/449760249">crbug.com/449760249</a> discussed above. This is likely the strongest advantage.</li>
+  <li>Bugs that require specific “magic” values (e.g. edge-case integers, specific strings, etc.), such as <a href="https://crbug.com/443765373">crbug.com/443765373</a> discussed above.</li>
+  <li>Bugs that require new (or less common) features that a fuzzer may not be aware of. Examples include <a href="https://crbug.com/436181695">crbug.com/436181695</a>, where the fuzzer didn’t support the new <code class="language-plaintext highlighter-rouge">await using</code> syntax yet, and in fact also <a href="http://crbug.com/449760249">crbug.com/449760249</a> above where Fuzzilli lacked support for labeled breaks at the time.</li>
+  <li>Bugs that require a non-standard harness, custom flags, or special helper tools/functions that a fuzzer is not configured to use (e.g. <a href="https://crbug.com/516833326">crbug.com/516833326</a> which required --expose-fast-api and the <code class="language-plaintext highlighter-rouge">d8.test.FastCAPI</code> API).</li>
+</ul>
+
+<p>On the other hand, here are some advantages that fuzzers enjoy (for now):</p>
+<ul>
+  <li>They can find “non-local” bugs reasonably well <em>if</em> not too many individual pieces are required. <a href="http://crbug.com/40076141">crbug.com/40076141</a> discussed above is an example for such a bug.</li>
+  <li>They can find bugs that are hard to spot by reasoning about the source code alone. One clear example would be bugs caused by (incorrect) C++ compiler optimizations such as <a href="https://crbug.com/500771385">crbug.com/500771385</a>. Another potential example is bugs such as <a href="https://crbug.com/414840455">crbug.com/414840455</a>, which are related to handling dead code in V8’s compilers. This is likely an unusual state and therefore may be hard to reason about. BigSleep missed a few of these in our experiments.</li>
+  <li>They are immune to certain biases affecting the agentic approaches, such as the choice of starting point (e.g. commits), the exact prompt phrasing, or the bug types seen (and not seen) during training. They do suffer from other types of biases though (e.g. the weights of individual mutators and generators).</li>
+  <li>They don’t get distracted by “shallow” bugs, whereas BigSleep missed a few bugs because it found easier ones instead. This is probably somewhat self-correcting though as the shallow bugs would eventually get fixed, giving the agent another chance to discover the deeper bug.</li>
+</ul>
+
+<p>There is probably also a category of bugs that are hard to find for both approaches: bugs that are very non-local (bad for the agent) <em>and</em> require complex testcases (bad for the fuzzer) to trigger. In this case, a fuzzer would probably discover the individual pieces of the testcase (through coverage feedback) but won’t be able to find the right combination to trigger the bug (as in our first example). A code-reviewing agent, on the other hand, may struggle with the large search space of code fragments that may interact badly with each other (as in our last example). This is only a hypothesis, however, and would require further experiments and data to validate.</p>
+
+<h1 id="part-4-conclusion">Part 4: Conclusion</h1>
+
+<p>In this blog post, we’ve compared coverage-guided fuzzers with vulnerability-discovery agents that read and reason about the source code. Specifically, we’ve looked at Fuzzilli and BigSleep, which both run as automated pipelines on V8 to discover newly introduced bugs. Looking at the data from those pipelines, we saw a roughly equal share of vulnerabilities found in the last 6 months (around 40 each), and a moderate overlap in discovered bugs of around 25%. However, in a dedicated experiment, overlap was closer to 60%. For now, this means that the two approaches remain complementary, and specialized fuzzing continues to provide value by finding bugs quickly and identifying certain kinds of issues that are otherwise hard to spot. At the same time, LLMs only very recently became capable of finding bugs in software like V8 at all, and have made tremendous progress since. The model used for our experiment is by now already outdated and outperformed by newer generations. Looking to the future, we expect further model improvements, potentially coupled with better prompting and more flexible harnesses (that e.g. allow the model to build, improve, and run fuzzers itself instead of being limited to pure code auditing), to lead to a growing share of bugs being discovered by agentic systems.</p>]]></content><author><name>Samuel Groß</name></author><summary type="html"><![CDATA[Summary Project Zero compared two automated tools used by Google to find vulnerabilities in Chrome’s JavaScript engine, V8, on a regular basis. Fuzzilli is a generative JavaScript engine fuzzer and BigSleep is an LLM-based bug finding system. In the past six months, BigSleep found more vulnerabilities than Fuzzilli (45 versus 37) with a 25% overlap in the specific bugs reported. Since this comparison methodology has a tendency to underestimate overlap, we also performed dedicated experiments to test theoretical overlap in vulnerabilities reported since 2023. These experiments estimated overlap at roughly 60%. Regardless of which value is accurate, a substantial portion of vulnerabilities were discoverable by only LLMs or only fuzzing. While it is extremely promising that LLMs have become able to find so many vulnerabilities so quickly, fuzzing and LLMs are still complementary approaches. We recommend vendors perform both fuzzing and agentic analysis of their code to maximize the number of vulnerabilities that get reported before they impact users.]]></summary></entry><entry><title type="html">How to fix a bug in a fix</title><link href="https://projectzero.google/2026/10/emergency-patching.html" rel="alternate" type="text/html" title="How to fix a bug in a fix" /><published>2026-10-06T00:00:00-07:00</published><updated>2026-10-06T00:00:00-07:00</updated><id>https://projectzero.google/2026/10/emergency-patching</id><content type="html" xml:base="https://projectzero.google/2026/10/emergency-patching.html"><![CDATA[<p>Project Zero often works with software vendors to remediate the vulnerabilities we report and provide broader guidance on making software more secure. Some vendors express concern about potential scenarios in which they are unable to fix vulnerabilities that are causing immediate user harm, due to limitations in their patch delivery systems. Since Project Zero encounters a wide array of systems designed to protect users in the case of exceptional exploitation scenarios, both through vendor discussions and security reviews, we want to share what we’ve learned.</p>
+</feed>

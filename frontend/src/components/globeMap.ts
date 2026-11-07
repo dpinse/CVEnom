@@ -8,8 +8,9 @@
  * under `script-src 'self'; worker-src 'self'` with no 'unsafe-eval' and no blob:.
  *
  * Style: built in code from the CSS design tokens. version 8, no glyphs, no sprite, no remote
- * sources; the only sources are in-memory GeoJSON added after the map's `load` event. There
- * are no symbol/text layers (legend and title are DOM overlays).
+ * sources; the only source is in-memory GeoJSON (country polygons carrying a choropleth bucket)
+ * added after the map's `load` event. There are no symbol/text/circle layers (legend and
+ * tooltip are DOM overlays). Flat (mercator) is the default projection; globe is a toggle.
  */
 import {
   Map as MlMap,
@@ -22,7 +23,7 @@ import {
 import "maplibre-gl/dist/maplibre-gl.css";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { FeatureCollection, Geometry } from "geojson";
-import { GEO_KINDS, type GeoKind, KIND_TOKEN, SHADE_ALPHA, mixColor } from "./geoSummary";
+import { CHORO_STEPS, mixColor } from "./geoSummary";
 
 // ---- tokens -----------------------------------------------------------------------
 
@@ -30,20 +31,21 @@ export interface GlobeTokens {
   ocean: string;
   land: string;
   border: string;
-  /** Resolved colour per hotspot kind, via the shared KIND_TOKEN mapping. */
-  kind: Record<GeoKind, string>;
+  /** The alert colour (--live) the choropleth mixes into the land colour. */
+  alert: string;
+  /** Outline colour for the hovered / selected country. */
+  text: string;
 }
+
+export type MapMode = "flat" | "globe";
 
 /** Dark-theme values from tokens.css; used only if a custom property cannot be read. */
 const FALLBACK: Readonly<Record<string, string>> = {
   "--ocean": "#0a1521",
   "--land": "#2b3f54",
   "--border-geo": "#4d7093",
-  "--sev-high": "#ff9a44",
-  "--sev-med": "#ecc14a",
-  "--sev-low": "#3dd79a",
   "--live": "#ff2f45",
-  "--scope": "#6fb0d4",
+  "--text": "#e6edf5",
 };
 
 /** Read the geo/signal tokens from <html>'s computed style (theme-aware). */
@@ -55,40 +57,53 @@ export function readGlobeTokens(): GlobeTokens {
     cs = null;
   }
   const read = (name: string) => cs?.getPropertyValue(name).trim() || FALLBACK[name] || "#888888";
-  const kind = {} as Record<GeoKind, string>;
-  for (const k of GEO_KINDS) kind[k] = read(KIND_TOKEN[k]);
-  return { ocean: read("--ocean"), land: read("--land"), border: read("--border-geo"), kind };
+  return {
+    ocean: read("--ocean"),
+    land: read("--land"),
+    border: read("--border-geo"),
+    alert: read("--live"),
+    text: read("--text"),
+  };
 }
 
 // ---- style ------------------------------------------------------------------------
 
-/** Country fill: --land, tinted by outage level with increasing alpha of the outage colour. */
+/** Country fill: --land, with the alert colour mixed in at CHORO_STEPS[bucket] for buckets 0..4. */
 export function fillColor(t: GlobeTokens): ExpressionSpecification {
-  const over = t.kind.outage;
   return [
     "match",
-    ["get", "level"],
+    ["get", "bucket"],
+    0,
+    mixColor(t.land, t.alert, CHORO_STEPS[0]),
     1,
-    mixColor(t.land, over, SHADE_ALPHA[1]),
+    mixColor(t.land, t.alert, CHORO_STEPS[1]),
     2,
-    mixColor(t.land, over, SHADE_ALPHA[2]),
+    mixColor(t.land, t.alert, CHORO_STEPS[2]),
     3,
-    mixColor(t.land, over, SHADE_ALPHA[3]),
+    mixColor(t.land, t.alert, CHORO_STEPS[3]),
+    4,
+    mixColor(t.land, t.alert, CHORO_STEPS[4]),
     t.land,
   ];
 }
 
-/** Hotspot colour by kind, generated from KIND_TOKEN (the same mapping the legend uses). */
-export function circleColor(t: GlobeTokens): ExpressionSpecification {
-  const [first, ...rest] = GEO_KINDS;
-  return ["match", ["get", "kind"], first, t.kind[first], ...rest.flatMap((k) => [k, t.kind[k]]), t.kind.scan];
+/** Outline width: thick when selected, medium when hovered (feature-state, keyed by iso2 via promoteId), else none. */
+export function outlineWidth(): ExpressionSpecification {
+  return [
+    "case",
+    ["boolean", ["feature-state", "selected"], false],
+    2.2,
+    ["boolean", ["feature-state", "hover"], false],
+    1.4,
+    0,
+  ];
 }
 
 /** The initial style: background (ocean) only. Data sources/layers are added on `load`. */
-export function baseStyle(t: GlobeTokens): StyleSpecification {
+export function baseStyle(t: GlobeTokens, mode: MapMode = "flat"): StyleSpecification {
   return {
     version: 8,
-    projection: { type: "globe" },
+    projection: { type: mode === "flat" ? "mercator" : "globe" },
     sources: {},
     layers: [{ id: "background", type: "background", paint: { "background-color": t.ocean } }],
   };
@@ -104,19 +119,10 @@ export function dataLayers(t: GlobeTokens): LayerSpecification[] {
       paint: { "line-color": t.border, "line-width": 0.5, "line-opacity": 0.9 },
     },
     {
-      id: "hotspots",
-      type: "circle",
-      source: "hotspots",
-      layout: { "circle-sort-key": ["-", 0, ["get", "r"]] },
-      paint: {
-        "circle-radius": ["get", "r"],
-        "circle-color": circleColor(t),
-        "circle-opacity": 0.45,
-        "circle-stroke-color": circleColor(t),
-        "circle-stroke-width": 1.25,
-        "circle-stroke-opacity": 0.95,
-        "circle-pitch-alignment": "map",
-      },
+      id: "hover-outline",
+      type: "line",
+      source: "countries",
+      paint: { "line-color": t.text, "line-width": outlineWidth() },
     },
   ];
 }
@@ -138,17 +144,21 @@ export const DATA_DEADLINE_MS = 15000;
 export const ERROR_GRACE_MS = 5000;
 /** Ease the rotation speed in over this long after resuming. */
 const RAMP_MS = 1200;
-const START_CENTER: [number, number] = [-30, 22];
+const START_CENTER: Readonly<Record<MapMode, [number, number]>> = { globe: [-30, 22], flat: [10, 28] };
 
 /** Accessible name of MapLibre's (focusable) canvas; the data summary is linked via aria-describedby. */
 export const CANVAS_LABEL =
-  "Interactive threat globe. Drag or use the arrow keys to rotate; Ctrl or Cmd with scroll, or the plus and minus keys, to zoom.";
+  "Interactive threat map. Drag or use the arrow keys to pan; Ctrl or Cmd with scroll, or the plus and minus keys, to zoom. The top countries list beside it is the keyboard route to each country.";
 
 /**
  * Zoom at which the globe fills ~85% of the container's shorter side. (MapLibre's globe renders
  * smaller than the Mercator world size at the same zoom; 0.5 was tuned against Firefox output.)
  */
-export function fitZoom(el: HTMLElement): number {
+export function fitZoom(el: HTMLElement, mode: MapMode = "globe"): number {
+  if (mode === "flat") {
+    // Mercator: the 512 px world fits the container's width (the crop top and bottom is mostly ocean and ice).
+    return el.clientWidth ? Math.max(0, Math.min(3, Math.log2(el.clientWidth / 512))) : 0.5;
+  }
   const side = Math.min(el.clientWidth, el.clientHeight);
   if (!side) return 1.5;
   const radiusPx = 0.5 * side;
@@ -157,12 +167,15 @@ export function fitZoom(el: HTMLElement): number {
 
 export interface GlobeData {
   countries: FeatureCollection<Geometry>;
-  hotspots: FeatureCollection<Geometry>;
 }
 
 export interface GlobeController {
   setData(d: GlobeData): void;
-  /** Ease to [lon, lat] and hold rotation until the user next interacts. */
+  /** Switch between mercator and globe projections (auto-rotate runs in globe mode only). */
+  setMode(mode: MapMode): void;
+  /** Outline the selected country (null clears). */
+  setSelected(iso2: string | null): void;
+  /** Globe only: ease to [lon, lat] and hold rotation until the user next interacts. */
   flyTo(center: [number, number]): void;
   destroy(): void;
 }
@@ -178,8 +191,12 @@ export interface MountOptions {
    * For "render" failures the controller has already torn the map down.
    */
   onError?: (err: unknown, reason: GlobeFailure) => void;
-  /** A hotspot was clicked (a drag never fires MapLibre's click): the ISO 3166 alpha-2 code of its country. */
-  onHotspotClick?: (iso2: string) => void;
+  /** Initial projection (default flat). */
+  mode?: MapMode;
+  /** A country with activity was clicked (a drag never fires MapLibre's click): its ISO-2 code. */
+  onCountryClick?: (iso2: string) => void;
+  /** Pointer over a country with activity (iso2 + container-relative px), or leaving it (null, null). */
+  onHover?: (iso2: string | null, point: { x: number; y: number } | null) => void;
   /** id of the element holding the data summary, linked from the canvas via aria-describedby. */
   describedBy?: string;
 }
@@ -202,12 +219,13 @@ export function mountGlobe(container: HTMLElement, opts: MountOptions = {}): Glo
 function createGlobe(container: HTMLElement, opts: MountOptions): GlobeController {
   setWorkerUrl(workerUrl);
   let tokens = readGlobeTokens();
+  let mode: MapMode = opts.mode ?? "flat";
 
   const map = new MlMap({
     container,
-    style: baseStyle(tokens),
-    center: START_CENTER,
-    zoom: fitZoom(container),
+    style: baseStyle(tokens, mode),
+    center: START_CENTER[mode],
+    zoom: fitZoom(container, mode),
     minZoom: 0,
     maxZoom: 6,
     attributionControl: false,
@@ -254,7 +272,7 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
   const motionMq = safeMatchMedia("(prefers-reduced-motion: reduce)");
   let reduced = !!motionMq?.matches;
 
-  const canRun = () => loaded && !destroyed && !reduced && visible && inView;
+  const canRun = () => loaded && !destroyed && mode === "globe" && !reduced && visible && inView;
 
   function cancelRaf() {
     if (raf) cancelAnimationFrame(raf);
@@ -380,7 +398,7 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
     ro = new ResizeObserver(() => {
       if (destroyed) return;
       map.resize();
-      if (!userZoomed) map.setZoom(fitZoom(container));
+      if (!userZoomed) map.setZoom(fitZoom(container, mode));
     });
     ro.observe(container);
   }
@@ -392,8 +410,7 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
     map.setPaintProperty("background", "background-color", tokens.ocean);
     map.setPaintProperty("countries", "fill-color", fillColor(tokens));
     map.setPaintProperty("borders", "line-color", tokens.border);
-    map.setPaintProperty("hotspots", "circle-color", circleColor(tokens));
-    map.setPaintProperty("hotspots", "circle-stroke-color", circleColor(tokens));
+    map.setPaintProperty("hover-outline", "line-color", tokens.text);
   }
   const mo = new MutationObserver(applyTheme);
   mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
@@ -474,10 +491,26 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
     opts.onError?.(err, reason);
   }
 
+  // ---- hover / selected outline (feature-state on the countries source) ----
+  let hovered: string | null = null;
+  let selected: string | null = null;
+  function setOutline(id: string, key: "hover" | "selected", on: boolean) {
+    try {
+      map.setFeatureState({ source: "countries", id }, { [key]: on });
+    } catch {
+      /* source not ready: the next event sets it again */
+    }
+  }
+  function setHover(id: string | null) {
+    if (id === hovered) return;
+    if (hovered) setOutline(hovered, "hover", false);
+    hovered = id;
+    if (id) setOutline(id, "hover", true);
+  }
+
   // ---- data ----
   function pushData(d: GlobeData) {
     (map.getSource("countries") as GeoJSONSource | undefined)?.setData(d.countries);
-    (map.getSource("hotspots") as GeoJSONSource | undefined)?.setData(d.hotspots);
   }
 
   map.on("load", () => {
@@ -486,23 +519,40 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
     tokens = readGlobeTokens();
     const d = pending ?? {
       countries: { type: "FeatureCollection", features: [] },
-      hotspots: { type: "FeatureCollection", features: [] },
     };
-    map.addSource("countries", { type: "geojson", data: d.countries });
-    map.addSource("hotspots", { type: "geojson", data: d.hotspots });
+    // promoteId makes iso2 the feature id, so hover/selected feature-state survives setData.
+    map.addSource("countries", { type: "geojson", data: d.countries, promoteId: "iso2" });
     for (const layer of dataLayers(tokens)) map.addLayer(layer);
     // Tokens may have changed between construction and load (theme toggled early).
     map.setPaintProperty("background", "background-color", tokens.ocean);
     armWatchdog(DATA_DEADLINE_MS);
-    map.on("click", "hotspots", (e: { features?: { properties?: Record<string, unknown> | null }[] }) => {
-      const iso2 = e.features?.[0]?.properties?.iso2;
-      if (typeof iso2 === "string") opts.onHotspotClick?.(iso2);
+    // The mode may have been switched before the style was ready.
+    if (mode !== (opts.mode ?? "flat")) map.setProjection({ type: mode === "flat" ? "mercator" : "globe" });
+    if (selected) setOutline(selected, "selected", true);
+    // Only countries with activity (bucket >= 0) react: the rest are land, not a target.
+    const active = (e: { features?: { properties?: Record<string, unknown> | null }[] }): string | null => {
+      const p = e.features?.[0]?.properties;
+      return p && typeof p.iso2 === "string" && Number(p.bucket) >= 0 ? p.iso2 : null;
+    };
+    map.on("click", "countries", (e: { features?: { properties?: Record<string, unknown> | null }[] }) => {
+      const iso2 = active(e);
+      if (iso2) opts.onCountryClick?.(iso2);
     });
-    map.on("mouseenter", "hotspots", () => {
-      map.getCanvas().style.cursor = "pointer";
-    });
-    map.on("mouseleave", "hotspots", () => {
+    map.on(
+      "mousemove",
+      "countries",
+      (e: { features?: { properties?: Record<string, unknown> | null }[]; point?: { x: number; y: number } }) => {
+        const iso2 = active(e);
+        setHover(iso2);
+        map.getCanvas().style.cursor = iso2 ? "pointer" : "";
+        if (iso2 && e.point) opts.onHover?.(iso2, { x: e.point.x, y: e.point.y });
+        else opts.onHover?.(null, null);
+      },
+    );
+    map.on("mouseleave", "countries", () => {
+      setHover(null);
       map.getCanvas().style.cursor = "";
+      opts.onHover?.(null, null);
     });
     opts.onLoad?.();
     schedule();
@@ -513,8 +563,25 @@ function createGlobe(container: HTMLElement, opts: MountOptions): GlobeControlle
       pending = d;
       if (loaded && !destroyed) pushData(d);
     },
+    setMode(next) {
+      if (next === mode || destroyed) return;
+      mode = next;
+      if (loaded) {
+        map.setProjection({ type: next === "flat" ? "mercator" : "globe" });
+        userZoomed = false;
+        map.jumpTo({ center: START_CENTER[next], zoom: fitZoom(container, next) });
+      }
+      held = false;
+      schedule();
+    },
+    setSelected(iso2) {
+      if (iso2 === selected) return;
+      if (loaded && !destroyed && selected) setOutline(selected, "selected", false);
+      selected = iso2;
+      if (loaded && !destroyed && iso2) setOutline(iso2, "selected", true);
+    },
     flyTo(center) {
-      if (!loaded || destroyed) return;
+      if (!loaded || destroyed || mode !== "globe") return;
       held = true;
       schedule();
       map.easeTo({ center, duration: reduced ? 0 : 1600, essential: true });

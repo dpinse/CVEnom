@@ -1,11 +1,9 @@
 import { useSelection } from "../lib/selection";
-import { CountryDetail } from "./CountryDetail";
 import { CveDetailView } from "./CveDetail";
 import { Drawer } from "./Drawer";
-import { countryName } from "./geoSummary";
 import { StoryDetail } from "./StoryDetail";
 
-/** Mounted once in the shell: shows the drawer for `?cve=` or `?story=`, nothing otherwise. */
+/** Mounted once in the shell: shows the drawer for `?cve=` or `?story=`, nothing otherwise (`?country=` is the dashboard side panel). */
 export function DrawerHost() {
   const { selection, clear } = useSelection();
   if (!selection) return null;
@@ -16,13 +14,7 @@ export function DrawerHost() {
       </Drawer>
     );
   }
-  if (selection.kind === "country") {
-    return (
-      <Drawer heading={countryName(selection.cc)} onClose={clear} focusKey={`country:${selection.cc}`}>
-        <CountryDetail cc={selection.cc} />
-      </Drawer>
-    );
-  }
+  if (selection.kind === "country") return null; // the dashboard side panel shows countries
   return (
     <Drawer heading="Story" onClose={clear} focusKey={`story:${selection.url ?? ""}`}>
       <StoryDetail url={selection.url} />

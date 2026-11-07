@@ -47,7 +47,7 @@ test("select() writes a safe non-canonical story url unchanged; an unsafe one is
   expect(result.current.selection).toBeNull();
 });
 
-test("select() clears cve, story and country before setting one", () => {
+test("select() replaces cve/story; a country is kept when a CVE opens (R7) and only a country select changes it", () => {
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(
       MemoryRouter,
@@ -56,12 +56,18 @@ test("select() clears cve, story and country before setting one", () => {
     );
   const { result } = renderHook(() => useSelection(), { wrapper });
   expect(result.current.selection).toEqual({ kind: "cve", id: "CVE-2026-1001" });
-  act(() => result.current.select({ kind: "country", cc: "FR" }));
-  expect(result.current.selection).toEqual({ kind: "country", cc: "FR" });
+  expect(result.current.country).toBe("DE");
   act(() => result.current.select({ kind: "cve", id: "CVE-2026-2002" }));
   expect(result.current.selection).toEqual({ kind: "cve", id: "CVE-2026-2002" });
-  act(() => result.current.select({ kind: "country", cc: "ZZ" }));
-  expect(result.current.selection).toBeNull();
+  expect(result.current.country).toBe("DE");
   act(() => result.current.clear());
+  expect(result.current.selection).toEqual({ kind: "country", cc: "DE" });
+  act(() => result.current.select({ kind: "country", cc: "FR" }));
+  expect(result.current.country).toBe("FR");
+  act(() => result.current.select({ kind: "country", cc: "ZZ" }));
+  expect(result.current.country).toBeNull();
+  act(() => result.current.select({ kind: "country", cc: "FR" }));
+  act(() => result.current.clearCountry());
+  expect(result.current.country).toBeNull();
   expect(result.current.selection).toBeNull();
 });

@@ -1,0 +1,82 @@
+/* New-CVEs volume chart (severity stacked). Tokens only. Text uses --muted (AA). */
+.vol {
+  display: grid;
+  gap: 8px;
+  box-sizing: border-box;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 14px 16px;
+  flex: none;
+}
+.vol-head {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.vol-head h2 {
+  margin: 0;
+  font-size: 14px;
+}
+.vol-total,
+.vol-msg,
+.vol-foot {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+.vol-leg {
+  display: flex;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-left: auto;
+}
+.vol-sw {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 4px;
+}
+.vol svg {
+  display: block;
+  width: 100%;
+  height: 92px;
+}
+.vol rect {
+  fill-opacity: 0.85;
+}
+.vol-crit {
+  fill: var(--sev-crit);
+  background: var(--sev-crit);
+}
+.vol-high {
+  fill: var(--sev-high);
+  background: var(--sev-high);
+}
+.vol-med {
+  fill: var(--sev-med);
+  background: var(--sev-med);
+}
+.vol-low {
+  fill: var(--sev-low);
+  background: var(--sev-low);
+}
+.vol-axis {
+  display: flex;
+  justify-content: space-between;
+  font: 10px var(--font-mono);
+  color: var(--muted);
+}
+.vol-state {
+  justify-content: center;
+  min-height: 66px;
+}
+.vol-skeleton {
+  height: 92px;
+  background: var(--line);
+  border-radius: 6px;
+  opacity: 0.6;
+}

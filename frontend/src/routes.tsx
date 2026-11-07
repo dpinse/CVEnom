@@ -1,5 +1,9 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { PublicOrUser, RequireAdmin, RequireUser } from "./components/guards";
+import { isIso3166Alpha2 } from "./lib/iso3166";
+import { CVE_ID_RE } from "./lib/selection";
+import { safeHref } from "./lib/text";
 import { Shell } from "./components/Shell";
 import AcceptInvite from "./pages/AcceptInvite";
 import AdminAlerts from "./pages/AdminAlerts";
@@ -7,16 +11,42 @@ import AdminInvites from "./pages/AdminInvites";
 import AdminUsers from "./pages/AdminUsers";
 import ChangePassword from "./pages/ChangePassword";
 import Dashboard from "./pages/Dashboard";
-import History from "./pages/History";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 import Sessions from "./pages/Sessions";
+import Threats from "./pages/Threats";
 import TwoFactor from "./pages/TwoFactor";
 
-/** The old /search URL keeps working: same query string, new path. */
-function SearchRedirect() {
+// The threat page (and the CWE name map it pulls in) stay out of the initial bundle.
+const ThreatPage = lazy(() => import("./pages/ThreatPage"));
+
+const sevForMinCvss = (n: number) => (n >= 9 ? "crit" : n >= 7 ? "high,crit" : null);
+
+/** Maps legacy /history and /search params onto Threats: q kept, kev -> status, min_cvss -> sev, tab; rest dropped. */
+export function legacyThreatsSearch(search: string): string {
+  const sp = new URLSearchParams(search);
+  const out = new URLSearchParams();
+  const q = sp.get("q");
+  if (q !== null) out.set("q", q);
+  if (sp.get("kev") === "true") out.set("status", "exploited");
+  const raw = sp.get("min_cvss");
+  const sev = raw !== null && raw.trim() !== "" && Number.isFinite(Number(raw)) ? sevForMinCvss(Number(raw)) : null;
+  if (sev) out.set("sev", sev);
+  if (sp.get("tab") === "stories") out.set("tab", "news");
+  // drawer selection survives, each param only when valid (same gates as parseSelection)
+  const cve = sp.get("cve");
+  if (cve !== null && CVE_ID_RE.test(cve)) out.set("cve", cve);
+  const story = sp.get("story");
+  if (story !== null && safeHref(story) !== null) out.set("story", story);
+  const country = sp.get("country");
+  if (country !== null && isIso3166Alpha2(country)) out.set("country", country);
+  const s = out.toString();
+  return s ? `?${s}` : "";
+}
+
+function LegacyThreatsRedirect() {
   const loc = useLocation();
-  return <Navigate to={{ pathname: "/history", search: loc.search }} replace />;
+  return <Navigate to={{ pathname: "/threats", search: legacyThreatsSearch(loc.search) }} replace />;
 }
 
 /** Declarative route table; the caller supplies the router (BrowserRouter in the app, MemoryRouter in tests). */
@@ -26,8 +56,17 @@ export function AppRoutes() {
       <Route element={<Shell />}>
         <Route element={<PublicOrUser />}>
           <Route index element={<Dashboard />} />
-          <Route path="history" element={<History />} />
-          <Route path="search" element={<SearchRedirect />} />
+          <Route path="threats" element={<Threats />} />
+          <Route
+            path="threats/:cveId"
+            element={
+              <Suspense fallback={<div className="shell-loading gutter" role="status" aria-busy="true" />}>
+                <ThreatPage />
+              </Suspense>
+            }
+          />
+          <Route path="history" element={<LegacyThreatsRedirect />} />
+          <Route path="search" element={<LegacyThreatsRedirect />} />
         </Route>
         <Route path="login" element={<Login />} />
         {/* The secret is in the fragment (#<token>), never the path: see AcceptInvite. */}

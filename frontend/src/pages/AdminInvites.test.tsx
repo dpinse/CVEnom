@@ -214,7 +214,7 @@ describe("admin guard", () => {
       http.get("http://localhost/api/alerts/rules", () => (hit++, HttpResponse.json([]))),
     );
     renderAt(<AppRoutes />, path);
-    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: /^Last / })).toBeInTheDocument();
     for (const h of ["Invites", "Users", "Alert rules"]) expect(screen.queryByRole("heading", { name: h })).toBeNull();
     expect(hit).toBe(0);
     expect(authStore.getSnapshot().user?.role).toBe("member");

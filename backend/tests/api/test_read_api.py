@@ -51,7 +51,7 @@ def bearer(db, user):
 NOW = datetime.now(UTC)
 LANE_KEYS = {
     "cve_id", "cvss", "epss_percentile", "kev", "kev_added", "kev_source", "poc_badge",
-    "patch_available", "published", "summary", "recent_story_count",
+    "patch_available", "published", "summary", "recent_story_count", "product", "last_seen",
 }
 GEO_EVENT_KEYS = {"kind", "country_code", "label", "magnitude", "observed_at", "details"}
 
@@ -118,19 +118,22 @@ async def test_lanes_shape_and_keys(db_session):
     assert set(body) == {"EXPLOITED", "LIKELY", "LOUD", "FRESH"}
     for lane, expect in [("EXPLOITED", "CVE-2024-0001"), ("LIKELY", "CVE-2024-0002"),
                          ("LOUD", "CVE-2024-0003"), ("FRESH", "CVE-2024-0004")]:
-        assert [i["cve_id"] for i in body[lane]] == [expect]
-        assert set(body[lane][0]) == LANE_KEYS
-    ex = body["EXPLOITED"][0]
+        assert body[lane]["total"] == 1
+        assert [i["cve_id"] for i in body[lane]["items"]] == [expect]
+        assert set(body[lane]["items"][0]) == LANE_KEYS
+    ex = body["EXPLOITED"]["items"][0]
     assert ex["kev_added"] == NOW.date().isoformat() and ex["kev_source"] == "cisa"
     assert ex["summary"] == "&lt;b&gt;"  # returned as stored, not unescaped
-    assert body["LOUD"][0]["recent_story_count"] == 1
+    assert body["LOUD"]["items"][0]["recent_story_count"] == 1
 
 
 async def test_lanes_cap_100(db_session):
     for i in range(105):
         cve(db_session, f"CVE-2024-{1000 + i}", kev=True, kev_added=NOW.date())
-    r = await get(db_session, "/api/lanes")
-    assert len(r.json()["EXPLOITED"]) == 100
+    r = await get(db_session, "/api/lanes?limit=100")
+    ex = r.json()["EXPLOITED"]
+    assert len(ex["items"]) == 100 and ex["total"] == 105
+    assert (await get(db_session, "/api/lanes?limit=101")).status_code == 422
 
 
 async def test_lanes_no_n_plus_one(db_session):
@@ -138,6 +141,8 @@ async def test_lanes_no_n_plus_one(db_session):
         cve(db_session, f"CVE-2024-{2000 + i}", kev=True, kev_added=NOW.date(), epss_percentile=0.99, cvss=9.9,
             published=NOW - timedelta(hours=1))
         story(db_session, 100 + i, [f"CVE-2024-{2000 + i}"])
+        cve(db_session, f"CVE-2024-{2100 + i}", epss_percentile=0.99, cvss=9.9,
+            published=NOW - timedelta(hours=1))
     stmts = []
 
     def count(conn, cursor, statement, *a):
@@ -146,11 +151,14 @@ async def test_lanes_no_n_plus_one(db_session):
     engine = db_session.get_bind()
     event.listen(engine, "before_cursor_execute", count)
     try:
-        r = await get(db_session, "/api/lanes")
+        r = await get(db_session, "/api/lanes?limit=10")
     finally:
         event.remove(engine, "before_cursor_execute", count)
     assert r.status_code == 200
-    assert all(len(v) == 6 for v in r.json().values())
+    body = r.json()
+    assert {k: len(v["items"]) for k, v in body.items()} == {
+        "EXPLOITED": 6, "LIKELY": 6, "LOUD": 6, "FRESH": 6,
+    }
     assert len(stmts) <= 4, stmts
 
 
@@ -162,6 +170,52 @@ async def test_lanes_second_anonymous_call_is_cache_hit(db_session):
     assert r1.headers["x-cache"] == "MISS"
     assert r2.headers["x-cache"] == "HIT"
     assert r1.json() == r2.json()
+
+
+async def test_summary_cached_for_anon(db_session):
+    cve(db_session, "CVE-2024-0001", kev=True, kev_added=NOW.date())
+    async with client(make_app(db_session)) as c:
+        r1 = await c.get("/api/summary?range=7d")
+        r2 = await c.get("/api/summary?range=7d")
+    assert r1.headers["x-cache"] == "MISS"
+    assert r2.headers["x-cache"] == "HIT"
+    assert r1.json() == r2.json()
+    b = r1.json()
+    assert b["range"] == "7d" and b["new_kev"] == 1
+    assert b["latest_kev_added"] == NOW.date().isoformat()
+    assert set(b) == {
+        "range", "new_kev", "kev_due_soon", "new_critical", "public_exploits", "latest_kev_added",
+    }
+
+
+async def test_volume_endpoint_shape(db_session):
+    cve(db_session, "CVE-2024-0001", cvss=9.8, published=NOW)
+    cve(db_session, "CVE-2024-0002", published=NOW)
+    b = (await get(db_session, "/api/volume?range=7d")).json()
+    assert b["unit"] == "day" and len(b["buckets"]) == 7
+    assert b["buckets"][-1]["crit"] == 1 and b["total"] == 1 and b["unscored"] == 1
+    assert set(b["buckets"][0]) == {"start", "crit", "high", "med", "low"}
+    h = (await get(db_session, "/api/volume?range=24h")).json()
+    assert h["unit"] == "hour" and len(h["buckets"]) == 24
+
+
+async def test_summary_and_volume_invalid_range_422(db_session):
+    for path in ("/api/summary", "/api/volume"):
+        for rng in ("1y", "", "7D"):
+            assert (await get(db_session, f"{path}?range={rng}")).status_code == 422, (path, rng)
+
+
+async def test_geo_range_30d_includes_29_day_old_event(db_session):
+    geo(db_session, "old", country_code="FR", observed_at=NOW - timedelta(days=29))
+    geo(db_session, "older", country_code="DE", observed_at=NOW - timedelta(days=31))
+    assert (await get(db_session, "/api/geo")).json() == []
+    rows = (await get(db_session, "/api/geo?range=30d")).json()
+    assert [r["country_code"] for r in rows] == ["FR"]
+    # range wins over window_hours
+    rows = (await get(db_session, "/api/geo?range=30d&window_hours=1")).json()
+    assert [r["country_code"] for r in rows] == ["FR"]
+    assert (await get(db_session, "/api/geo?range=1y")).status_code == 422
+    assert (await get(db_session, "/api/geo?window_hours=169")).status_code == 422
 
 
 async def test_search_and_detail_not_cached(db_session):
@@ -179,7 +233,10 @@ async def test_search_and_detail_not_cached(db_session):
 async def test_public_read_off_requires_auth(db_session):
     u = mk_user(db_session)
     h, _ = bearer(db_session, u)
-    for url in ("/api/lanes", "/api/cves", "/api/velocity", "/api/geo", "/api/stories/loud"):
+    for url in (
+        "/api/lanes", "/api/cves", "/api/velocity", "/api/geo", "/api/stories/loud",
+        "/api/summary", "/api/volume",
+    ):
         anon = await get(db_session, url, public_read=False)
         assert anon.status_code == 401, url
         ok = await get(db_session, url, headers=h, public_read=False)
@@ -202,7 +259,8 @@ async def test_detail(db_session):
     assert r.status_code == 200
     b = r.json()
     assert set(b) == LANE_KEYS | {
-        "epss", "affected", "stories", "geo_events", "kev_name", "kev_action", "kev_notes",
+        "epss", "affected", "events", "related", "affected_versions", "geo_top",
+        "updated_at", "stories", "geo_events", "kev_name", "kev_action", "kev_notes",
         "kev_due", "kev_ransomware", "cvss_vector", "cvss_severity", "cwes", "references",
         "last_modified",
     }
@@ -258,7 +316,9 @@ async def test_search_basic_and_filters(db_session):
     assert await ids(f"?to={to}") == ["CVE-2024-0002"]
     r = await get(db_session, "/api/cves")
     b = r.json()
-    assert set(b) == {"items", "page", "page_size", "total"} and b["total"] == 3
+    assert set(b) == {
+        "items", "page", "page_size", "total", "exact_match", "exact_match_filtered_out",
+    } and b["total"] == 3
     assert set(b["items"][0]) == LANE_KEYS
     assert b["items"][0]["recent_story_count"] == 1
 
@@ -482,7 +542,8 @@ async def test_detail_ransomware_anon_excluded_authed_included(db_session):
     authed = (await get(db_session, "/api/cves/CVE-2024-7777", headers=h)).json()
     assert {s["source"] for s in authed["stories"]} == {"src", "ransomware.live"}
     assert [g["label"] for g in authed["geo_events"]] == ["grp: Victim Inc"]
-    assert authed["recent_story_count"] == anon["recent_story_count"] == 2
+    assert anon["recent_story_count"] == 1  # restricted story not counted for anonymous
+    assert authed["recent_story_count"] == 2
 
 
 async def test_public_read_off_everyone_authed_sees_ransomware(db_session):
@@ -547,7 +608,7 @@ async def test_c5_anon_search_and_lanes_never_carry_ransomware_victims(db_sessio
         hit = await c.get("/api/lanes")
         assert hit.headers["x-cache"] == "HIT"
         assert _RL_MARK not in hit.text
-        lane_ids = {i["cve_id"] for items in hit.json().values() for i in items}
+        lane_ids = {i["cve_id"] for lane in hit.json().values() for i in lane["items"]}
         assert "CVE-2024-8888" in lane_ids  # the guard is meaningful: the CVE is on the board
         found = (await c.get("/api/cves?q=CVE-2024-8888")).json()
         assert [i["cve_id"] for i in found["items"]] == ["CVE-2024-8888"]
@@ -560,7 +621,9 @@ async def test_c5_anon_search_and_lanes_never_carry_ransomware_victims(db_sessio
             assert r.status_code == 200, path
             assert "x-cache" not in r.headers
         authed_lanes = (await c.get("/api/lanes", headers=h)).json()
-        assert "CVE-2024-8888" in {i["cve_id"] for items in authed_lanes.values() for i in items}
+        assert "CVE-2024-8888" in {
+            i["cve_id"] for lane in authed_lanes.values() for i in lane["items"]
+        }
         detail = await c.get("/api/cves/CVE-2024-8888", headers=h)
         assert _RL_MARK in detail.text
 
@@ -579,6 +642,51 @@ async def test_null_kev_added_out_of_lane_but_in_history(db_session):
     r = await get(db_session, "/api/cves?lane=EXPLOITED")
     assert [i["cve_id"] for i in r.json()["items"]] == []
     r = await get(db_session, "/api/lanes")
-    assert [i["cve_id"] for i in r.json()["EXPLOITED"]] == []
+    assert r.json()["EXPLOITED"] == {"total": 0, "items": []}
     r = await get(db_session, "/api/cves?kev=true")
     assert [i["cve_id"] for i in r.json()["items"]] == ["CVE-2024-7002"]
+
+
+async def test_lanes_total_and_limit(db_session):
+    for i in range(7):
+        cve(db_session, f"CVE-2024-{3000 + i}", kev=True, kev_added=NOW.date())
+    body = (await get(db_session, "/api/lanes?limit=5")).json()
+    assert len(body["EXPLOITED"]["items"]) == 5
+    assert body["EXPLOITED"]["total"] == 7
+    assert body["LIKELY"] == {"total": 0, "items": []}
+
+
+async def test_lanes_invalid_range_422(db_session):
+    assert (await get(db_session, "/api/lanes?range=90d")).status_code == 422
+
+
+async def test_lanes_cache_key_varies_by_range(db_session):
+    cve(db_session, "CVE-2024-0001", kev=True, kev_added=NOW.date())
+    async with client(make_app(db_session)) as c:
+        a = await c.get("/api/lanes?range=7d")
+        b = await c.get("/api/lanes?range=24h")
+        a2 = await c.get("/api/lanes?range=7d")
+    assert a.headers["x-cache"] == "MISS"
+    assert b.headers["x-cache"] == "MISS"
+    assert a2.headers["x-cache"] == "HIT"
+
+
+async def test_loud_stories_range(db_session):
+    cve(db_session, "CVE-2024-0001")
+    story(db_session, 1, ["CVE-2024-0001"], published=NOW - timedelta(days=5))
+    story(db_session, 2, ["CVE-2024-0001"], published=NOW - timedelta(hours=1))
+    assert len((await get(db_session, "/api/stories/loud?range=24h")).json()) == 1
+    assert len((await get(db_session, "/api/stories/loud?range=7d")).json()) == 2
+    assert (await get(db_session, "/api/stories/loud?range=90d")).status_code == 422
+
+
+async def test_legacy_lane_excludes_restricted_only_cve_for_anon(db_session):
+    cve(db_session, "CVE-2024-6666")
+    s = story(db_session, 950, ["CVE-2024-6666"], title="Victim Two listed by grp")
+    s.source = "ransomware.live"
+    db_session.flush()
+    anon = await get(db_session, "/api/cves?lane=LOUD&page_size=100")
+    assert "CVE-2024-6666" not in {i["cve_id"] for i in anon.json()["items"]}
+    h, _ = bearer(db_session, mk_user(db_session))
+    authed = await get(db_session, "/api/cves?lane=LOUD&page_size=100", headers=h)
+    assert "CVE-2024-6666" in {i["cve_id"] for i in authed.json()["items"]}

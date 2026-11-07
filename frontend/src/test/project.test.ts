@@ -47,6 +47,9 @@ const ALLOWED: Allow[] = [
   { literal: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=" }, // CISA KEV catalog search, <a href> only
   { literal: "https://www.cve.org/CVERecord?id=" }, // cve.org record page, <a href> only
   { literal: "https://cwe.mitre.org/data/definitions/" }, // MITRE CWE definition page, <a href> only
+  // CWE-50's MITRE name inside src/data/cwe-names.json: plain text, not a URL. Quote-delimited so
+  // a real protocol-relative "//multiple/..." string literal is still flagged.
+  { literal: "'//multiple/leading/slash'" },
 ];
 
 const HOST_CHAR = /[A-Za-z0-9.-]/;
@@ -151,6 +154,10 @@ describe("findRemote detector", () => {
     expect(findRemote('<ExternalLink href="https://db-ip.com">')).toEqual([]);
     expect(findRemote('fetch("https://db-ip.com/api")')).toHaveLength(1);
     expect(findRemote('fetch("https://db-ip.com.evil.test")')).toHaveLength(1);
+  });
+  it("the CWE-50 name exception does not allow a protocol-relative string", () => {
+    expect(findRemote('{"50": "Path Equivalence: \'//multiple/leading/slash\'"}')).toEqual([]);
+    expect(findRemote('fetch("//multiple/leading/slash")')).toHaveLength(1);
   });
 });
 

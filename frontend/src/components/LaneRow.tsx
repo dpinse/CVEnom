@@ -1,7 +1,7 @@
-import { relTime } from "../lib/relTime";
-import { Text } from "../lib/text";
+import { shortAgo } from "../lib/relTime";
+import { decodeEntities, Text } from "../lib/text";
 import { isRansomwareSource, RansomwareCredit } from "./RansomwareCredit";
-import type { CveItem, LoudStory } from "../lib/types";
+import type { CveItem, Lane, LoudStory } from "../lib/types";
 
 export type Sev = "crit" | "high" | "med" | "low";
 
@@ -13,83 +13,77 @@ export function severityOf(cvss: number | null): Sev {
   return "low";
 }
 
-export function LaneRow({ item, onSelect }: { item: CveItem; onSelect: (id: string) => void }) {
+const SEV_NAME: Record<Sev, string> = { crit: "Critical", high: "High", med: "Medium", low: "Low" };
+
+/** "Product: summary" when the CVE has a product, else just the summary (entity-escaped, decoded once at render). */
+export function productIssue(item: CveItem): string {
+  return item.product ? `${item.product}: ${item.summary}` : item.summary;
+}
+
+/** Up to three one-line facts for a row: the lane signal first, then PoC, then "no patch". */
+export function laneMeta(item: CveItem, lane: Lane, now: Date): string[] {
+  const out: string[] = [];
+  if (lane === "EXPLOITED") {
+    if (item.kev_added) out.push(`KEV ${shortAgo(`${item.kev_added}T00:00:00Z`, now)}`);
+  } else if (lane === "LIKELY") {
+    if (item.epss_percentile !== null) out.push(`EPSS p${Math.round(item.epss_percentile * 100)}`);
+  } else if (lane === "LOUD") {
+    const n = item.recent_story_count;
+    out.push(`${n} ${n === 1 ? "story" : "stories"}`);
+  } else if (item.published) {
+    out.push(`published ${shortAgo(item.published, now)}`);
+  }
+  if (item.poc_badge) out.push("PoC");
+  if (item.patch_available === false) out.push("no patch");
+  return out.slice(0, 3);
+}
+
+export function LaneRow({
+  item,
+  lane,
+  now,
+  onSelect,
+}: {
+  item: CveItem;
+  lane: Lane;
+  now: Date;
+  onSelect: (id: string) => void;
+}) {
   const sev = severityOf(item.cvss);
+  const text = productIssue(item);
   return (
-    <button
-      type="button"
-      className={`row${item.kev ? " live" : ""}`}
-      data-sev={sev}
-      data-edge={item.kev ? "live" : sev}
-      data-testid="lane-row"
-      onClick={() => onSelect(item.cve_id)}
-    >
-      <span className="edge" aria-hidden="true" />
-      <span className="row-body">
-        <span className="row-id">
-          <span className="row-id-text">{item.cve_id}</span>
-          {item.kev && (
-            <span className="wild">
-              <i className="strobe" aria-hidden="true" />
-              in the wild
-            </span>
-          )}
-        </span>
-        <Text className="row-title" value={item.summary} />
-        <span className="chips">
-          {item.cvss !== null && <span className={`chip num ${sev}`}>{item.cvss.toFixed(1)}</span>}
-          {item.epss_percentile !== null && (
-            <span className="chip num">EPSS p{Math.round(item.epss_percentile * 100)}</span>
-          )}
-          {item.kev && (
-            <span className="chip kev" title={item.kev_source ?? undefined}>
-              KEV{item.kev_added ? ` · ${item.kev_added}` : ""}
-            </span>
-          )}
-          {item.poc_badge && <span className="chip poc">PoC</span>}
-          {item.patch_available === false && <span className="chip">no patch</span>}
-          {item.recent_story_count > 0 && <span className="chip linked">news ×{item.recent_story_count}</span>}
-        </span>
+    <button type="button" className="row" data-sev={sev} data-testid="lane-row" onClick={() => onSelect(item.cve_id)}>
+      <span className="sev" aria-label={item.cvss === null ? "Unscored" : SEV_NAME[sev]} role="img" />
+      <span className="id">{item.cve_id}</span>
+      <span className="score">{item.cvss === null ? "–" : item.cvss.toFixed(1)}</span>
+      <span className="t" title={decodeEntities(text)}>
+        <Text value={text} />
+      </span>
+      <span className="meta">
+        {laneMeta(item, lane, now).map((m, i) => (
+          <span key={m} className={i === 0 && lane === "EXPLOITED" ? "k" : undefined}>
+            {m}
+          </span>
+        ))}
       </span>
     </button>
   );
 }
 
-export function StoryRow({
-  story,
-  now,
-  onOpen,
-  onSelectCve,
-}: {
-  story: LoudStory;
-  now: Date;
-  onOpen: (url: string) => void;
-  onSelectCve: (id: string) => void;
-}) {
-  const ids = story.cve_ids ?? [];
+export function StoryRow({ story, now, onOpen }: { story: LoudStory; now: Date; onOpen: (url: string) => void }) {
   return (
     <div className="row story-row" data-sev="story" data-testid="story-row">
-      <span className="edge" aria-hidden="true" />
-      <span className="row-body">
-        <button type="button" className="story-open" onClick={() => onOpen(story.url)}>
-          <Text className="row-title" value={story.title} />
-          <span className="row-src">
-            <Text value={story.source} /> · {relTime(story.published, now)}
-          </span>
-        </button>
-        <span className="chips">
-          {ids.length === 0 ? (
-            <span className="chip quiet">no CVE</span>
-          ) : (
-            ids.map((id) => (
-              <button key={id} type="button" className="chip linked" onClick={() => onSelectCve(id)}>
-                {id}
-              </button>
-            ))
-          )}
+      <button type="button" className="story-open" onClick={() => onOpen(story.url)}>
+        <span className="t" title={decodeEntities(story.title)}>
+          <Text value={story.title} />
         </span>
-        {isRansomwareSource(story.source) && <RansomwareCredit className="row-src" />}
-      </span>
+        <span className="meta">
+          <span>
+            <Text value={story.source} /> · {shortAgo(story.published, now)}
+          </span>
+        </span>
+      </button>
+      {isRansomwareSource(story.source) && <RansomwareCredit className="meta" />}
     </div>
   );
 }

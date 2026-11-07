@@ -145,6 +145,8 @@ MAX_CWES = 20
 MAX_REF_TAGS = 10
 MAX_REF_TAG_LEN = 64
 MAX_CVSS_VECTOR_LEN = 255
+MAX_AFFECTED_VERSIONS = 50
+MAX_AFFECTED_FIELD_LEN = 128
 
 
 class CveReference(BaseModel):
@@ -163,6 +165,16 @@ class CveReference(BaseModel):
         if not isinstance(value, (list, tuple)):
             return []
         return [t for t in value if isinstance(t, str) and len(t) <= MAX_REF_TAG_LEN][:MAX_REF_TAGS]
+
+
+class AffectedVersion(BaseModel):
+    product: str = Field(min_length=1, max_length=MAX_AFFECTED_FIELD_LEN)
+    vendor: str | None = Field(default=None, max_length=MAX_AFFECTED_FIELD_LEN)
+    ecosystem: str | None = Field(default=None, max_length=MAX_AFFECTED_FIELD_LEN)
+    introduced: str | None = Field(default=None, max_length=MAX_AFFECTED_FIELD_LEN)
+    fixed: str | None = Field(default=None, max_length=MAX_AFFECTED_FIELD_LEN)
+    last_affected: str | None = Field(default=None, max_length=MAX_AFFECTED_FIELD_LEN)
+    source: Literal["OSV", "NVD"]
 
 
 class NormalizedCve(BaseModel):
@@ -196,6 +208,7 @@ class NormalizedCve(BaseModel):
     cwes: list[str] | None = None
     references: list[CveReference] | None = None
     last_modified: datetime | None = None
+    affected_versions: list[AffectedVersion] | None = None
 
     @field_validator("cvss_vector", mode="before")
     @classmethod
@@ -237,10 +250,44 @@ class NormalizedCve(BaseModel):
                 continue
         return kept
 
+    @field_validator("affected_versions", mode="before")
+    @classmethod
+    def _filter_affected_versions(cls, value: object) -> list[AffectedVersion] | None:
+        """Drop invalid entries, cap at 50; never fails the record."""
+        if not isinstance(value, (list, tuple)):
+            return None
+        kept: list[AffectedVersion] = []
+        for item in value:
+            if len(kept) >= MAX_AFFECTED_VERSIONS:
+                break
+            try:
+                kept.append(AffectedVersion.model_validate(item))
+            except ValidationError:
+                continue
+        return kept
+
     @field_validator("last_modified")
     @classmethod
     def _bound_last_modified(cls, value: datetime | None) -> datetime | None:
         return None if value is None else bound_datetime(value)
+
+    @field_validator("published")
+    @classmethod
+    def _bound_published(cls, value: datetime | None) -> datetime | None:
+        # An out-of-range upstream date (e.g. a Go zero time) becomes "unknown", never a failure.
+        if value is None:
+            return None
+        try:
+            return bound_datetime(value)
+        except ValueError:
+            return None
+
+    @field_validator("kev_added")
+    @classmethod
+    def _bound_kev_added(cls, value: date | None) -> date | None:
+        if value is None or MIN_YEAR <= value.year <= MAX_YEAR:
+            return value
+        return None
 
 
 class NormalizedStory(BaseModel):
@@ -260,6 +307,41 @@ class NormalizedStory(BaseModel):
     @classmethod
     def _bound_published(cls, value: datetime) -> datetime:
         return bound_datetime(value)
+
+
+# fix_released is deliberately absent: no source gives it a date (ruling R13).
+CVE_EVENT_KINDS = (
+    "reserved", "published", "nvd_modified", "poc_published", "detection",
+    "first_news", "kev_added", "epss_crossed",
+)
+
+
+class NormalizedCveEvent(BaseModel):
+    cve_id: str
+    kind: Literal[
+        "reserved", "published", "nvd_modified", "poc_published", "detection",
+        "first_news", "kev_added", "epss_crossed",
+    ]
+    occurred_at: datetime
+    source: str = Field(min_length=1, max_length=64)
+    detail: dict = Field(default_factory=dict)  # stored raw; insert_cve_events sanitizes
+
+    @field_validator("cve_id", mode="before")
+    @classmethod
+    def _validate_cve_id(cls, value: object) -> str:
+        return validate_cve_id(value)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _bound_occurred_at(cls, value: datetime) -> datetime:
+        return bound_datetime(value)
+
+    @field_validator("source")
+    @classmethod
+    def _validate_source(cls, value: str) -> str:
+        if _CONTROL_CHARS.search(value):
+            raise ValueError("source contains control characters")
+        return value
 
 
 class NormalizedGeoEvent(BaseModel):

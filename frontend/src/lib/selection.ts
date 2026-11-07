@@ -24,10 +24,20 @@ export function parseSelection(sp: URLSearchParams): Selection | null {
   return null;
 }
 
-/** Reads and writes the drawer selection through `?cve=` / `?story=`. */
+/** `?country=` as a validated ISO-2 code, or null. Independent of the drawer: a CVE can be open over a country. */
+export function parseCountry(sp: URLSearchParams): string | null {
+  const c = sp.get("country");
+  return c !== null && isIso3166Alpha2(c) ? c : null;
+}
+
+/**
+ * Reads and writes the selection through `?cve=` / `?story=` (the drawer) and `?country=` (the dashboard side panel).
+ * Selecting or closing a CVE or story keeps `?country=`, so opening a CVE from the country panel preserves it (R7).
+ */
 export function useSelection() {
   const [sp, setSp] = useSearchParams();
   const selection = useMemo(() => parseSelection(sp), [sp]);
+  const country = useMemo(() => parseCountry(sp), [sp]);
   const select = useCallback(
     (s: Selection | null, opts?: { replace?: boolean }) => {
       setSp(
@@ -35,12 +45,14 @@ export function useSelection() {
           const next = new URLSearchParams(prev);
           next.delete("cve");
           next.delete("story");
-          next.delete("country");
           if (s?.kind === "cve" && CVE_ID_RE.test(s.id)) next.set("cve", s.id);
           else if (s?.kind === "story") {
             // Write the original string (see parseSelection); safeHref only decides whether it is written at all.
             if (s.url !== null && safeHref(s.url) !== null) next.set("story", s.url);
-          } else if (s?.kind === "country" && isIso3166Alpha2(s.cc)) next.set("country", s.cc);
+          } else if (s?.kind === "country") {
+            next.delete("country");
+            if (isIso3166Alpha2(s.cc)) next.set("country", s.cc);
+          }
           return next;
         },
         opts?.replace ? { replace: true } : undefined,
@@ -48,7 +60,20 @@ export function useSelection() {
     },
     [setSp],
   );
-  /** Closes the drawer with `replace` history so Back does not re-open it. */
+  /** Closes the drawer with `replace` history so Back does not re-open it. Keeps `?country=`. */
   const clear = useCallback(() => select(null, { replace: true }), [select]);
-  return { selection, select, clear };
+  /** Back to the "Top countries" list. */
+  const clearCountry = useCallback(
+    () =>
+      setSp(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("country");
+          return next;
+        },
+        { replace: true },
+      ),
+    [setSp],
+  );
+  return { selection, country, select, clear, clearCountry };
 }

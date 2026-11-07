@@ -250,3 +250,32 @@ def test_nvd_malformed_detail_shapes_keep_record(settings, cve_extra):
     res = NvdCollector().normalize([rec])
     assert len(res.cves) == 1
     assert res.cves[0].cwes is None and res.cves[0].references is None
+
+
+def test_nvd_cpe_versions(page, settings):
+    res = NvdCollector().normalize([page])
+    a = next(c for c in res.cves if c.cve_id == "CVE-2026-1001")
+    assert [v.model_dump() for v in a.affected_versions] == [{
+        "product": "connect secure", "vendor": "ivanti", "ecosystem": None,
+        "introduced": "22.7R2", "fixed": "22.7R2.6", "last_affected": None, "source": "NVD",
+    }]  # the non-vulnerable match is skipped
+    assert next(c for c in res.cves if c.cve_id == "CVE-2026-1002").affected_versions is None
+
+    exact = nvd._cpe_versions([{"nodes": [{"cpeMatch": [
+        {"vulnerable": True, "criteria": "cpe:2.3:a:acme:widget:1.4.2:*:*:*:*:*:*:*"},
+        {"vulnerable": True, "criteria": "cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*"},
+        {"vulnerable": True, "criteria": "cpe:2.3:a:acme:widget:-:*:*:*:*:*:*:*"},
+    ]}]}])
+    assert len(exact) == 1
+    assert exact[0]["introduced"] == exact[0]["last_affected"] == "1.4.2"
+    assert nvd._cpe_versions("garbage") is None
+    assert nvd._cpe_versions([{"nodes": "x"}, None]) is None
+
+
+def test_parse_cpe_escapes():
+    assert nvd.parse_cpe(r"cpe:2.3:a:a\:b:my_prod:1.0:*:*:*:*:*:*:*") == ("a:b", "my prod", "1.0")
+
+
+@pytest.mark.parametrize("bad", ["", "nope", "cpe:2.2:a:x:y", "cpe:2.3:a:x", "cpe:2.3:a:x::1", None, 5])
+def test_parse_cpe_rejects_garbage(bad):
+    assert nvd.parse_cpe(bad) is None

@@ -19,11 +19,12 @@ import {
   useCveSearch,
   useStory,
   useStorySearch,
+  useSummary,
+  useVolume,
   storySearchPath,
   useGeo,
   useLanes,
   useLoudStories,
-  useVelocity,
 } from "./queries";
 
 const B = "http://localhost/api";
@@ -58,13 +59,22 @@ const fresh = () => {
 
 describe("keys", () => {
   test("qk matches the agreed shapes", () => {
-    expect(qk.lanes()).toEqual(["lanes"]);
-    expect(qk.velocity(7)).toEqual(["velocity", 7]);
-    expect(qk.geo(24)).toEqual(["geo", 24]);
-    expect(qk.loud(50)).toEqual(["loud", 50]);
-    expect(qk.cve("CVE-1")).toEqual(["cve", "CVE-1"]);
+    expect(qk.lanes("7d", 5)).toEqual(["lanes", "7d", 5]);
+    expect(qk.summary("24h")).toEqual(["summary", "24h"]);
+    expect(qk.volume("30d")).toEqual(["volume", "30d"]);
+    expect(qk.geo("14d")).toEqual(["geo", "14d"]);
+    expect(qk.loud("7d", 20)).toEqual(["loud", "7d", 20]);
+    expect(qk.cve("CVE-1", "7d")).toEqual(["cve", "CVE-1", "7d"]);
     expect(qk.cves({ q: "a" })).toEqual(["cves", { q: "a" }]);
     expect(qk.health()).toEqual(["health"]);
+  });
+  test("qk.lanes keys differ by range and limit", () => {
+    expect(qk.lanes("24h", 5)).not.toEqual(qk.lanes("7d", 5));
+    expect(qk.lanes("7d", 5)).not.toEqual(qk.lanes("7d", 100));
+  });
+  test("threats keys include every filter param", () => {
+    expect(qk.cves({ added: "week", status: "exploited" })).not.toEqual(qk.cves({ added: "day", status: "exploited" }));
+    expect(qk.cves({ sev: "crit" })).not.toEqual(qk.cves({ sev: "crit,high" }));
   });
 });
 
@@ -88,7 +98,7 @@ describe("retry policy", () => {
         return HttpResponse.json({ error: "boom" }, { status: 500 });
       }),
     );
-    const { result } = renderHook(() => useLanes(), { wrapper });
+    const { result } = renderHook(() => useLanes("7d"), { wrapper });
     await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 3000 });
     expect(n).toBe(3);
   });
@@ -119,7 +129,7 @@ describe("rate limiting", () => {
         return HttpResponse.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": "30" } });
       }),
     );
-    const { result } = renderHook(() => useLanes(), { wrapper });
+    const { result } = renderHook(() => useLanes("7d"), { wrapper });
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error).toBeInstanceOf(RateLimited);
     expect(retryAfterOf(result.current.error)).toBe(30);
@@ -131,14 +141,14 @@ describe("rate limiting", () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(n).toBe(1);
     // ...nor does an invalidation honouring the cooldown (what the live hook does)
-    const q = qc.getQueryCache().find({ queryKey: qk.lanes() })!;
+    const q = qc.getQueryCache().find({ queryKey: qk.lanes("7d", 5) })!;
     expect(isCoolingOff(q)).toBe(true);
     expect(isCoolingOff(q, Date.now() + 31_000)).toBe(false);
   });
 });
 
 describe("hooks", () => {
-  test("paths: velocity, geo, loud, cve, search", async () => {
+  test("dashboard reads build range-keyed URLs", async () => {
     fresh();
     const seen: string[] = [];
     server.use(
@@ -148,26 +158,45 @@ describe("hooks", () => {
         return HttpResponse.json({});
       }),
     );
-    const v = renderHook(() => useVelocity(7), { wrapper });
-    const g = renderHook(() => useGeo(), { wrapper });
-    const l = renderHook(() => useLoudStories(10), { wrapper });
-    const c = renderHook(() => useCve("CVE-2025-1"), { wrapper });
+    const hs = [
+      renderHook(() => useLanes("24h", 5), { wrapper }),
+      renderHook(() => useSummary("14d"), { wrapper }),
+      renderHook(() => useVolume("30d"), { wrapper }),
+    ];
+    await waitFor(() => {
+      for (const h of hs) expect(h.result.current.isSuccess).toBe(true);
+    });
+    expect(seen.sort()).toEqual(["/api/lanes?range=24h&limit=5", "/api/summary?range=14d", "/api/volume?range=30d"]);
+  });
+
+  test("paths: geo, loud, cve, search", async () => {
+    fresh();
+    const seen: string[] = [];
+    server.use(
+      http.get(`${B}/*`, ({ request }) => {
+        const u = new URL(request.url);
+        seen.push(u.pathname + u.search);
+        return HttpResponse.json({});
+      }),
+    );
+    const g = renderHook(() => useGeo("7d"), { wrapper });
+    const l = renderHook(() => useLoudStories("24h", 10), { wrapper });
+    const c = renderHook(() => useCve("CVE-2025-1", "14d"), { wrapper });
     const s = renderHook(() => useCveSearch({ q: "log4j", kev: true, min_cvss: 7, page: 2, lane: undefined }), {
       wrapper,
     });
     await waitFor(() => {
-      for (const h of [v, g, l, c, s]) expect(h.result.current.isSuccess).toBe(true);
+      for (const h of [g, l, c, s]) expect(h.result.current.isSuccess).toBe(true);
     });
     expect(seen.sort()).toEqual(
       [
-        "/api/velocity?days=7",
-        "/api/geo?window_hours=24",
-        "/api/stories/loud?limit=10",
-        "/api/cves/CVE-2025-1",
+        "/api/geo?range=7d",
+        "/api/stories/loud?range=24h&limit=10",
+        "/api/cves/CVE-2025-1?range=14d",
         "/api/cves?q=log4j&kev=true&min_cvss=7&page=2",
       ].sort(),
     );
-    expect(qc.getQueryData(qk.velocity(7))).toBeDefined();
+    expect(qc.getQueryData(qk.geo("7d"))).toBeDefined();
   });
 
   test("useCve is disabled without an id; search path omits empty params", () => {
@@ -189,10 +218,10 @@ describe("mount gate", () => {
         return HttpResponse.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": "30" } });
       }),
     );
-    const first = renderHook(() => useLanes(), { wrapper });
+    const first = renderHook(() => useLanes("7d"), { wrapper });
     await waitFor(() => expect(first.result.current.isError).toBe(true));
     first.unmount();
-    renderHook(() => useLanes(), { wrapper });
+    renderHook(() => useLanes("7d"), { wrapper });
     await new Promise((r) => setTimeout(r, 150));
     expect(n).toBe(1);
   });
@@ -207,10 +236,10 @@ describe("mount gate", () => {
         return HttpResponse.json({ error: "boom" }, { status: 500 });
       }),
     );
-    const first = renderHook(() => useLanes(), { wrapper });
+    const first = renderHook(() => useLanes("7d"), { wrapper });
     await waitFor(() => expect(first.result.current.isError).toBe(true));
     first.unmount();
-    renderHook(() => useLanes(), { wrapper });
+    renderHook(() => useLanes("7d"), { wrapper });
     await waitFor(() => expect(n).toBe(2));
   });
 });
@@ -252,7 +281,7 @@ describe("I3: error-state polling", () => {
             : HttpResponse.json({ EXPLOITED: [] });
         }),
       );
-      const { result } = renderHook(() => useLanes(), { wrapper });
+      const { result } = renderHook(() => useLanes("7d"), { wrapper });
       await waitFor(() => expect(result.current.isError).toBe(true));
       expect(calls).toBe(1);
       await vi.advanceTimersByTimeAsync(25_000);
@@ -278,7 +307,7 @@ describe("I3: error-state polling", () => {
             : HttpResponse.json({ EXPLOITED: [] });
         }),
       );
-      const { result } = renderHook(() => useLanes(), { wrapper });
+      const { result } = renderHook(() => useLanes("7d"), { wrapper });
       await waitFor(() => expect(result.current.isError).toBe(true));
       await vi.advanceTimersByTimeAsync(70_000);
       expect(calls).toBe(1);
@@ -323,13 +352,13 @@ describe("history and country hooks", () => {
     expect(storySearchPath({ q: "a b", source: "", page: 2 })).toBe("/stories?q=a+b&page=2");
     expect(qk.stories({ q: "x" })).toEqual(["stories", { q: "x" }]);
     expect(qk.story("u")).toEqual(["story", "u"]);
-    expect(qk.country("DE", 24)).toEqual(["geo", "country", "DE", 24]);
+    expect(qk.country("DE", "7d")).toEqual(["geo", "country", "DE", "7d"]);
     server.use(http.get(`${B}/stories`, () => HttpResponse.json({ items: [], page: 1, page_size: 25, total: 0 })));
     const { result } = renderHook(() => useStorySearch({ q: "x" }), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
   });
 
-  test("useCountry requests /api/geo/DE?window_hours=; disabled without a cc", async () => {
+  test("useCountry requests /api/geo/DE?range=; disabled without a cc", async () => {
     fresh();
     let seen = "";
     server.use(
@@ -341,14 +370,16 @@ describe("history and country hooks", () => {
           counts: [],
           top_sources: [],
           trend: [],
+          trend_unit: "day",
+          top_cves: [],
           events: null,
         });
       }),
     );
-    const off = renderHook(() => useCountry(undefined), { wrapper });
+    const off = renderHook(() => useCountry(undefined, "7d"), { wrapper });
     expect(off.result.current.fetchStatus).toBe("idle");
-    const { result } = renderHook(() => useCountry("DE", 48), { wrapper });
+    const { result } = renderHook(() => useCountry("DE", "30d"), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(seen).toBe("?window_hours=48");
+    expect(seen).toBe("?range=30d");
   });
 });

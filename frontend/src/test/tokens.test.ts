@@ -102,18 +102,18 @@ describe("WCAG AA contrast", () => {
   }
 });
 
-describe("globe legend hint contrast (text on the translucent legend backdrop)", () => {
+describe("map legend text contrast (text on the translucent legend backdrop)", () => {
   const globeCss = readFileSync(resolve(__dirname, "../styles/globe.css"), "utf8");
   const rule = (sel: string) => {
-    // top-level rule only: the selector must start a line (".globe-fallback .globe-legend" does not)
+    // top-level rule only: the selector must start a line
     const css = globeCss.replace(/\r\n/g, "\n");
     const at = css.indexOf(`\n${sel} {`);
     if (at < 0) throw new Error(`no rule ${sel}`);
     const open = css.indexOf("{", at);
     return css.slice(open + 1, css.indexOf("}", open));
   };
-  const backdrop = /background:\s*color-mix\(in srgb, var\(--well\) (\d+)%, transparent\)/.exec(rule(".globe-legend"));
-  const hintVar = /(?:^|[\s;])color:\s*var\((--[a-z-]+)\)/.exec(rule(".lg-hint"));
+  const backdrop = /background:\s*color-mix\(in srgb, var\(--panel\) (\d+)%, transparent\)/.exec(rule(".map-legend"));
+  const hintVar = /(?:^|[\s;])color:\s*var\((--[a-z-]+)\)/.exec(rule(".map-legend"));
 
   /** `over` at `alpha` composited onto `under`, as #rrggbb. */
   function blend(over: string, under: string, alpha: number): string {
@@ -128,17 +128,17 @@ describe("globe legend hint contrast (text on the translucent legend backdrop)",
       .join("")}`;
   }
 
-  it("the hint uses --muted and the legend backdrop is --well at a fixed alpha", () => {
+  it("the legend text uses --muted and the backdrop is --panel at a fixed alpha", () => {
     expect(hintVar?.[1]).toBe("--muted");
     expect(backdrop).not.toBeNull();
   });
 
   // The legend sits on the well/panel and may overlap the globe (ocean or land), so check each.
   for (const [name, t] of Object.entries({ dark, light })) {
-    for (const under of ["--panel", "--well", "--ocean", "--land"]) {
-      it(`${name}: hint >= 4.5:1 on the backdrop blended over ${under}`, () => {
+    for (const under of ["--panel", "--ocean", "--land"]) {
+      it(`${name}: legend text >= 4.5:1 on the backdrop blended over ${under}`, () => {
         const alpha = Number(backdrop![1]) / 100;
-        const effective = blend(t["--well"], t[under], alpha);
+        const effective = blend(t["--panel"], t[under], alpha);
         expect(contrast(t[hintVar![1]], effective), `${hintVar![1]} on ${effective}`).toBeGreaterThanOrEqual(4.5);
       });
     }

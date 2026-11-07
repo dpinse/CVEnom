@@ -6,12 +6,11 @@
  * This module is only imported by the lazy <Globe> chunk. Atlas-free helpers live in
  * geoSummary.ts and are re-exported here.
  */
-import type { Feature, FeatureCollection, Geometry, MultiPolygon, Point, Polygon, Position } from "geojson";
+import type { Feature, FeatureCollection, Geometry, MultiPolygon, Polygon, Position } from "geojson";
 import { feature } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import atlas from "world-atlas/countries-110m.json";
-import type { GeoSummaryItem } from "../lib/types";
-import { type GeoKind, type ShadeLevel, circleRadius, isGeoKind, isIso2 } from "./geoSummary";
+import { choroplethBucket } from "./geoSummary";
 
 export * from "./geoSummary";
 
@@ -341,8 +340,10 @@ function unwrapGeometry(g: Geometry | null): Polygon | MultiPolygon | null {
 export interface CountryProps {
   iso2: string;
   name: string;
-  /** Outage shading level, stamped by withShading(). */
-  level: ShadeLevel;
+  /** Choropleth bucket 0..4 (darker = more alerts), or -1 for no activity. Stamped by withBuckets(). */
+  bucket: -1 | 0 | 1 | 2 | 3 | 4;
+  /** Events in the selected range (0 for none). */
+  n: number;
 }
 export type CountryFeature = Feature<Polygon | MultiPolygon, CountryProps>;
 
@@ -355,24 +356,33 @@ function buildCountries(): FeatureCollection<Polygon | MultiPolygon, CountryProp
     const iso2 = iso2FromFeature(f);
     const geometry = unwrapGeometry(f.geometry);
     if (!iso2 || !geometry) continue; // unknown or empty features are skipped, never guessed
-    out.push({ type: "Feature", properties: { iso2, name: f.properties?.name ?? iso2, level: 0 }, geometry });
+    out.push({ type: "Feature", properties: { iso2, name: f.properties?.name ?? iso2, bucket: -1, n: 0 }, geometry });
   }
   return { type: "FeatureCollection", features: out };
 }
 
-/** All country polygons (level 0), computed once at module load. */
+/** All country polygons (no activity), computed once at module load. */
 export const countries = buildCountries();
 
-/** A copy of the countries collection with each feature's shading level set from `shading`. */
-export function withShading(
-  shading: ReadonlyMap<string, ShadeLevel>,
+/**
+ * A copy of the countries collection with each feature's choropleth bucket and count set from `totals`
+ * (events per ISO-2). The maximum is taken over all totals, including countries the 110m atlas cannot draw.
+ * Antarctica is left out: it is never an alert country and dominates a Mercator map.
+ */
+export function withBuckets(
+  totals: ReadonlyMap<string, number>,
 ): FeatureCollection<Polygon | MultiPolygon, CountryProps> {
+  let max = 0;
+  for (const v of totals.values()) if (Number.isFinite(v) && v > max) max = v;
   return {
     type: "FeatureCollection",
-    features: countries.features.map((f) => ({
-      ...f,
-      properties: { ...f.properties, level: shading.get(f.properties.iso2) ?? 0 },
-    })),
+    features: countries.features
+      .filter((f) => f.properties.iso2 !== "AQ")
+      .map((f) => {
+        const n = totals.get(f.properties.iso2) ?? 0;
+        const b = choroplethBucket(n, max);
+        return { ...f, properties: { ...f.properties, bucket: b ?? -1, n: b === null ? 0 : n } };
+      }),
   };
 }
 
@@ -421,7 +431,7 @@ function largestPolygonCentroid(g: Polygon | MultiPolygon): [number, number] | n
 }
 
 /**
- * Points for states too small for the 110m polygons, so their hotspots are not dropped.
+ * Points for states too small for the 110m polygons (used by flyTo).
  * Approximate [lon, lat] of each territory's main island / capital.
  */
 const SMALL_TERRITORY_POINTS: Readonly<Record<string, [number, number]>> = {
@@ -485,42 +495,3 @@ function buildCentroids(): Map<string, [number, number]> {
 
 /** ISO-2 -> [lon, lat], computed once from the polygons (plus small-territory points). */
 export const centroids: ReadonlyMap<string, [number, number]> = buildCentroids();
-
-// ---- hotspots -----------------------------------------------------------------
-
-/** Small fixed [dLon, dLat] per kind so several kinds in one country do not fully overlap. */
-export const KIND_OFFSET: Readonly<Record<GeoKind, [number, number]>> = {
-  scan: [0, 0],
-  outage: [0.9, 0.6],
-  victim: [-0.9, 0.6],
-  c2: [0.9, -0.6],
-  bgp: [-0.9, -0.6],
-};
-
-export interface HotspotProps {
-  kind: GeoKind;
-  magnitude: number;
-  events: number;
-  iso2: string;
-  /** Circle radius in px (circleRadius(magnitude)), read by the circle layer. */
-  r: number;
-}
-
-/** One Point per valid (country, kind) at the country centroid (offset by kind). */
-export function toHotspots(items: readonly GeoSummaryItem[]): FeatureCollection<Point, HotspotProps> {
-  const features: Feature<Point, HotspotProps>[] = [];
-  for (const it of items) {
-    if (!it || !isIso2(it.country_code) || !isGeoKind(it.kind)) continue;
-    const c = centroids.get(it.country_code);
-    if (!c) continue;
-    const [dx, dy] = KIND_OFFSET[it.kind];
-    const magnitude = Number.isFinite(Number(it.magnitude)) ? Number(it.magnitude) : 0;
-    const events = Number.isFinite(Number(it.events)) ? Number(it.events) : 0;
-    features.push({
-      type: "Feature",
-      properties: { kind: it.kind, magnitude, events, iso2: it.country_code, r: circleRadius(magnitude) },
-      geometry: { type: "Point", coordinates: [normLon(c[0] + dx), Math.max(-85, Math.min(85, c[1] + dy))] },
-    });
-  }
-  return { type: "FeatureCollection", features };
-}

@@ -35,15 +35,6 @@ export const KIND_LABEL: Record<GeoKind, string> = {
   bgp: "BGP anomaly",
 };
 
-/** Phrase used in the accessible summary: "N countries with <phrase>". */
-const KIND_PHRASE: Record<GeoKind, string> = {
-  outage: "outages",
-  scan: "exploit scanning",
-  victim: "victim disclosures",
-  c2: "C2 infrastructure",
-  bgp: "BGP anomalies",
-};
-
 /**
  * Strict ISO 3166-1 alpha-2 check. The backend contract is upper-case ISO-2; anything else
  * (null, lower-case, alpha-3, empty) is malformed and skipped rather than guessed at.
@@ -52,49 +43,27 @@ export function isIso2(code: unknown): code is string {
   return typeof code === "string" && /^[A-Z]{2}$/.test(code);
 }
 
-// ---- outage shading ---------------------------------------------------------
+// ---- choropleth ---------------------------------------------------------------
 
-/** Outage magnitude below this is shading level 1 (light tint). */
-export const OUTAGE_LEVEL_1_MAX = 2;
-/** Outage magnitude below this (and >= OUTAGE_LEVEL_1_MAX) is level 2; at or above it, level 3. */
-export const OUTAGE_LEVEL_2_MAX = 5;
+/** Share of the alert colour mixed into the land colour, per bucket 0..4 (darker = more alerts). */
+export const CHORO_STEPS = [0.16, 0.32, 0.5, 0.7, 0.9] as const;
+export type Bucket = 0 | 1 | 2 | 3 | 4;
 
-export type ShadeLevel = 0 | 1 | 2 | 3;
-
-/** 0 = none (no outage, or a non-positive / non-finite magnitude), 1 = < 2, 2 = < 5, 3 = >= 5. */
-export function outageLevel(magnitude: number): ShadeLevel {
-  if (!Number.isFinite(magnitude) || magnitude <= 0) return 0;
-  if (magnitude < OUTAGE_LEVEL_1_MAX) return 1;
-  if (magnitude < OUTAGE_LEVEL_2_MAX) return 2;
-  return 3;
+/** sqrt-scaled bucket of `n` against `max`; null when there is nothing to paint (n or max not positive, or NaN). */
+export function choroplethBucket(n: number, max: number): Bucket | null {
+  if (!(n > 0) || !(max > 0)) return null;
+  return Math.min(4, Math.floor(Math.sqrt(n / max) * 5)) as Bucket;
 }
 
-/** Country -> shading level from the **outage** items only. Duplicates keep the highest level. */
-export function toCountryShading(items: readonly GeoSummaryItem[]): Map<string, ShadeLevel> {
-  const out = new Map<string, ShadeLevel>();
+/** Events per valid ISO-2 across all kinds. "XX" (unknown) is skipped; non-finite or negative counts as 0. */
+export function countryTotals(items: readonly GeoSummaryItem[]): Map<string, number> {
+  const out = new Map<string, number>();
   for (const it of items) {
-    if (it?.kind !== "outage" || !isIso2(it.country_code)) continue;
-    const level = outageLevel(Number(it.magnitude));
-    out.set(it.country_code, Math.max(out.get(it.country_code) ?? 0, level) as ShadeLevel);
+    if (!it || !isIso2(it.country_code) || it.country_code === "XX") continue;
+    const v = Number(it.events);
+    out.set(it.country_code, (out.get(it.country_code) ?? 0) + (Number.isFinite(v) && v > 0 ? v : 0));
   }
   return out;
-}
-
-/** Alpha of --sev-high blended over --land for shading levels 0..3. */
-export const SHADE_ALPHA: readonly [number, number, number, number] = [0, 0.3, 0.55, 0.8];
-
-// ---- hotspot radius -----------------------------------------------------------
-
-export const RADIUS_MIN = 3;
-export const RADIUS_MAX = 18;
-/** px per natural-log unit of (1 + magnitude). */
-export const RADIUS_SCALE = 4;
-
-/** Circle radius in px: RADIUS_MIN + RADIUS_SCALE * ln(1 + magnitude), clamped to [3, 18]. */
-export function circleRadius(magnitude: number): number {
-  const m = Number.isFinite(magnitude) && magnitude > 0 ? magnitude : 0;
-  const r = RADIUS_MIN + RADIUS_SCALE * Math.log1p(m);
-  return Math.min(RADIUS_MAX, Math.max(RADIUS_MIN, r));
 }
 
 // ---- names, ranking, summaries ----------------------------------------------------
@@ -116,63 +85,27 @@ export function countryName(iso2: string): string {
   }
 }
 
-function finite(n: unknown): number {
-  const v = Number(n);
-  return Number.isFinite(v) ? v : 0;
-}
-
-/** Valid items only: ISO-2 country and a known kind. */
-export function validItems(items: readonly GeoSummaryItem[]): GeoSummaryItem[] {
-  return items.filter((it) => it && isIso2(it.country_code) && isGeoKind(it.kind));
-}
-
 export interface RankedCountry {
   iso2: string;
   name: string;
-  magnitude: number;
   events: number;
-  kinds: GeoKind[];
 }
 
-/** Countries ranked by total magnitude across kinds (ties: more events, then code). */
-export function rankCountries(items: readonly GeoSummaryItem[], limit = 10): RankedCountry[] {
-  const by = new Map<string, RankedCountry>();
-  for (const it of validItems(items)) {
-    const row = by.get(it.country_code) ?? { iso2: it.country_code, name: "", magnitude: 0, events: 0, kinds: [] };
-    row.magnitude += Math.max(0, finite(it.magnitude));
-    row.events += Math.max(0, finite(it.events));
-    if (!row.kinds.includes(it.kind as GeoKind)) row.kinds.push(it.kind as GeoKind);
-    by.set(it.country_code, row);
-  }
-  return [...by.values()]
-    .sort((a, b) => b.magnitude - a.magnitude || b.events - a.events || a.iso2.localeCompare(b.iso2))
+/** Countries ranked by total events (ties: code). Countries with no events are dropped. */
+export function rankCountries(totals: ReadonlyMap<string, number>, limit = 10): RankedCountry[] {
+  return [...totals]
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, Math.max(0, limit))
-    .map((r) => ({ ...r, name: countryName(r.iso2), kinds: GEO_KINDS.filter((k) => r.kinds.includes(k)) }));
+    .map(([iso2, events]) => ({ iso2, name: countryName(iso2), events }));
 }
 
-/** Individual (country, kind) hotspots ranked by magnitude, for the screen-reader list. */
-export function topHotspots(items: readonly GeoSummaryItem[], limit = 10): GeoSummaryItem[] {
-  return validItems(items)
-    .sort((a, b) => finite(b.magnitude) - finite(a.magnitude) || finite(b.events) - finite(a.events))
-    .slice(0, Math.max(0, limit));
-}
-
-const plural = (n: number) => (n === 1 ? "country" : "countries");
-
-/** Accessible name for the globe, e.g. "Global threat map: 3 countries with outages, 12 countries with exploit scanning". */
-export function describeGeo(items: readonly GeoSummaryItem[]): string {
-  const valid = validItems(items);
-  const parts: string[] = [];
-  for (const kind of ["outage", "scan", "victim", "c2", "bgp"] as const) {
-    const n = new Set(
-      valid
-        .filter((it) => it.kind === kind && (kind !== "outage" || outageLevel(finite(it.magnitude)) > 0))
-        .map((it) => it.country_code),
-    ).size;
-    if (n > 0) parts.push(`${n} ${plural(n)} with ${KIND_PHRASE[kind]}`);
-  }
-  if (parts.length === 0) return "Global threat map: no geolocated threat activity in the last 24 hours";
-  return `Global threat map: ${parts.join(", ")}`;
+/** Accessible name for the map, e.g. "Threat map: 3 countries with activity; most active United States, 40 events". */
+export function describeGeo(totals: ReadonlyMap<string, number>, rangeLabel: string): string {
+  const top = rankCountries(totals, 1)[0];
+  if (!top) return `Threat map: no geolocated threat activity in the last ${rangeLabel}`;
+  const n = [...totals.values()].filter((v) => v > 0).length;
+  return `Threat map: ${n} ${n === 1 ? "country" : "countries"} with activity in the last ${rangeLabel}; most active ${top.name}, ${top.events} events`;
 }
 
 // ---- colour -----------------------------------------------------------------

@@ -2,22 +2,17 @@ import type { Feature, Geometry, Position } from "geojson";
 import { describe, expect, it } from "vitest";
 import type { GeoSummaryItem } from "../lib/types";
 import {
-  KIND_OFFSET,
+  CHORO_STEPS,
   NUMERIC_TO_ISO2,
-  OUTAGE_LEVEL_1_MAX,
-  OUTAGE_LEVEL_2_MAX,
-  RADIUS_MAX,
-  RADIUS_MIN,
   centroids,
-  circleRadius,
+  choroplethBucket,
   countries,
+  countryTotals,
   describeGeo,
   iso2FromFeature,
   mixColor,
   rankCountries,
-  toCountryShading,
-  toHotspots,
-  withShading,
+  withBuckets,
 } from "./globeData";
 
 const g = (country_code: string | null, kind: string, magnitude = 1, events = 1): GeoSummaryItem => ({
@@ -36,42 +31,56 @@ function inside([lon, lat]: [number, number], [x0, y0, x1, y1]: BBox): boolean {
   return lon >= x0 && lon <= x1 && lat >= y0 && lat <= y1;
 }
 
-describe("toCountryShading", () => {
-  it("documents its bucket thresholds as constants", () => {
-    expect(OUTAGE_LEVEL_1_MAX).toBe(2);
-    expect(OUTAGE_LEVEL_2_MAX).toBe(5);
-  });
-
-  it("buckets outage magnitude: 0 none, 1 below 2, 2 below 5, 3 at 5 and above", () => {
-    const cases: [number, number][] = [
-      [0, 0],
-      [0.01, 1],
-      [1.99, 1],
-      [2, 2],
-      [4.99, 2],
-      [5, 3],
-      [500, 3],
-      [-1, 0],
-      [Number.NaN, 0],
-      [Number.POSITIVE_INFINITY, 0],
+describe("choroplethBucket", () => {
+  it("sqrt-scales into 5 buckets, capped at 4", () => {
+    const cases: [number, number, number | null][] = [
+      [100, 100, 4],
+      [1, 100, 0],
+      [4, 100, 1],
+      [64, 100, 4],
+      [16, 100, 2],
+      [36, 100, 3],
+      [0, 100, null],
+      [5, 0, null],
+      [Number.NaN, 10, null],
+      [10, Number.NaN, null],
+      [-3, 10, null],
     ];
-    for (const [m, level] of cases) {
-      expect(toCountryShading([g("US", "outage", m)]).get("US") ?? 0, `magnitude ${m}`).toBe(level);
-    }
+    for (const [n, max, want] of cases) expect(choroplethBucket(n, max), `${n}/${max}`).toBe(want);
   });
 
-  it("uses only outage items", () => {
-    const s = toCountryShading([g("US", "scan", 50), g("DE", "victim", 9), g("FR", "outage", 3)]);
-    expect([...s.entries()]).toEqual([["FR", 2]]);
+  it("a single country is its own maximum and gets bucket 4", () => {
+    expect(choroplethBucket(7, 7)).toBe(4);
   });
 
-  it("ignores null, lowercase and malformed country codes", () => {
-    const s = toCountryShading([g(null, "outage", 9), g("us", "outage", 9), g("USA", "outage", 9), g("", "outage", 9)]);
-    expect(s.size).toBe(0);
+  it("documents the colour steps", () => {
+    expect([...CHORO_STEPS]).toEqual([0.16, 0.32, 0.5, 0.7, 0.9]);
+  });
+});
+
+describe("countryTotals", () => {
+  it("sums events across kinds per valid ISO-2", () => {
+    const t = countryTotals([g("US", "scan", 1, 30), g("US", "victim", 1, 4), g("NL", "c2", 1, 2)]);
+    expect([...t.entries()].sort()).toEqual([
+      ["NL", 2],
+      ["US", 34],
+    ]);
   });
 
-  it("returns an empty map for empty input", () => {
-    expect(toCountryShading([]).size).toBe(0);
+  it("ignores XX, lowercase, malformed and null codes, and counts NaN or negative events as 0", () => {
+    const t = countryTotals([
+      g("XX", "scan", 1, 99),
+      g("us", "scan", 1, 99),
+      g("USA", "scan", 1, 99),
+      g(null, "scan", 1, 99),
+      g("DE", "scan", 1, Number.NaN),
+      g("DE", "c2", 1, -5),
+      g("FR", "scan", 1, 3),
+    ]);
+    expect([...t.entries()].sort()).toEqual([
+      ["DE", 0],
+      ["FR", 3],
+    ]);
   });
 });
 
@@ -182,95 +191,85 @@ describe("centroids", () => {
   });
 });
 
-describe("toHotspots", () => {
-  it("emits one point per (country, kind) with kind, magnitude, events and iso2", () => {
-    const fc = toHotspots([g("US", "scan", 7, 120), g("US", "outage", 3, 4), g("NL", "c2", 1, 2)]);
-    expect(fc.type).toBe("FeatureCollection");
-    expect(fc.features).toHaveLength(3);
-    const us = fc.features.find((f) => f.properties.iso2 === "US" && f.properties.kind === "scan")!;
-    expect(us.geometry.type).toBe("Point");
-    expect(us.properties).toMatchObject({ kind: "scan", magnitude: 7, events: 120, iso2: "US" });
+describe("withBuckets", () => {
+  const feature = (fc: ReturnType<typeof withBuckets>, iso: string) =>
+    fc.features.find((f) => f.properties.iso2 === iso)!.properties;
+
+  it("stamps each country with its bucket and count (-1 / 0 when there is no activity)", () => {
+    const fc = withBuckets(
+      new Map([
+        ["US", 100],
+        ["DE", 4],
+        ["SG", 50],
+      ]),
+    );
+    expect(feature(fc, "US")).toMatchObject({ bucket: 4, n: 100 });
+    expect(feature(fc, "DE")).toMatchObject({ bucket: 1, n: 4 });
+    expect(feature(fc, "FR")).toMatchObject({ bucket: -1, n: 0 });
   });
 
-  it("skips null, unknown, lowercase and malformed countries, and unknown kinds", () => {
-    const fc = toHotspots([
-      g(null, "scan"),
-      g("", "scan"),
-      g("ZZ", "scan"),
-      g("us", "scan"),
-      g("USA", "scan"),
-      g("US", "ufo"),
-      g("JP", "bgp"),
-    ]);
-    expect(fc.features.map((f) => f.properties.iso2)).toEqual(["JP"]);
+  it("a country the 110m atlas cannot draw still counts toward the maximum", () => {
+    expect(countries.features.some((f) => f.properties.iso2 === "SG")).toBe(false);
+    // US 25 against max 100 (SG) is bucket 2, not 4
+    expect(
+      feature(
+        withBuckets(
+          new Map([
+            ["US", 25],
+            ["SG", 100],
+          ]),
+        ),
+        "US",
+      ).bucket,
+    ).toBe(2);
   });
 
-  it("offsets kinds sharing a country deterministically, staying near the centroid", () => {
-    const items = ["scan", "outage", "victim", "c2", "bgp"].map((k) => g("DE", k, 2));
-    const a = toHotspots(items);
-    const b = toHotspots(items);
-    expect(a).toEqual(b);
-    const coords = a.features.map((f) => f.geometry.coordinates.join(","));
-    expect(new Set(coords).size).toBe(5);
-    const [cx, cy] = centroids.get("DE")!;
-    for (const f of a.features) {
-      const [x, y] = f.geometry.coordinates;
-      expect(Math.hypot(x - cx, y - cy)).toBeLessThan(2);
+  it("one country alone is bucket 4", () => {
+    expect(feature(withBuckets(new Map([["JP", 3]])), "JP").bucket).toBe(4);
+  });
+
+  it("an empty, all-zero or NaN map paints nothing and does not throw", () => {
+    for (const m of [new Map<string, number>(), new Map([["US", 0]]), new Map([["US", Number.NaN]])]) {
+      const fc = withBuckets(m);
+      expect(fc.features.every((f) => f.properties.bucket === -1 && f.properties.n === 0)).toBe(true);
     }
-    expect(Object.keys(KIND_OFFSET).sort()).toEqual(["bgp", "c2", "outage", "scan", "victim"]);
   });
 
-  it("carries a clamped radius for the circle layer", () => {
-    const fc = toHotspots([g("US", "scan", 1e9)]);
-    expect(fc.features[0].properties.r).toBe(RADIUS_MAX);
-  });
-
-  it("returns an empty collection for empty input", () => {
-    expect(toHotspots([]).features).toEqual([]);
-  });
-});
-
-describe("circleRadius", () => {
-  it("clamps to [3, 18] px on a log scale", () => {
-    expect(RADIUS_MIN).toBe(3);
-    expect(RADIUS_MAX).toBe(18);
-    expect(circleRadius(0)).toBe(3);
-    expect(circleRadius(-5)).toBe(3);
-    expect(circleRadius(Number.NaN)).toBe(3);
-    expect(circleRadius(1e12)).toBe(18);
-    const r = [0.5, 1, 2, 5, 10, 20].map(circleRadius);
-    for (let i = 1; i < r.length; i++) expect(r[i]).toBeGreaterThan(r[i - 1]);
-    // log scale: doubling from 10 to 20 adds far less than doubling from 0.5 to 1 relative to magnitude
-    expect(circleRadius(20) - circleRadius(10)).toBeLessThan(circleRadius(10) - circleRadius(0));
-  });
-});
-
-describe("withShading", () => {
-  it("stamps each country with its shading level (0 when absent)", () => {
-    const fc = withShading(new Map([["US", 3 as const]]));
-    const us = fc.features.find((f) => f.properties.iso2 === "US")!;
-    const de = fc.features.find((f) => f.properties.iso2 === "DE")!;
-    expect(us.properties.level).toBe(3);
-    expect(de.properties.level).toBe(0);
-    expect(fc.features).toHaveLength(countries.features.length);
+  it("leaves Antarctica out and keeps every other bundled country", () => {
+    const fc = withBuckets(new Map());
+    expect(fc.features.some((f) => f.properties.iso2 === "AQ")).toBe(false);
+    expect(fc.features.length).toBe(countries.features.filter((f) => f.properties.iso2 !== "AQ").length);
   });
 });
 
 describe("rankCountries and describeGeo", () => {
-  const items = [
+  const totals = countryTotals([
     g("US", "scan", 8, 300),
-    g("US", "outage", 2),
-    g("NL", "scan", 1),
-    g("JP", "outage", 6),
-    g(null, "scan", 99),
-  ];
-  it("ranks valid countries by total magnitude", () => {
-    expect(rankCountries(items).map((r) => r.iso2)).toEqual(["US", "JP", "NL"]);
-    expect(rankCountries(items, 1)).toHaveLength(1);
+    g("US", "outage", 2, 5),
+    g("NL", "scan", 1, 9),
+    g("SG", "scan", 1, 400),
+  ]);
+  it("ranks by events, keeping countries without a polygon", () => {
+    expect(rankCountries(totals).map((r) => r.iso2)).toEqual(["SG", "US", "NL"]);
+    expect(rankCountries(totals, 1)).toHaveLength(1);
+    expect(rankCountries(totals)[1]).toMatchObject({ name: "United States", events: 305 });
   });
-  it("summarises the data for the globe's accessible name", () => {
-    expect(describeGeo(items)).toBe("Global threat map: 2 countries with outages, 2 countries with exploit scanning");
-    expect(describeGeo([])).toBe("Global threat map: no geolocated threat activity in the last 24 hours");
+  it("breaks ties by code and drops zero-event countries", () => {
+    expect(
+      rankCountries(
+        new Map([
+          ["FR", 5],
+          ["DE", 5],
+          ["IT", 0],
+        ]),
+      ).map((r) => r.iso2),
+    ).toEqual(["DE", "FR"]);
+  });
+  it("summarises the data for the map's accessible name", () => {
+    expect(describeGeo(totals, "7 days")).toBe(
+      "Threat map: 3 countries with activity in the last 7 days; most active Singapore, 400 events",
+    );
+    expect(describeGeo(new Map(), "7 days")).toBe("Threat map: no geolocated threat activity in the last 7 days");
   });
 });
 

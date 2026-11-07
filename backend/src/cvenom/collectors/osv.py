@@ -225,6 +225,50 @@ class OsvCollector(Collector):
         return ids
 
     @staticmethod
+    def _versions(rec: dict) -> list[dict]:
+        """Affected version ranges from SEMVER/ECOSYSTEM ranges (GIT and `versions` ignored).
+
+        Each ``introduced`` event opens an entry; the next ``fixed`` / ``last_affected`` closes it.
+        """
+        out: list[dict] = []
+        for aff in rec.get("affected") or []:
+            pkg = aff.get("package") or {}
+            name = pkg.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            ecosystem = pkg.get("ecosystem")
+            for rng in aff.get("ranges") or []:
+                if rng.get("type") not in ("SEMVER", "ECOSYSTEM"):
+                    continue
+                current: dict | None = None
+                for ev in rng.get("events") or []:
+                    if not isinstance(ev, dict):
+                        continue
+                    if isinstance(ev.get("introduced"), str):
+                        if current is not None:
+                            out.append(current)
+                        intro = ev["introduced"]
+                        current = {
+                            "product": name,
+                            "vendor": None,
+                            "ecosystem": ecosystem if isinstance(ecosystem, str) else None,
+                            "introduced": None if intro == "0" else intro,
+                            "fixed": None,
+                            "last_affected": None,
+                            "source": "OSV",
+                        }
+                    elif current is not None:
+                        for key in ("fixed", "last_affected"):
+                            if isinstance(ev.get(key), str):
+                                current[key] = ev[key]
+                                out.append(current)
+                                current = None
+                                break
+                if current is not None:
+                    out.append(current)
+        return out
+
+    @staticmethod
     def _signals(rec: dict) -> tuple[bool, list[str]]:
         """(patch available, affected package labels) for one OSV record."""
         patch = False
@@ -246,6 +290,7 @@ class OsvCollector(Collector):
         # per CVE across the run so the result is order-independent.
         patch_by_cve: dict[str, bool] = {}
         affected_by_cve: dict[str, list[str]] = {}
+        versions_by_cve: dict[str, list[dict]] = {}
         for rec in raw:
             try:
                 if not isinstance(rec, dict):
@@ -254,6 +299,7 @@ class OsvCollector(Collector):
                 if not cve_ids:
                     continue
                 patch, affected = self._signals(rec)
+                versions = self._versions(rec)
             except (AttributeError, TypeError, ValueError):
                 rid = rec.get("id") if isinstance(rec, dict) else "?"
                 log.warning("osv: skipping malformed record %s", rid)
@@ -262,8 +308,15 @@ class OsvCollector(Collector):
                 patch_by_cve[cve_id] = patch_by_cve.get(cve_id, False) or patch
                 merged = affected_by_cve.setdefault(cve_id, [])
                 merged.extend(a for a in affected if a not in merged)
+                vmerged = versions_by_cve.setdefault(cve_id, [])
+                vmerged.extend(v for v in versions if v not in vmerged)
         cves = [
-            NormalizedCve(cve_id=cve_id, patch_available=patch, affected=affected_by_cve[cve_id])
+            NormalizedCve(
+                cve_id=cve_id,
+                patch_available=patch,
+                affected=affected_by_cve[cve_id],
+                affected_versions=versions_by_cve[cve_id] or None,
+            )
             for cve_id, patch in patch_by_cve.items()
         ]
         return CollectorResult(cves=cves)

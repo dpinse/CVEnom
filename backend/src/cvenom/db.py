@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from cvenom.config import get_settings
 from cvenom.models import Cve
-from cvenom.schemas import NormalizedCve
+from cvenom.schemas import MAX_AFFECTED_VERSIONS, NormalizedCve
 
 
 @lru_cache
@@ -47,6 +47,22 @@ _KEV_DETAIL_FIELDS = ("kev_name", "kev_action", "kev_due", "kev_notes")
 # Lists replaced wholesale whenever the incoming value is not None (None = not provided).
 _LIST_FIELDS = ("cwes", "references")
 
+def _merge_affected_versions(existing: list[dict], incoming: list[dict]) -> list[dict]:
+    """Replace per source: drop stored entries whose source is in ``incoming``, append it.
+
+    Deduped on the whole entry, in order, capped at MAX_AFFECTED_VERSIONS.
+    """
+    sources = {e.get("source") for e in incoming}
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for entry in [e for e in existing if e.get("source") not in sources] + list(incoming):
+        key = tuple(sorted(entry.items()))
+        if key not in seen:
+            seen.add(key)
+            out.append(entry)
+    return out[:MAX_AFFECTED_VERSIONS]
+
+
 # kev_source with precedence: an incoming non-CISA source never replaces CISA.
 _KEV_SOURCE_CISA = "cisa"
 
@@ -64,7 +80,7 @@ def upsert_cve(session: Session, data: NormalizedCve) -> Cve:
     row = session.get(Cve, data.cve_id)
     if row is None:
         row = Cve(cve_id=data.cve_id, kev=False, poc_badge=False, affected=[], summary="",
-                  cwes=[], references=[])
+                  cwes=[], references=[], affected_versions=[])
         session.add(row)
     for field in _MERGE_FIELDS:
         value = getattr(data, field)
@@ -86,6 +102,10 @@ def upsert_cve(session: Session, data: NormalizedCve) -> Cve:
         value = getattr(data, field)
         if value is not None:
             setattr(row, field, [v.model_dump() if hasattr(v, "model_dump") else v for v in value])
+    if data.affected_versions is not None:
+        row.affected_versions = _merge_affected_versions(
+            list(row.affected_versions or []), [a.model_dump() for a in data.affected_versions]
+        )
     if data.patch_available is not None:
         # Sticky True: one source saying "fixed" is not undone by a later "no fix".
         row.patch_available = row.patch_available is True or data.patch_available

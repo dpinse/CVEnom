@@ -11,7 +11,9 @@
       "patch_available": true,
       "published": "2026-10-30T00:00:00Z",
       "summary": "Acme Gateway 4.2 remote code execution",
-      "recent_story_count": 1
+      "recent_story_count": 1,
+      "product": "Acme Gateway",
+      "last_seen": "2026-11-05T11:00:00Z"
     }
   ],
   "page": 1,

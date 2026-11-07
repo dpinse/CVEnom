@@ -1,0 +1,459 @@
+/* Threat page (/threats/:cveId). Tokens only; text never uses --faint. */
+.threat {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.threat > * {
+  min-width: 0;
+}
+.threat .small {
+  font-size: 12.5px;
+  margin: 0;
+}
+.threat .muted {
+  color: var(--muted);
+}
+.threat .num,
+.threat .mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.threat .panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.threat h1 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.threat h2 {
+  margin: 0;
+  font-size: 16px;
+  font-family: var(--font-display);
+}
+.threat h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.threat .c-crit {
+  color: var(--sev-crit);
+}
+.threat .c-high {
+  color: var(--sev-high);
+}
+.threat .c-med {
+  color: var(--sev-med);
+}
+.threat .c-low {
+  color: var(--sev-low);
+}
+
+.threat .crumb {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.threat .crumb a {
+  color: var(--muted);
+}
+.threat .t-head {
+  display: grid;
+  gap: 8px;
+}
+.threat .idline {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  font: 500 14px var(--font-mono);
+  color: var(--muted);
+}
+.threat .sevpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 500 12.5px var(--font-mono);
+  white-space: nowrap;
+}
+.threat .sevpill i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.threat .sevpill .s-crit {
+  background: var(--sev-crit);
+}
+.threat .sevpill .s-high {
+  background: var(--sev-high);
+}
+.threat .sevpill .s-med {
+  background: var(--sev-med);
+}
+.threat .sevpill .s-low {
+  background: var(--sev-low);
+}
+
+.threat .status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 12px 16px;
+  font-size: 13px;
+  align-items: center;
+}
+.threat .status b {
+  font-weight: 600;
+}
+.threat .status .on {
+  color: var(--live);
+}
+.threat .status .ok {
+  color: var(--sev-low);
+}
+.threat .status .asof {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.threat .t-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 20px;
+  align-items: start;
+}
+.threat .t-main {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.threat .t-aside {
+  display: grid;
+  gap: 14px;
+  position: sticky;
+  top: 72px;
+  min-width: 0;
+}
+
+.threat .metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.threat .metric {
+  padding: 14px 16px;
+  border-right: 1px solid var(--line);
+  display: grid;
+  gap: 2px;
+  align-content: start;
+}
+.threat .metric:last-child {
+  border-right: 0;
+}
+.threat .metric .lbl {
+  font-size: 12px;
+  color: var(--muted);
+}
+.threat .metric .val {
+  font: 600 22px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.threat .metric .note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.threat section.blk {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.threat section.blk > h2 {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.threat section.blk > p {
+  margin: 0;
+}
+
+.threat .ladder {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.threat .ladder li {
+  padding: 12px 12px 12px 0;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
+.threat .ladder li::before {
+  content: "";
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line);
+  display: block;
+  margin-bottom: 6px;
+}
+.threat .ladder li.done::before {
+  background: var(--live);
+}
+.threat .ladder li.done.soft::before {
+  background: var(--sev-high);
+}
+.threat .ladder .st {
+  font-weight: 600;
+  font-size: 13px;
+}
+.threat .ladder li:not(.done) .st {
+  color: var(--muted);
+}
+.threat .ladder .ev {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.threat .tl {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+.threat .tl li {
+  display: grid;
+  grid-template-columns: 92px 70px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: 13px;
+  align-items: baseline;
+}
+.threat .tl .d,
+.threat .tl .off {
+  font-family: var(--font-mono);
+  color: var(--muted);
+  font-size: 12px;
+}
+.threat .tl .src {
+  color: var(--muted);
+  font-size: 12px;
+}
+.threat .tl li.key .e {
+  font-weight: 600;
+}
+.threat .tl li > span {
+  overflow-wrap: anywhere;
+}
+
+.threat .tbl-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.threat .vers {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.threat .vers th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.threat .vers td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.threat .vers tr:last-child td {
+  border-bottom: 0;
+}
+.threat .vers td.mono {
+  font-size: 12.5px;
+}
+.threat .vers td.nofix {
+  color: var(--sev-crit);
+}
+
+.threat .action {
+  padding: 12px 16px;
+  border: 1px solid color-mix(in srgb, var(--live) 40%, var(--line));
+  background: color-mix(in srgb, var(--live) 7%, var(--panel));
+  border-radius: var(--radius);
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+.threat .action .who2 {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.threat .prose {
+  max-width: 72ch;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.threat .prose p {
+  margin: 0 0 10px;
+}
+.threat .prose p.muted {
+  white-space: normal;
+}
+
+.threat .vec {
+  margin: 0;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.threat .cvss-v {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 14px;
+  font-size: 12.5px;
+}
+.threat .cvss-v div {
+  display: grid;
+}
+.threat .cvss-v span {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.threat .cvss-v b {
+  font-weight: 500;
+}
+
+.threat .plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.threat .reflist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+.threat .reflist li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+.threat .reflist a {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.threat .reflist .k {
+  font: 500 11px var(--font-mono);
+  color: var(--muted);
+  flex: 0 0 auto;
+  min-width: 64px;
+  max-width: 40%;
+  overflow-wrap: anywhere;
+}
+
+.threat .aside-box {
+  padding: 14px 16px;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.threat .aside-box p {
+  margin: 0;
+}
+.threat .story {
+  display: grid;
+  gap: 1px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.threat .story:last-child {
+  border-bottom: 0;
+}
+.threat .story span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.threat .kv {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  font-size: 13px;
+}
+.threat .kv-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.threat .kv dt,
+.threat .kv dd {
+  margin: 0;
+}
+.threat .geo-attrib {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.threat .t-loading {
+  height: 240px;
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+
+@media (max-width: 1100px) {
+  .threat .t-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .threat .t-aside {
+    position: static;
+  }
+}
+@media (max-width: 820px) {
+  .threat .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .threat .metric:nth-child(2) {
+    border-right: 0;
+  }
+  .threat .metric:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+  .threat .ladder {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .threat .cvss-v {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .threat h1 {
+    font-size: 22px;
+  }
+  .threat .tl li {
+    grid-template-columns: 84px minmax(0, 1fr);
+  }
+  .threat .tl .off {
+    display: none;
+  }
+}

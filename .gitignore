@@ -9,6 +9,8 @@ __pycache__/
 
 # local GeoIP databases
 data/
+# bundled frontend data (CWE names); the GeoIP rule above is backend-only
+!frontend/src/data/
 
 # SDD scratch workspace
 .superpowers/

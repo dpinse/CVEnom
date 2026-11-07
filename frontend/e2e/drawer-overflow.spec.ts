@@ -8,6 +8,7 @@ import { CVE_ID, expect, test } from "./harness";
  * nor the document may scroll horizontally. Routes registered here win over the harness's.
  */
 const BLOB = "A".repeat(600);
+const LONG_URL = `https://tracker.example/${"u".repeat(300)}`;
 const LONG_REF = `https://refs.example/${"b".repeat(280)}`;
 const LONG_VECTOR = `CVSS:3.1/${"AV:N/".repeat(60)}`;
 const LONG_TITLE = `T${"x".repeat(300)}`;
@@ -16,6 +17,7 @@ const STORY_URL = "https://news.example/overflow";
 const SIZES = [
   { width: 1280, height: 800 },
   { width: 400, height: 800 },
+  { width: 320, height: 500 },
 ];
 
 for (const size of SIZES) {
@@ -46,7 +48,7 @@ for (const size of SIZES) {
 
     test("CVE drawer with long unbroken summary, reference and vector", async ({ page }) => {
       const base = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", `cve-${CVE_ID}.json`), "utf8"));
-      await page.route(`**/api/cves/${CVE_ID}`, (route) =>
+      await page.route(`**/api/cves/${CVE_ID}?*`, (route) =>
         route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -65,6 +67,71 @@ for (const size of SIZES) {
       await expect(page.getByRole("dialog")).toBeVisible();
       await expect(page.getByRole("dialog")).toContainText("AAAAAAAAAA");
       await expectNoOverflow(page);
+    });
+
+    test("CVE drawer with a very long summary scrolls inside the drawer and is not cut off", async ({ page }) => {
+      const base = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", `cve-${CVE_ID}.json`), "utf8"));
+      const sentences = Array.from(
+        { length: 40 },
+        (_, i) => `Sentence ${i + 1} describes the flaw in ordinary words and keeps going for a while.`,
+      );
+      const summary = `${sentences.join(" ")} See ${LONG_URL} for details. ENDOFSUMMARY`;
+      await page.route(`**/api/cves/${CVE_ID}?*`, (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...base,
+            summary,
+            affected: Array.from({ length: 50 }, (_, i) => `Vendor-Product-${i}-${"p".repeat(200)}`),
+            references: Array.from({ length: 20 }, (_, i) => ({
+              url: `https://refs.example/${i}/${"c".repeat(120)}`,
+              tags: ["Patch"],
+            })),
+          }),
+        }),
+      );
+      await page.goto(`/?cve=${CVE_ID}`);
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText("Sentence 40");
+      // measure only once the open (slide-in) animation has finished
+      await dialog.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((an) => an.finished)));
+      await expectNoOverflow(page);
+      const m = await page.evaluate(() => {
+        const dlg = document.querySelector<HTMLElement>('[role="dialog"]')!;
+        const body = document.querySelector<HTMLElement>(".dbody")!;
+        const scrollable = body.scrollHeight > body.clientHeight;
+        body.scrollTop = body.scrollHeight;
+        const last = body.lastElementChild!.getBoundingClientRect();
+        const sum = Array.from(body.querySelectorAll<HTMLElement>(".sum")).find((e) =>
+          e.textContent?.includes("ENDOFSUMMARY"),
+        );
+        sum?.scrollIntoView();
+        const s = sum?.getBoundingClientRect();
+        return {
+          scrollable,
+          lastBottom: last.bottom,
+          dlgBottom: dlg.getBoundingClientRect().bottom,
+          dlgRight: dlg.getBoundingClientRect().right,
+          dlgLeft: dlg.getBoundingClientRect().left,
+          sumInView: !!s && s.bottom <= innerHeight + 1 && s.top >= 0,
+          innerWidth,
+          innerHeight,
+        };
+      });
+      expect(m.scrollable, ".dbody scrolls vertically").toBe(true);
+      expect(m.dlgRight, "dialog right edge").toBeLessThanOrEqual(m.innerWidth);
+      expect(m.dlgLeft, "dialog left edge").toBeGreaterThanOrEqual(0);
+      expect(m.dlgBottom, "dialog bottom edge").toBeLessThanOrEqual(m.innerHeight);
+      expect(m.sumInView, "full summary reachable by scrolling .dbody").toBe(true);
+      // scroll to the very bottom: the last section must end inside the viewport
+      const bottom = await page.evaluate(() => {
+        const body = document.querySelector<HTMLElement>(".dbody")!;
+        body.scrollTop = body.scrollHeight;
+        return body.lastElementChild!.getBoundingClientRect().bottom <= innerHeight + 1;
+      });
+      expect(bottom, "last section not cut off").toBe(true);
     });
 
     test("story drawer with long unbroken title and summary", async ({ page }) => {

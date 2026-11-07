@@ -14,3 +14,14 @@ export function relTime(iso: string | null | undefined, now: Date | number = Dat
   if (abs < 365 * 86400) return RTF.format(Math.trunc(sec / (30 * 86400)), "month");
   return RTF.format(Math.trunc(sec / (365 * 86400)), "year");
 }
+
+/** Compact age: "5m ago", "7h ago", "1d ago" (floored, at least 1). Empty string if unparseable. */
+export function shortAgo(iso: string | null | undefined, now: Date | number = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const sec = Math.max(0, ((typeof now === "number" ? now : now.getTime()) - t) / 1000);
+  if (sec < 3600) return `${Math.max(1, Math.floor(sec / 60))}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}

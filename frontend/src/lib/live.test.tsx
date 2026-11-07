@@ -87,15 +87,16 @@ function setup(o: { publicRead?: boolean; token?: string | null; refresh?: () =>
   };
   const counts: Record<string, number> = {};
   const keys: Record<string, readonly unknown[]> = {
-    lanes: qk.lanes(),
-    velocity: qk.velocity(30),
-    geo: qk.geo(24),
-    loud: qk.loud(50),
-    cve: qk.cve("CVE-2025-1"),
+    lanes: qk.lanes("7d", 5),
+    summary: qk.summary("7d"),
+    volume: qk.volume("7d"),
+    geo: qk.geo("7d"),
+    loud: qk.loud("7d", 20),
+    cve: qk.cve("CVE-2025-1", "7d"),
     cves: qk.cves({ q: "x" }),
     stories: qk.stories({ q: "x" }),
     story: qk.story("https://x.test/a"),
-    country: qk.country("DE", 24),
+    country: qk.country("DE", "7d"),
   };
   for (const [name, queryKey] of Object.entries(keys)) {
     counts[name] = 0;
@@ -201,38 +202,38 @@ describe("url and auth", () => {
 });
 
 describe("messages and invalidation", () => {
-  test("updated:[lanes] refetches lanes, velocity, cve, cves but not loud or geo", async () => {
+  test("updated:[lanes] refetches lanes, summary, volume, cve, cves but not loud or geo", async () => {
     const r = await live({ publicRead: true });
     const before = { ...r.counts };
     last().msg({ type: "updated", what: ["lanes"] });
     await vi.advanceTimersByTimeAsync(499);
     expect(r.counts).toEqual(before); // debounced
     await vi.advanceTimersByTimeAsync(2);
-    for (const k of ["lanes", "velocity", "cve", "cves"]) expect(r.counts[k]).toBe(before[k] + 1);
+    for (const k of ["lanes", "summary", "volume", "cve", "cves"]) expect(r.counts[k]).toBe(before[k] + 1);
     for (const k of ["loud", "geo"]) expect(r.counts[k]).toBe(before[k]);
     r.ctl.stop();
   });
 
-  test("stories -> loud, stories and story; geo -> geo and country", async () => {
+  test("stories -> loud, stories, story and lanes; geo -> geo and country", async () => {
     const r = await live({ publicRead: true });
     const before = { ...r.counts };
     last().msg({ type: "updated", what: ["stories"] });
     await vi.advanceTimersByTimeAsync(600);
-    for (const k of ["loud", "stories", "story"]) expect(r.counts[k]).toBe(before[k] + 1);
-    for (const k of ["lanes", "geo", "country"]) expect(r.counts[k]).toBe(before[k]);
+    for (const k of ["loud", "stories", "story", "lanes"]) expect(r.counts[k]).toBe(before[k] + 1);
+    for (const k of ["summary", "volume", "geo", "country"]) expect(r.counts[k]).toBe(before[k]);
     last().msg({ type: "updated", what: ["geo"] });
     await vi.advanceTimersByTimeAsync(600);
     for (const k of ["geo", "country"]) expect(r.counts[k]).toBe(before[k] + 1);
     r.ctl.stop();
   });
 
-  test("stories -> loud only; geo -> geo only", async () => {
+  test("stories -> loud and lanes only; geo -> geo only", async () => {
     const r = await live({ publicRead: true });
     const before = { ...r.counts };
     last().msg({ type: "updated", what: ["stories"] });
     await vi.advanceTimersByTimeAsync(600);
     expect(r.counts.loud).toBe(before.loud + 1);
-    expect(r.counts.lanes).toBe(before.lanes);
+    expect(r.counts.lanes).toBe(before.lanes + 1);
     expect(r.counts.geo).toBe(before.geo);
     last().msg({ type: "updated", what: ["geo"] });
     await vi.advanceTimersByTimeAsync(600);
@@ -250,7 +251,7 @@ describe("messages and invalidation", () => {
     await vi.advanceTimersByTimeAsync(200);
     last().msg({ type: "updated", what: ["stories"] });
     await vi.advanceTimersByTimeAsync(1000);
-    for (const k of ["lanes", "velocity", "cve", "cves", "geo", "loud", "stories", "story", "country"])
+    for (const k of ["lanes", "summary", "volume", "cve", "cves", "geo", "loud", "stories", "story", "country"])
       expect(r.counts[k]).toBe(before[k] + 1);
     r.ctl.stop();
   });
@@ -303,13 +304,13 @@ describe("messages and invalidation", () => {
 
   test("a query still inside its Retry-After window is not invalidated", async () => {
     const r = await live({ publicRead: true });
-    const q = r.qc.getQueryCache().find({ queryKey: qk.lanes() })!;
+    const q = r.qc.getQueryCache().find({ queryKey: qk.lanes("7d", 5) })!;
     q.setState({ ...q.state, status: "error", error: new RateLimited(30), errorUpdatedAt: Date.now() });
     const before = r.counts.lanes;
     last().msg({ type: "updated", what: ["lanes"] });
     await vi.advanceTimersByTimeAsync(1000);
     expect(r.counts.lanes).toBe(before);
-    expect(r.counts.velocity).toBeGreaterThan(0);
+    expect(r.counts.volume).toBeGreaterThan(0);
     r.ctl.stop();
   });
 

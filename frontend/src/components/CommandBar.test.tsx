@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { LiveState } from "../lib/live";
 import { admin, guest, handlers, item, lanes, member, renderAt, signIn, setupMsw } from "../test/shell";
@@ -18,11 +18,33 @@ const bar = (path = "/") => renderAt(<CommandBar />, path);
 const openMenu = (email: RegExp) => fireEvent.click(screen.getByRole("button", { name: email }));
 
 describe("navigation", () => {
-  test("has a History link to /history", async () => {
+  test("has Dashboard and Threats links in the Main nav", async () => {
     handlers();
     guest();
     bar();
-    expect((await screen.findByRole("link", { name: "History" })).getAttribute("href")).toBe("/history");
+    const nav = within(screen.getByRole("navigation", { name: "Main" }));
+    expect(nav.getByRole("link", { name: "Threats" }).getAttribute("href")).toBe("/threats");
+    expect(nav.getByRole("link", { name: "Dashboard" }).getAttribute("href")).toBe("/?range=7d");
+    await screen.findByRole("img", { name: /Situation/ });
+  });
+  test("on /threats the Threats link is current and the range control is hidden", async () => {
+    handlers();
+    guest();
+    bar("/threats?lane=fresh");
+    expect(screen.getByRole("link", { name: "Threats" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
+    expect(screen.queryByRole("group", { name: "Time range" })).toBeNull();
+    await screen.findByRole("img", { name: /Situation/ });
+  });
+  test("the range control shows on the Dashboard only", async () => {
+    handlers();
+    guest();
+    bar("/");
+    expect(screen.getByRole("group", { name: "Time range" })).toBeInTheDocument();
+    cleanup();
+    bar("/admin/users");
+    expect(screen.queryByRole("group", { name: "Time range" })).toBeNull();
+    await screen.findByRole("img", { name: /Situation/ });
   });
 });
 

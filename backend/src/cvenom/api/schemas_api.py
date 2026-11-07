@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, PlainSerializer
 
@@ -27,13 +27,20 @@ class CveItem(BaseModel):
     published: UtcDatetime | None
     summary: str
     recent_story_count: int
+    product: str | None
+    last_seen: UtcDatetime | None
+
+
+class LaneOut(BaseModel):
+    total: int
+    items: list[CveItem]
 
 
 class LanesOut(BaseModel):
-    EXPLOITED: list[CveItem]
-    LIKELY: list[CveItem]
-    LOUD: list[CveItem]
-    FRESH: list[CveItem]
+    EXPLOITED: LaneOut
+    LIKELY: LaneOut
+    LOUD: LaneOut
+    FRESH: LaneOut
 
 
 class CveListOut(BaseModel):
@@ -41,6 +48,10 @@ class CveListOut(BaseModel):
     page: int
     page_size: int
     total: int
+    # q was an exact CVE id (all other filters ignored); filtered_out = it exists but the
+    # other filters would have hidden it.
+    exact_match: bool = False
+    exact_match_filtered_out: bool = False
 
 
 class StoryRef(BaseModel):
@@ -64,6 +75,36 @@ class CveReferenceOut(BaseModel):
     tags: list[str]
 
 
+class CveEventOut(BaseModel):
+    kind: str
+    occurred_at: UtcDatetime
+    source: str
+    detail: dict
+
+
+class AffectedVersionOut(BaseModel):
+    product: str
+    vendor: str | None = None
+    ecosystem: str | None = None
+    introduced: str | None = None
+    fixed: str | None = None
+    last_affected: str | None = None
+    source: Literal["OSV", "NVD"]
+
+
+class RelatedCve(BaseModel):
+    cve_id: str
+    cvss: float | None
+    kev: bool
+    epss_percentile: float | None
+    product: str | None
+
+
+class GeoTop(BaseModel):
+    country_code: str
+    events: int
+
+
 class CveDetail(CveItem):
     epss: float | None
     affected: list
@@ -79,6 +120,11 @@ class CveDetail(CveItem):
     last_modified: UtcDatetime | None
     stories: list[StoryRef]
     geo_events: list[GeoEventOut]
+    events: list[CveEventOut]
+    affected_versions: list[AffectedVersionOut]
+    related: list[RelatedCve]
+    geo_top: list[GeoTop]
+    updated_at: UtcDatetime
 
 
 class VelocityPoint(BaseModel):
@@ -90,6 +136,31 @@ class VelocityOut(BaseModel):
     series: list[VelocityPoint]
     current: int
     rising: bool
+
+
+class SummaryOut(BaseModel):
+    range: str
+    new_kev: int
+    kev_due_soon: int
+    new_critical: int
+    public_exploits: int
+    latest_kev_added: date | None
+
+
+class VolumeBucket(BaseModel):
+    start: UtcDatetime
+    crit: int
+    high: int
+    med: int
+    low: int
+
+
+class VolumeOut(BaseModel):
+    range: str
+    unit: Literal["hour", "day"]
+    buckets: list[VolumeBucket]
+    total: int
+    unscored: int
 
 
 class GeoSummaryItem(BaseModel):
@@ -116,6 +187,12 @@ class CountryTrendPoint(BaseModel):
     events: int
 
 
+class CountryTopCve(BaseModel):
+    cve_id: str
+    cvss: float | None
+    events: int
+
+
 class CountryEventOut(BaseModel):
     source: str
     kind: str
@@ -133,6 +210,8 @@ class CountryActivityOut(BaseModel):
     counts: list[CountryCount]
     top_sources: list[CountrySource]
     trend: list[CountryTrendPoint]
+    trend_unit: Literal["hour", "day"]
+    top_cves: list[CountryTopCve]
     events: list[CountryEventOut] | None
 
 

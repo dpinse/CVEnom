@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 
 from cvenom.config import Settings
+from cvenom.ranges import DEFAULT_RANGE, RangeKey, range_start, range_start_date
 
 
 class Lane(str, Enum):
@@ -34,30 +35,30 @@ def _utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def lanes_for_cve(v: CveView, now: datetime, cfg: Settings) -> set[Lane]:
+def lanes_for_cve(
+    v: CveView, now: datetime, cfg: Settings, rng: RangeKey = DEFAULT_RANGE
+) -> set[Lane]:
     lanes: set[Lane] = set()
-    if (
-        v.kev
-        and v.kev_added is not None
-        and v.kev_added >= _utc(now).date() - timedelta(days=cfg.exploited_window_days)
-    ):
+    if v.kev and v.kev_added is not None and v.kev_added >= range_start_date(now, rng):
         lanes.add(Lane.EXPLOITED)
     if (
-        v.epss_percentile is not None
+        not v.kev
+        and v.epss_percentile is not None
         and v.epss_percentile >= cfg.epss_percentile_threshold
         and v.published is not None
         and _utc(now) - _utc(v.published) <= timedelta(days=cfg.likely_window_days)
     ):
         lanes.add(Lane.LIKELY)
-    if (
-        v.published is not None
-        and v.cvss is not None
-        and v.cvss >= cfg.fresh_cvss_floor
-        and (_utc(now) - _utc(v.published)) <= timedelta(hours=cfg.fresh_window_hours)
-    ):
-        lanes.add(Lane.FRESH)
     if v.recent_story_count >= 1:
         lanes.add(Lane.LOUD)
+    if (
+        not v.kev
+        and v.published is not None
+        and v.cvss is not None
+        and v.cvss >= cfg.fresh_cvss_floor
+        and _utc(v.published) >= range_start(now, rng)
+    ):
+        lanes.add(Lane.FRESH)
     return lanes
 
 

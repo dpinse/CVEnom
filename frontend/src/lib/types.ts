@@ -91,13 +91,52 @@ export interface CveItem {
   published: string | null;
   summary: string;
   recent_story_count: number;
+  /** "Vendor Product" label derived from the affected list; entity-escaped */
+  product: string | null;
+  /** newest story/event time that mentions the CVE (ISO-8601 UTC) */
+  last_seen: string | null;
 }
-export type LanesOut = Record<Lane, CveItem[]>;
+/** One lane of GET /lanes: `total` counts the whole lane in range, `items` is capped by `limit`. */
+export interface LaneOut {
+  total: number;
+  items: CveItem[];
+}
+export type LanesOut = Record<Lane, LaneOut>;
+
+/** GET /summary?range= */
+export interface SummaryOut {
+  range: string;
+  new_kev: number;
+  kev_due_soon: number;
+  new_critical: number;
+  public_exploits: number;
+  /** "YYYY-MM-DD" or null */
+  latest_kev_added: string | null;
+}
+/** GET /volume?range=: CVE publications bucketed by CVSS band. */
+export interface VolumeBucket {
+  start: string;
+  crit: number;
+  high: number;
+  med: number;
+  low: number;
+}
+export interface VolumeOut {
+  range: string;
+  unit: "hour" | "day";
+  buckets: VolumeBucket[];
+  total: number;
+  unscored: number;
+}
 export interface CveListOut {
   items: CveItem[];
   page: number;
   page_size: number;
   total: number;
+  /** q was an exact CVE id (all other filters are ignored for it) */
+  exact_match?: boolean;
+  /** that CVE exists but the other filters would have hidden it */
+  exact_match_filtered_out?: boolean;
 }
 export interface StoryRef {
   title: string;
@@ -117,6 +156,42 @@ export interface CveReference {
   url: string;
   tags: string[];
 }
+export type CveEventKind =
+  | "reserved"
+  | "published"
+  | "nvd_modified"
+  | "poc_published"
+  | "detection"
+  | "first_news"
+  | "kev_added"
+  | "epss_crossed";
+/** Threat-page timeline row; ascending by occurred_at. `detail` strings are entity-escaped. */
+export interface CveEvent {
+  kind: CveEventKind;
+  occurred_at: string;
+  source: string;
+  detail: Record<string, unknown>;
+}
+export interface AffectedVersion {
+  product: string;
+  vendor: string | null;
+  ecosystem: string | null;
+  introduced: string | null;
+  fixed: string | null;
+  last_affected: string | null;
+  source: "OSV" | "NVD";
+}
+export interface RelatedCve {
+  cve_id: string;
+  cvss: number | null;
+  kev: boolean;
+  epss_percentile: number | null;
+  product: string | null;
+}
+export interface GeoTop {
+  country_code: string;
+  events: number;
+}
 export interface CveDetail extends CveItem {
   epss: number | null;
   affected: unknown[];
@@ -133,15 +208,11 @@ export interface CveDetail extends CveItem {
   cwes: string[];
   references: CveReference[];
   last_modified: string | null;
-}
-export interface VelocityPoint {
-  day: string;
-  count: number;
-}
-export interface VelocityOut {
-  series: VelocityPoint[];
-  current: number;
-  rising: boolean;
+  events: CveEvent[];
+  affected_versions: AffectedVersion[];
+  related: RelatedCve[];
+  geo_top: GeoTop[];
+  updated_at: string;
 }
 export interface GeoSummaryItem {
   country_code: string;
@@ -170,7 +241,13 @@ export interface StoryListOut {
 export interface StoryDetailOut extends StoryItem {
   details: Record<string, unknown>;
 }
+/** `added` is the Threats/News "Added" window (any|day|week|14d|month|90d|year). */
+export type AddedKey = "any" | "day" | "week" | "14d" | "month" | "90d" | "year";
+export type StatusKey = "all" | "exploited" | "likely" | "news" | "critical";
+export type SevKey = "low" | "med" | "high" | "crit";
+export type ThreatsSort = "newest" | "hot" | "trending" | "due";
 export interface StoryQuery {
+  added?: AddedKey;
   q?: string;
   source?: string;
   /** "YYYY-MM-DD", inclusive */
@@ -197,25 +274,37 @@ export interface CountryActivity {
   counts: { kind: string; events: number; magnitude: number }[];
   /** at most 5 */
   top_sources: { source: string; events: number }[];
-  /** exactly window_hours hourly buckets, oldest first */
+  /** oldest first; buckets are hours or days per `trend_unit` */
   trend: { bucket: string; events: number }[];
+  trend_unit: "hour" | "day";
+  /** CVEs most tied to the country's events in the window */
+  top_cves: { cve_id: string; cvss: number | null; events: number }[];
   /** newest first, at most 50; null for anonymous callers */
   events: CountryEvent[] | null;
 }
+/** GET /cves (Threats search). Independent of the Dashboard range. */
 export interface CveQuery {
   q?: string;
+  added?: AddedKey;
+  status?: StatusKey;
+  exclude_kev?: boolean;
+  /** comma list of low|med|high|crit; empty = any */
+  sev?: string;
+  poc?: boolean;
+  nopatch?: boolean;
+  due?: "7d";
+  sort?: ThreatsSort | "kev_added" | "published" | "cvss";
+  page?: number;
+  page_size?: number;
+  // legacy params the API still accepts
   source?: "cisa" | "vulncheck";
   lane?: Lane;
   min_cvss?: number;
   kev?: boolean;
   from?: string;
   to?: string;
-  /** KEV added on/after this "YYYY-MM-DD" */
   kev_from?: string;
   kev_to?: string;
-  sort?: string;
-  page?: number;
-  page_size?: number;
 }
 
 // ---- users / invites (admin) -------------------------------------------

@@ -44,7 +44,8 @@ async function mockApi(page: Page, unexpected: string[]) {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/health") return route.fulfill(json(fixture("health")));
     if (path === "/api/lanes") return route.fulfill(json(fixture("lanes")));
-    if (path === "/api/velocity") return route.fulfill(json(fixture("velocity")));
+    if (path === "/api/summary") return route.fulfill(json(fixture("summary")));
+    if (path === "/api/volume") return route.fulfill(json(fixture("volume")));
     if (path === "/api/geo") return route.fulfill(json(fixture("geo")));
     const geoCc = /^\/api\/geo\/([A-Z]{2})$/.exec(path)?.[1]; // anonymous: events is null
     if (geoCc) return route.fulfill(json(JSON.stringify({ ...JSON.parse(fixture("geo-DE")), country_code: geoCc })));
@@ -63,6 +64,8 @@ interface Guards {
   consoleErrors: string[];
   offOrigin: string[];
   unexpectedApi: string[];
+  /** Every /api request's path + query, in order (the request log specs assert against). */
+  apiRequests: string[];
 }
 
 /**
@@ -73,7 +76,7 @@ export const test = base.extend<{ guards: Guards }>({
   guards: [
     async ({ page, baseURL }, use) => {
       const origin = new URL(baseURL ?? "http://localhost:4173").origin;
-      const guards: Guards = { consoleErrors: [], offOrigin: [], unexpectedApi: [] };
+      const guards: Guards = { consoleErrors: [], offOrigin: [], unexpectedApi: [], apiRequests: [] };
       page.on("pageerror", (e) => guards.consoleErrors.push(`pageerror: ${e.message}`));
       page.on("console", (m) => {
         if (m.type() !== "error") return;
@@ -86,6 +89,8 @@ export const test = base.extend<{ guards: Guards }>({
       });
       page.on("request", (r) => {
         const u = r.url();
+        const parsed = new URL(u.startsWith("http") ? u : "http://x/");
+        if (parsed.pathname.startsWith("/api/")) guards.apiRequests.push(parsed.pathname + parsed.search);
         // Not network requests to a third party, so they are not "off-origin":
         //  - data:  inline images/fonts the app or MapLibre embeds (no network);
         //  - blob:  same-origin object URLs the page itself minted (e.g. MapLibre's canvas/worker plumbing);
@@ -172,7 +177,9 @@ export const MIN_CANVAS = 200;
 
 /** Standard deviation of luminance over a centre crop of the globe canvas, measured from a real screenshot. 0 for a missing or collapsed canvas. */
 export async function canvasCentreStdDev(page: Page): Promise<number> {
-  const box = await page.locator(".globe-map canvas").first().boundingBox();
+  const canvas = page.locator(".globe-map canvas").first();
+  await canvas.scrollIntoViewIfNeeded(); // a taller page above the lanes can leave the globe scrolled out of the clip
+  const box = await canvas.boundingBox();
   if (!box || box.width < MIN_CANVAS || box.height < MIN_CANVAS) return 0;
   const size = 120;
   const clip = {
