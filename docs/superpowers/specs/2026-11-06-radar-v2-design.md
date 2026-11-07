@@ -172,6 +172,11 @@ ones and note it in the ledger):
 - Exploit signals:
   - **Exploit-DB** `https://www.exploit-db.com/rss.xml`: entries mentioning CVE IDs set `poc_badge`, write a
     `poc_published` event (source "Exploit-DB") and add the entry as a reference. Not shown as a news story.
+  - **Metasploit** `https://raw.githubusercontent.com/rapid7/metasploit-framework/master/db/modules_metadata_base.json`
+    (daily, conditional GET, size-capped): each `exploit/*` module's CVE references set `poc_badge` and write one
+    `poc_published` event per CVE (source "Metasploit", detail = module, rank, path, GitHub url; dated by the module's
+    disclosure date, falling back to mod_time) whose url is surfaced as an Exploit reference. auxiliary/post modules
+    are ignored. Enrich-only: never creates CVE rows.
   - **CIRCL OSINT MISP feed** `https://www.circl.lu/doc/misp/feed-osint/manifest.json`: poll manifest, fetch
     only events newer than the last seen timestamp (cap per run), extract `vulnerability`-type attributes →
     stories (title = event `info`, url = the event's CIRCL feed URL, source "CIRCL OSINT") linked to CVEs.
