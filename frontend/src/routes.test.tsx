@@ -4,7 +4,7 @@ import { useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { authStore } from "./lib/api";
 import { __resetBootstrapForTests } from "./lib/useAuth";
-import { AppRoutes } from "./routes";
+import { AppRoutes, legacyThreatsSearch } from "./routes";
 import { admin, guest, handlers, member, renderAt, server, signIn, setupMsw } from "./test/shell";
 
 vi.mock("./lib/live", () => ({ useLiveUpdates: () => ({ status: "live", lastUpdated: null }) }));
@@ -78,15 +78,31 @@ describe("guards", () => {
   test("public server: a guest sees the dashboard and search", async () => {
     handlers({ publicRead: true });
     guest();
-    at("/history");
-    expect(await screen.findByRole("heading", { name: "History" })).toBeInTheDocument();
+    at("/threats");
+    expect(await screen.findByRole("heading", { name: "Threats" })).toBeInTheDocument();
   });
-  test("/search?q=log4j&kev=true redirects to /history?q=log4j&kev=true", async () => {
+  test("/history?kev=true redirects to /threats?status=exploited", async () => {
     handlers({ publicRead: true });
     guest();
-    at("/search?q=log4j&kev=true");
-    expect(await screen.findByRole("heading", { name: "History" })).toBeInTheDocument();
-    expect(screen.getByTestId("loc")).toHaveTextContent("/history?q=log4j&kev=true");
+    at("/history?kev=true");
+    expect(await screen.findByRole("heading", { level: 1, name: "Threats" })).toBeInTheDocument();
+    expect(screen.getByTestId("loc")).toHaveTextContent("/threats?status=exploited");
+  });
+  test("/search?q=x redirects to /threats?q=x", async () => {
+    handlers({ publicRead: true });
+    guest();
+    at("/search?q=x");
+    expect(await screen.findByRole("heading", { level: 1, name: "Threats" })).toBeInTheDocument();
+    expect(screen.getByTestId("loc")).toHaveTextContent(/^\/threats\?q=x$/);
+  });
+  test("/threats/CVE-2026-0001 renders; a bad id is the not-found view", async () => {
+    handlers({ publicRead: true });
+    guest();
+    at("/threats/CVE-2026-0001");
+    expect(await screen.findByRole("heading", { name: "CVE-2026-0001" })).toBeInTheDocument();
+    cleanup();
+    at("/threats/nope");
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
   });
   test("private server: a guest is redirected from / to /login", async () => {
     handlers({ publicRead: false });
@@ -137,5 +153,19 @@ describe("bootstrap", () => {
     release();
     expect(await screen.findByRole("heading", { name: "Change password" })).toBeInTheDocument();
     await waitFor(() => expect(authStore.getSnapshot().user?.email).toBe("member@example.com"));
+  });
+});
+
+describe("legacyThreatsSearch", () => {
+  test.each([
+    ["?kev=true&q=ivanti&page=2", "?q=ivanti&status=exploited"],
+    ["?tab=stories", "?tab=news"],
+    ["", ""],
+    ["?min_cvss=9.5", "?sev=crit"],
+    ["?min_cvss=7", "?sev=high%2Ccrit"],
+    ["?min_cvss=5&from=2026-01-01&lane=LOUD", ""],
+    ["?min_cvss=abc", ""],
+  ])("%s -> %s", (input, out) => {
+    expect(legacyThreatsSearch(input)).toBe(out);
   });
 });

@@ -1,9 +1,11 @@
-import { Link, NavLink } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { useLiveUpdates, type LiveStatus } from "../lib/live";
+import { useRange } from "../lib/range";
 import { useSummary } from "../lib/queries";
 import { situationLevel } from "../lib/situation";
 import { useTheme } from "../lib/theme";
 import { useNow } from "../lib/useNow";
+import { RangeControl } from "./RangeControl";
 import { UserMenu } from "./UserMenu";
 
 const STATUS_TEXT: Record<LiveStatus, string> = {
@@ -73,6 +75,8 @@ function ThemeToggle() {
 }
 
 export function CommandBar() {
+  const { pathname } = useLocation();
+  const { range } = useRange();
   return (
     <header className="command gutter">
       <Link className="brand" to="/">
@@ -82,11 +86,15 @@ export function CommandBar() {
           <span className="kicker">vulnerability threat radar</span>
         </span>
       </Link>
-      <nav className="cnav" aria-label="Primary">
-        <NavLink to="/history">History</NavLink>
+      <nav className="cnav" aria-label="Main">
+        <NavLink to={{ pathname: "/", search: `?range=${range}` }} end>
+          Dashboard
+        </NavLink>
+        <NavLink to="/threats">Threats</NavLink>
       </nav>
       <Situation />
       <div className="cspacer" />
+      {pathname === "/" && <RangeControl />}
       <LiveStatusReadout />
       <ThemeToggle />
       <UserMenu />

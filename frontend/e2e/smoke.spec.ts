@@ -139,15 +139,25 @@ test("400px: the drawer fits the viewport (no horizontal scroll, dialog <= 400px
   expect(m.dialog).toBeLessThanOrEqual(400);
 });
 
-test("/search?q=x redirects to /history?q=x and the History nav link is visible", async ({ page }) => {
+test("/search?q=x redirects to /threats?q=x and the Threats nav link is current", async ({ page }) => {
   await page.goto("/search?q=x");
-  await expect(page).toHaveURL(/\/history\?q=x$/);
-  await expect(page.getByRole("heading", { level: 1, name: "History" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "History" })).toBeVisible();
+  await expect(page).toHaveURL(/\/threats\?q=x$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Threats" })).toBeVisible();
+  const nav = page.getByRole("navigation", { name: "Main" });
+  await expect(nav.getByRole("link", { name: "Threats" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("group", { name: "Time range" })).toHaveCount(0);
   await expect(page.getByTestId("search-row")).toHaveCount(1);
-  await page.getByRole("tab", { name: "Stories" }).click();
-  await expect(page).toHaveURL(/\/history\?tab=stories$/);
+  await page.getByRole("tab", { name: "News" }).click();
+  await expect(page).toHaveURL(/\/threats\?tab=news$/);
   await expect(page.getByTestId("history-story")).toHaveCount(1);
+});
+
+test("the range control shows on the Dashboard only and writes ?range=", async ({ page }) => {
+  await loaded(page);
+  await page.getByRole("button", { name: "14d" }).click();
+  await expect(page).toHaveURL(/[?&]range=14d/);
+  await page.getByRole("link", { name: "Threats" }).click();
+  await expect(page.getByRole("group", { name: "Time range" })).toHaveCount(0);
 });
 
 test.describe("country drawer from the keyboard hotspot list", () => {

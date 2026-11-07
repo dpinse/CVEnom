@@ -140,7 +140,7 @@ export function OutOfRange() {
   return (
     <p className="sempty">
       No results on this page <span aria-hidden="true">·</span>{" "}
-      <Link to={{ pathname: "/history", search: qs ? `?${qs}` : "" }}>Go to page 1</Link>
+      <Link to={{ pathname: "/threats", search: qs ? `?${qs}` : "" }}>Go to page 1</Link>
     </p>
   );
 }

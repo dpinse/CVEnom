@@ -5,8 +5,8 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { item, renderAt, server, setupMsw } from "../test/shell";
 import type { CveListOut, StoryItem, StoryListOut } from "../lib/types";
-import History, { DEBOUNCE_MS, parseFilters } from "./History";
-import { parseStoryFilters } from "./HistoryStories";
+import Threats, { DEBOUNCE_MS, parseFilters } from "./Threats";
+import { parseStoryFilters } from "./ThreatsNews";
 
 setupMsw({ ready: true });
 afterEach(cleanup);
@@ -21,7 +21,7 @@ function Probe() {
 }
 const ui = (
   <>
-    <History />
+    <Threats />
     <Probe />
   </>
 );
@@ -55,10 +55,10 @@ describe("parseFilters", () => {
   });
 });
 
-describe("History page (CVEs)", () => {
+describe("Threats page (CVEs)", () => {
   test("invalid URL params are never sent to the API", async () => {
     api(() => list());
-    renderAt(ui, "/history?lane=BOGUS&min_cvss=11&from=2026-13-45&page=0");
+    renderAt(ui, "/threats?lane=BOGUS&min_cvss=11&from=2026-13-45&page=0");
     await screen.findByText("CVE-2026-0001");
     const sp = seen[0];
     for (const k of ["lane", "min_cvss", "from"]) expect(sp.has(k)).toBe(false);
@@ -68,7 +68,7 @@ describe("History page (CVEs)", () => {
 
   test("params round-trip through the URL into inputs and request", async () => {
     api(() => list());
-    renderAt(ui, "/history?q=log4j&lane=LOUD&source=cisa&min_cvss=7.5&kev=true&from=2026-01-01&to=2026-02-01&page=1");
+    renderAt(ui, "/threats?q=log4j&lane=LOUD&source=cisa&min_cvss=7.5&kev=true&from=2026-01-01&to=2026-02-01&page=1");
     await screen.findByText("CVE-2026-0001");
     expect((screen.getByLabelText("Search CVEs") as HTMLInputElement).value).toBe("log4j");
     expect((screen.getByLabelText("Lane") as HTMLSelectElement).value).toBe("LOUD");
@@ -89,15 +89,15 @@ describe("History page (CVEs)", () => {
 
   test("changing a filter writes the URL", async () => {
     api(() => list());
-    renderAt(ui, "/history");
+    renderAt(ui, "/threats");
     await screen.findByText("CVE-2026-0001");
     fireEvent.change(screen.getByLabelText("Lane"), { target: { value: "FRESH" } });
-    await waitFor(() => expect(lastUrl).toBe("/history?lane=FRESH"));
+    await waitFor(() => expect(lastUrl).toBe("/threats?lane=FRESH"));
   });
 
   test("typing debounces into a single request", async () => {
     api(() => list());
-    renderAt(ui, "/history");
+    renderAt(ui, "/threats");
     await screen.findByText("CVE-2026-0001");
     const before = seen.length;
     const input = screen.getByLabelText("Search CVEs");
@@ -106,22 +106,22 @@ describe("History page (CVEs)", () => {
     expect(seen.length).toBe(before);
     await waitFor(() => expect(seen.length).toBe(before + 1));
     expect(seen[seen.length - 1].get("q")).toBe("log4");
-    expect(lastUrl).toBe("/history?q=log4");
+    expect(lastUrl).toBe("/threats?q=log4");
   });
 
   test("whitespace-only q sends nothing; padded q is trimmed", async () => {
     api(() => list());
-    renderAt(ui, "/history");
+    renderAt(ui, "/threats");
     await screen.findByText("CVE-2026-0001");
     const before = seen.length;
     const input = screen.getByLabelText("Search CVEs");
     fireEvent.change(input, { target: { value: "   " } });
     await new Promise((r) => setTimeout(r, DEBOUNCE_MS + 100));
-    expect(lastUrl).toBe("/history");
+    expect(lastUrl).toBe("/threats");
     expect(seen.length).toBe(before);
     fireEvent.change(input, { target: { value: "  log4j  " } });
     await waitFor(() => expect(seen[seen.length - 1].get("q")).toBe("log4j"));
-    expect(lastUrl).toBe("/history?q=log4j");
+    expect(lastUrl).toBe("/threats?q=log4j");
     expect(parseFilters(new URLSearchParams("q=%20%20%20")).q).toBeUndefined();
   });
 
@@ -129,14 +129,14 @@ describe("History page (CVEs)", () => {
     api(() => list());
     function Nav() {
       const nav = useNavigate();
-      return <button onClick={() => nav("/history?q=back")}>go</button>;
+      return <button onClick={() => nav("/threats?q=back")}>go</button>;
     }
     renderAt(
       <>
         {ui}
         <Nav />
       </>,
-      "/history",
+      "/threats",
     );
     await screen.findByText("CVE-2026-0001");
     const input = screen.getByLabelText("Search CVEs") as HTMLInputElement;
@@ -145,13 +145,13 @@ describe("History page (CVEs)", () => {
     await waitFor(() => expect(input.value).toBe("back"));
     await new Promise((r) => setTimeout(r, DEBOUNCE_MS + 100));
     expect(input.value).toBe("back");
-    expect(lastUrl).toBe("/history?q=back");
+    expect(lastUrl).toBe("/threats?q=back");
     expect(seen.some((sp) => sp.get("q") === "stale")).toBe(false);
   });
 
   test("paging moves focus to the result count; table has explicit roles", async () => {
     api((sp) => list(many(50), 120, Number(sp.get("page") ?? 1)));
-    renderAt(ui, "/history");
+    renderAt(ui, "/threats");
     await screen.findByText("Showing 1–50 of 120");
     expect(screen.getAllByRole("columnheader").length).toBe(6);
     expect(screen.getAllByRole("cell").length).toBeGreaterThan(0);
@@ -169,7 +169,7 @@ describe("History page (CVEs)", () => {
     vi.stubGlobal("matchMedia", (q: string) => ({ matches: reduce && q.includes("prefers-reduced-motion"), media: q }));
     try {
       api((sp) => list(many(50), 120, Number(sp.get("page") ?? 1)));
-      renderAt(ui, "/history");
+      renderAt(ui, "/threats");
       await screen.findByText("Showing 1–50 of 120");
       fireEvent.click(screen.getByText("Next"));
       await screen.findByText("Showing 51–100 of 120");
@@ -182,7 +182,7 @@ describe("History page (CVEs)", () => {
 
   test("a 201-char q is blocked at the input and truncated from the URL", async () => {
     api(() => list());
-    renderAt(ui, `/history?q=${"a".repeat(201)}`);
+    renderAt(ui, `/threats?q=${"a".repeat(201)}`);
     await screen.findByText("CVE-2026-0001");
     expect(seen[0].get("q")).toHaveLength(200);
     const input = screen.getByLabelText("Search CVEs") as HTMLInputElement;
@@ -192,7 +192,7 @@ describe("History page (CVEs)", () => {
 
   test("q with & # % is encoded correctly", async () => {
     api(() => list());
-    renderAt(ui, "/history?q=a%26b%23c%25d");
+    renderAt(ui, "/threats?q=a%26b%23c%25d");
     await screen.findByText("CVE-2026-0001");
     expect(seen[0].get("q")).toBe("a&b#c%d");
     expect(seen[0].has("c")).toBe(false);
@@ -200,7 +200,7 @@ describe("History page (CVEs)", () => {
 
   test("the cve param survives filter changes", async () => {
     api(() => list());
-    renderAt(ui, "/history?cve=CVE-2026-0001");
+    renderAt(ui, "/threats?cve=CVE-2026-0001");
     await screen.findByText("CVE-2026-0001");
     fireEvent.change(screen.getByLabelText("Lane"), { target: { value: "LOUD" } });
     await waitFor(() => expect(lastUrl).toContain("lane=LOUD"));
@@ -212,13 +212,13 @@ describe("History page (CVEs)", () => {
 
   test("pagination requests page 2; prev disabled on 1; next disabled at the end", async () => {
     api((sp) => list(many(50), 120, Number(sp.get("page") ?? 1)));
-    renderAt(ui, "/history");
+    renderAt(ui, "/threats");
     await screen.findByText("Showing 1–50 of 120");
     expect(screen.getByText("Previous")).toBeDisabled();
     fireEvent.click(screen.getByText("Next"));
     await screen.findByText("Showing 51–100 of 120");
     expect(seen[seen.length - 1].get("page")).toBe("2");
-    expect(lastUrl).toBe("/history?page=2");
+    expect(lastUrl).toBe("/threats?page=2");
     fireEvent.click(screen.getByText("Next"));
     await screen.findByText("Showing 101–120 of 120");
     expect(screen.getByText("Next")).toBeDisabled();
@@ -227,7 +227,7 @@ describe("History page (CVEs)", () => {
 
   test("empty state", async () => {
     api(() => list([], 0));
-    renderAt(ui, "/history?q=zzz");
+    renderAt(ui, "/threats?q=zzz");
     expect(await screen.findByText("No CVEs match these filters")).toBeInTheDocument();
   });
 
@@ -239,33 +239,33 @@ describe("History page (CVEs)", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-    renderAt(ui, "/history?page=3");
+    renderAt(ui, "/threats?page=3");
     expect(await screen.findByText("Some filters aren't valid")).toBeInTheDocument();
     await waitFor(() => expect(lastUrl).not.toContain("page="));
   });
 
   test("rate limit shows retry seconds", async () => {
     api(() => new HttpResponse(null, { status: 429, headers: { "Retry-After": "17" } }));
-    renderAt(ui, "/history");
+    renderAt(ui, "/threats");
     expect(await screen.findByText(/Try again in 17 s/)).toBeInTheDocument();
   });
 
   test("date order hint", async () => {
     api(() => list());
-    renderAt(ui, "/history?from=2026-05-01&to=2026-01-01");
+    renderAt(ui, "/threats?from=2026-05-01&to=2026-01-01");
     expect(await screen.findByRole("note")).toBeInTheDocument();
   });
 
   test("row click opens the drawer via ?cve=", async () => {
     api(() => list());
-    renderAt(ui, "/history");
+    renderAt(ui, "/threats");
     fireEvent.click(await screen.findByText("CVE-2026-0001"));
     await waitFor(() => expect(lastUrl).toContain("cve=CVE-2026-0001"));
   });
 
   test("&lt;script&gt; summary renders as literal text", async () => {
     api(() => list([item({ summary: "&lt;script&gt;alert(1)&lt;/script&gt;" })]));
-    const { container } = renderAt(ui, "/history");
+    const { container } = renderAt(ui, "/threats");
     expect(await screen.findByText("<script>alert(1)</script>")).toBeInTheDocument();
     expect(container.querySelector("script")).toBeNull();
   });
@@ -323,44 +323,44 @@ describe("parseStoryFilters", () => {
   });
 });
 
-describe("History tabs", () => {
-  test("the heading is History and CVEs is the default tab", async () => {
+describe("Threats tabs", () => {
+  test("the heading is Threats and CVEs is the default tab", async () => {
     api(() => list());
-    renderAt(ui, "/history");
-    expect(screen.getByRole("heading", { level: 1, name: "History" })).toBeInTheDocument();
+    renderAt(ui, "/threats");
+    expect(screen.getByRole("heading", { level: 1, name: "Threats" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "CVEs" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tablist")).toBeInTheDocument();
     await screen.findByText("CVE-2026-0001");
   });
 
-  test("?tab=stories renders the Stories tab; switching tabs clears q but keeps the drawer selection", async () => {
+  test("?tab=news renders the Stories tab; switching tabs clears q but keeps the drawer selection", async () => {
     api(() => list());
     storiesApi(() => sList());
-    renderAt(ui, "/history?tab=stories&q=foo&cve=CVE-2026-0001");
-    expect(screen.getByRole("tab", { name: "Stories" })).toHaveAttribute("aria-selected", "true");
+    renderAt(ui, "/threats?tab=news&q=foo&cve=CVE-2026-0001");
+    expect(screen.getByRole("tab", { name: "News" })).toHaveAttribute("aria-selected", "true");
     await screen.findByText("Big & loud");
     expect((screen.getByLabelText("Search stories") as HTMLInputElement).value).toBe("foo");
     fireEvent.click(screen.getByRole("tab", { name: "CVEs" }));
-    await waitFor(() => expect(lastUrl).toBe("/history?cve=CVE-2026-0001"));
-    fireEvent.click(screen.getByRole("tab", { name: "Stories" }));
-    await waitFor(() => expect(lastUrl).toContain("tab=stories"));
+    await waitFor(() => expect(lastUrl).toBe("/threats?cve=CVE-2026-0001"));
+    fireEvent.click(screen.getByRole("tab", { name: "News" }));
+    await waitFor(() => expect(lastUrl).toContain("tab=news"));
     expect(lastUrl).not.toContain("q=");
   });
 
   test("tabs are operable by keyboard arrows", async () => {
     api(() => list());
     storiesApi(() => sList());
-    renderAt(ui, "/history");
+    renderAt(ui, "/threats");
     await screen.findByText("CVE-2026-0001");
     fireEvent.keyDown(screen.getByRole("tab", { name: "CVEs" }), { key: "ArrowRight" });
-    await waitFor(() => expect(lastUrl).toContain("tab=stories"));
+    await waitFor(() => expect(lastUrl).toContain("tab=news"));
   });
 });
 
 describe("CVEs tab: KEV range and sort", () => {
   test("kev_from, kev_to and sort round-trip; sort=bogus is dropped", async () => {
     api(() => list());
-    renderAt(ui, "/history?kev_from=2026-01-01&kev_to=2026-02-01&sort=cvss");
+    renderAt(ui, "/threats?kev_from=2026-01-01&kev_to=2026-02-01&sort=cvss");
     await screen.findByText("CVE-2026-0001");
     expect((screen.getByLabelText("KEV added from") as HTMLInputElement).value).toBe("2026-01-01");
     expect((screen.getByLabelText("KEV added to") as HTMLInputElement).value).toBe("2026-02-01");
@@ -370,18 +370,18 @@ describe("CVEs tab: KEV range and sort", () => {
     expect(seen[0].get("sort")).toBe("cvss");
     cleanup();
     api(() => list());
-    renderAt(ui, "/history?sort=bogus");
+    renderAt(ui, "/threats?sort=bogus");
     await screen.findByText("CVE-2026-0001");
     expect(seen[0].has("sort")).toBe(false);
   });
 
   test("with KEV only on the select shows Newest KEV listing and no sort param is written", async () => {
     api(() => list());
-    renderAt(ui, "/history");
+    renderAt(ui, "/threats");
     await screen.findByText("CVE-2026-0001");
     expect(screen.getByRole("option", { name: "Newest published" })).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("KEV only"));
-    await waitFor(() => expect(lastUrl).toBe("/history?kev=true"));
+    await waitFor(() => expect(lastUrl).toBe("/threats?kev=true"));
     const sel = screen.getByLabelText("Sort") as HTMLSelectElement;
     expect(sel.selectedOptions[0].textContent).toBe("Newest KEV listing");
     expect(lastUrl).not.toContain("sort=");
@@ -393,7 +393,7 @@ describe("CVEs tab: KEV range and sort", () => {
 
   test("with KEV only and a lane the default sort is Newest published; kev_added is reachable", async () => {
     api(() => list());
-    renderAt(ui, "/history?kev=true&lane=LOUD");
+    renderAt(ui, "/threats?kev=true&lane=LOUD");
     await screen.findByText("CVE-2026-0001");
     const sel = screen.getByLabelText("Sort") as HTMLSelectElement;
     expect(sel.selectedOptions[0].textContent).toBe("Newest published");
@@ -404,18 +404,18 @@ describe("CVEs tab: KEV range and sort", () => {
 
   test("page=40 beyond the total shows No results on this page with a link to page 1", async () => {
     api(() => list([], 120, 40));
-    renderAt(ui, "/history?page=40&q=x");
+    renderAt(ui, "/threats?page=40&q=x");
     expect(await screen.findByText("No results on this page")).toBeInTheDocument();
     expect(screen.getByText("120 results in total")).toBeInTheDocument(); // the real total stays visible
     const link = screen.getByRole("link", { name: "Go to page 1" });
-    expect(link.getAttribute("href")).toBe("/history?q=x");
+    expect(link.getAttribute("href")).toBe("/threats?q=x");
   });
 });
 
 describe("Stories tab", () => {
   test("typing debounces into one /api/stories request; page_size is 50", async () => {
     storiesApi(() => sList());
-    renderAt(ui, "/history?tab=stories");
+    renderAt(ui, "/threats?tab=news");
     await screen.findByText("Big & loud");
     expect(seenStories[0].get("page_size")).toBe("50");
     const before = seenStories.length;
@@ -425,12 +425,12 @@ describe("Stories tab", () => {
     expect(seenStories.length).toBe(before);
     await waitFor(() => expect(seenStories.length).toBe(before + 1));
     expect(seenStories[seenStories.length - 1].get("q")).toBe("log4");
-    expect(lastUrl).toBe("/history?tab=stories&q=log4");
+    expect(lastUrl).toBe("/threats?tab=news&q=log4");
   });
 
   test("a row shows the decoded title once, source and CVE chips; clicking sets ?story=", async () => {
     storiesApi(() => sList([story({ title: "&amp;lt;b&amp;gt; x" })]));
-    const { container } = renderAt(ui, "/history?tab=stories");
+    const { container } = renderAt(ui, "/threats?tab=news");
     expect(await screen.findByText("&lt;b&gt; x")).toBeInTheDocument();
     expect(container.querySelector("b")).toBeNull();
     expect(screen.getByText("Example News")).toBeInTheDocument();
@@ -441,7 +441,7 @@ describe("Stories tab", () => {
 
   test("a 201-char q is blocked at the input and truncated", async () => {
     storiesApi(() => sList());
-    renderAt(ui, `/history?tab=stories&q=${"a".repeat(201)}`);
+    renderAt(ui, `/threats?tab=news&q=${"a".repeat(201)}`);
     await screen.findByText("Big & loud");
     expect(seenStories[0].get("q")).toHaveLength(200);
     expect((screen.getByLabelText("Search stories") as HTMLInputElement).maxLength).toBe(200);
@@ -449,7 +449,7 @@ describe("Stories tab", () => {
 
   test("source and dates go to the request", async () => {
     storiesApi(() => sList());
-    renderAt(ui, "/history?tab=stories&source=Wired&from=2026-01-01&to=2026-02-01");
+    renderAt(ui, "/threats?tab=news&source=Wired&from=2026-01-01&to=2026-02-01");
     await screen.findByText("Big & loud");
     expect(seenStories[0].get("source")).toBe("Wired");
     expect(seenStories[0].get("from")).toBe("2026-01-01");
@@ -458,10 +458,10 @@ describe("Stories tab", () => {
 
   test("page=40 beyond the total shows No results on this page with a link to page 1", async () => {
     storiesApi(() => sList([], 120, 40));
-    renderAt(ui, "/history?tab=stories&page=40");
+    renderAt(ui, "/threats?tab=news&page=40");
     expect(await screen.findByText("No results on this page")).toBeInTheDocument();
     expect(screen.getByText("120 results in total")).toBeInTheDocument(); // the real total stays visible
-    expect(screen.getByRole("link", { name: "Go to page 1" }).getAttribute("href")).toBe("/history?tab=stories");
+    expect(screen.getByRole("link", { name: "Go to page 1" }).getAttribute("href")).toBe("/threats?tab=news");
   });
 
   test("pagination requests page 2", async () => {
@@ -472,7 +472,7 @@ describe("Stories tab", () => {
         Number(sp.get("page") ?? 1),
       ),
     );
-    renderAt(ui, "/history?tab=stories");
+    renderAt(ui, "/threats?tab=news");
     await screen.findByText("Showing 1–50 of 120");
     fireEvent.click(screen.getByText("Next"));
     await screen.findByText("Showing 51–100 of 120");
@@ -481,21 +481,21 @@ describe("Stories tab", () => {
 
   test("blurring the source box unchanged keeps the page", async () => {
     storiesApi((sp) => sList([story()], 120, Number(sp.get("page") ?? 1)));
-    renderAt(ui, "/history?tab=stories&source=Wired&page=2");
+    renderAt(ui, "/threats?tab=news&source=Wired&page=2");
     await screen.findByText("Showing 51–100 of 120");
     const box = screen.getByLabelText("Story source");
     fireEvent.focus(box);
     fireEvent.blur(box);
     await new Promise((r) => setTimeout(r, 50));
-    expect(lastUrl).toBe("/history?tab=stories&source=Wired&page=2");
+    expect(lastUrl).toBe("/threats?tab=news&source=Wired&page=2");
     fireEvent.change(box, { target: { value: "Other" } });
     fireEvent.blur(box);
-    await waitFor(() => expect(lastUrl).toBe("/history?tab=stories&source=Other"));
+    await waitFor(() => expect(lastUrl).toBe("/threats?tab=news&source=Other"));
   });
 
   test("empty state", async () => {
     storiesApi(() => sList([], 0));
-    renderAt(ui, "/history?tab=stories&q=zzz");
+    renderAt(ui, "/threats?tab=news&q=zzz");
     expect(await screen.findByText("No stories match these filters")).toBeInTheDocument();
   });
 });

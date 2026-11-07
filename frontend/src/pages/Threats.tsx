@@ -21,8 +21,8 @@ import {
   useUpdateParams,
   validDate,
   type Patch,
-} from "./historyShared";
-import HistoryStories, { STORY_FILTER_KEYS } from "./HistoryStories";
+} from "./threatsShared";
+import ThreatsNews, { STORY_FILTER_KEYS } from "./ThreatsNews";
 
 export { DEBOUNCE_MS, MAX_Q, PAGE_SIZE };
 
@@ -51,10 +51,10 @@ const FILTER_KEYS = [
 /** Every param either tab owns; switching tabs clears them (the cve / story / country selection survives). */
 const TAB_PARAMS = [...new Set<string>([...FILTER_KEYS, ...STORY_FILTER_KEYS, "tab"])];
 
-type Tab = "cves" | "stories";
+type Tab = "cves" | "news";
 const TABS: { key: Tab; label: string }[] = [
   { key: "cves", label: "CVEs" },
-  { key: "stories", label: "Stories" },
+  { key: "news", label: "News" },
 ];
 
 function validCvss(s: string | null): number | undefined {
@@ -366,16 +366,16 @@ function HistoryCves() {
   );
 }
 
-export default function History() {
+export default function Threats() {
   const [sp, setSp] = useSearchParams();
-  const tab: Tab = sp.get("tab") === "stories" ? "stories" : "cves";
+  const tab: Tab = sp.get("tab") === "news" ? "news" : "cves";
 
   const choose = (next: Tab) => {
     if (next === tab) return;
     setSp((prev) => {
       const out = new URLSearchParams(prev);
       for (const k of TAB_PARAMS) out.delete(k);
-      if (next === "stories") out.set("tab", "stories");
+      if (next === "news") out.set("tab", "news");
       return out;
     });
   };
@@ -393,8 +393,8 @@ export default function History() {
 
   return (
     <section className="page gutter search">
-      <h1>History</h1>
-      <div className="htabs" role="tablist" aria-label="History">
+      <h1>Threats</h1>
+      <div className="htabs" role="tablist" aria-label="Threats">
         {TABS.map((t, i) => (
           <button
             key={t.key}
@@ -413,7 +413,7 @@ export default function History() {
         ))}
       </div>
       <div id="htab-panel" role="tabpanel" aria-labelledby={`htab-${tab}`} className="htab-panel">
-        {tab === "stories" ? <HistoryStories /> : <HistoryCves />}
+        {tab === "news" ? <ThreatsNews /> : <HistoryCves />}
       </div>
     </section>
   );

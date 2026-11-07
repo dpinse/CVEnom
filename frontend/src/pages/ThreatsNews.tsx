@@ -17,7 +17,7 @@ import {
   usePager,
   useUpdateParams,
   validDate,
-} from "./historyShared";
+} from "./threatsShared";
 
 export const STORY_FILTER_KEYS = ["q", "source", "from", "to", "page"] as const;
 const MAX_SOURCE = 64;
