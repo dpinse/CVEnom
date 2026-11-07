@@ -250,6 +250,8 @@ export interface StoryQuery {
   added?: AddedKey;
   q?: string;
   source?: string;
+  /** "news" (default) excludes ransomware.live items; "ransomware" returns only them (members only). */
+  kind?: "news" | "ransomware";
   /** "YYYY-MM-DD", inclusive */
   from?: string;
   to?: string;

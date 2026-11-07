@@ -3,7 +3,7 @@ import { HttpResponse, http } from "msw";
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { item, renderAt, server, setupMsw } from "../test/shell";
+import { item, member, renderAt, server, setupMsw, signIn } from "../test/shell";
 import type { CveListOut, StoryItem, StoryListOut } from "../lib/types";
 import Threats, { DEBOUNCE_MS, parseThreatFilters, toCveQuery } from "./Threats";
 import { parseStoryFilters } from "./ThreatsNews";
@@ -563,6 +563,41 @@ describe("Threats tabs", () => {
     await screen.findByText("CVE-2026-0001");
     fireEvent.keyDown(screen.getByRole("tab", { name: "CVEs" }), { key: "ArrowRight" });
     await waitFor(() => expect(lastUrl).toContain("tab=news"));
+    fireEvent.keyDown(screen.getByRole("tab", { name: "News" }), { key: "ArrowRight" });
+    await waitFor(() => expect(lastUrl).toContain("tab=ransomware"));
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Ransomware" }), { key: "ArrowRight" });
+    await waitFor(() => expect(lastUrl).toBe("/threats"));
+  });
+});
+
+describe("Ransomware tab", () => {
+  test("guests get a sign-in notice, no stories request, and the credit", async () => {
+    storiesApi(() => sList());
+    renderAt(ui, "/threats?tab=ransomware&q=foo");
+    expect(screen.getByRole("tab", { name: "Ransomware" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByTestId("ransomware-signin")).toHaveTextContent("Sign in to see ransomware activity");
+    expect(screen.getByTestId("ransomware-credit")).toBeInTheDocument();
+    expect(seenStories.length).toBe(0);
+  });
+
+  test("members get kind=ransomware, the search box, the credit and no source filter", async () => {
+    signIn(member);
+    storiesApi(() => sList([story({ title: "Acme hit", source: "ransomware.live", url: "https://r.example/1" })]));
+    renderAt(ui, "/threats?tab=ransomware&source=foo&added=week");
+    await screen.findByText("Acme hit");
+    expect(seenStories[0].get("kind")).toBe("ransomware");
+    expect(seenStories[0].get("source")).toBeNull();
+    expect(seenStories[0].get("added")).toBe("week");
+    expect(screen.queryByLabelText("Story source")).toBeNull();
+    expect(screen.getByLabelText("Search ransomware activity")).toBeInTheDocument();
+    expect(screen.getAllByTestId("ransomware-credit").length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("the News tab asks for kind=news", async () => {
+    storiesApi(() => sList());
+    renderAt(ui, "/threats?tab=news");
+    await screen.findByText("Big & loud");
+    expect(seenStories[0].get("kind")).toBe("news");
   });
 });
 
