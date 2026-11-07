@@ -95,6 +95,8 @@ for (const size of SIZES) {
       const dialog = page.getByRole("dialog");
       await expect(dialog).toBeVisible();
       await expect(dialog).toContainText("Sentence 40");
+      // measure only once the open (slide-in) animation has finished
+      await dialog.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((an) => an.finished)));
       await expectNoOverflow(page);
       const m = await page.evaluate(() => {
         const dlg = document.querySelector<HTMLElement>('[role="dialog"]')!;

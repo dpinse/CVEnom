@@ -156,7 +156,7 @@ test("the range control shows on the Dashboard only and writes ?range=", async (
   await loaded(page);
   await page.getByRole("button", { name: "14d" }).click();
   await expect(page).toHaveURL(/[?&]range=14d/);
-  await page.getByRole("link", { name: "Threats" }).click();
+  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Threats" }).click();
   await expect(page.getByRole("group", { name: "Time range" })).toHaveCount(0);
 });
 
