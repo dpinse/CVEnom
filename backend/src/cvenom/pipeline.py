@@ -31,7 +31,7 @@ from cvenom.schemas import (
     NormalizedStory,
 )
 from cvenom.ranges import DEFAULT_RANGE, RangeKey, range_start, range_start_date
-from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve
+from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve, priority_key
 from cvenom.textutil import content_hash, find_existing_story, sanitize_text
 from cvenom.timeline import derived_events, insert_cve_events
 
@@ -399,12 +399,13 @@ def lane_views(
             patch_available=r.patch_available,
             poc_badge=r.poc_badge,
             kev_added=r.kev_added,
+            kev_ransomware=r.kev_ransomware,
         )
         for lane in lanes_for_cve(view, now, cfg, rng):
             lanes[lane].append(view)
     for lane, views in lanes.items():
         if lane is Lane.EXPLOITED:
-            views.sort(key=lambda v: (-v.kev_added.toordinal(), -heat_rank(v, now, cfg), v.cve_id))
+            views.sort(key=priority_key)
         else:
             views.sort(key=lambda v: (-heat_rank(v, now, cfg), v.cve_id))
     return lanes

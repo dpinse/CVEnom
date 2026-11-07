@@ -408,7 +408,7 @@ ADDED_DAYS: dict[str, int] = {"day": 1, "week": 7, "14d": 14, "month": 30, "90d"
 StatusKey = Literal["all", "exploited", "likely", "news", "critical"]
 SevKey = Literal["low", "med", "high", "crit"]
 SEV_KEYS: tuple[str, ...] = ("low", "med", "high", "crit")
-SortKey = Literal["newest", "hot", "trending", "due", "kev_added", "published", "cvss"]
+SortKey = Literal["newest", "hot", "trending", "due", "kev_added", "published", "cvss", "priority"]
 TRENDING_DAYS = 7
 
 
@@ -574,6 +574,19 @@ def cve_search_filters(
     return conds
 
 
+def priority_order() -> tuple:
+    """SQL twin of scoring.priority_key (keep in sync); cve_id makes paging deterministic."""
+    return (
+        Cve.kev_ransomware.is_(True).desc(),
+        Cve.epss_percentile.desc().nulls_last(),
+        Cve.cvss.desc().nulls_last(),
+        Cve.poc_badge.is_(True).desc(),
+        Cve.patch_available.is_(False).desc(),
+        Cve.kev_added.desc().nulls_last(),
+        Cve.cve_id,
+    )
+
+
 def cve_search_order(
     now: datetime, sort: str, *, status: str = "all", hidden: frozenset[str] = frozenset()
 ) -> tuple:
@@ -586,6 +599,8 @@ def cve_search_order(
             Cve.published.desc().nulls_last(),
             Cve.cve_id,
         )
+    if sort == "priority":
+        return priority_order()
     if sort == "due":
         return (Cve.kev_due.asc(), Cve.cve_id)
     if sort == "kev_added":  # legacy History order

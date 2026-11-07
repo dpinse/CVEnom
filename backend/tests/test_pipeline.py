@@ -501,14 +501,14 @@ def test_ingest_drops_vector_that_grows_past_255_when_escaped(db_session):
     assert db_session.get(Cve, "CVE-2026-9502").cvss_vector == "CVSS:3.1/AV:N"
 
 
-def test_lane_views_exploited_newest_listing_first(db_session):
+def test_lane_views_exploited_ranks_priority_over_date(db_session):
     from datetime import date
     _insert_cve(db_session, "CVE-2026-9400", kev=True, kev_added=date(2026, 10, 1),
                 epss_percentile=0.99, cvss=9.9)
     _insert_cve(db_session, "CVE-2026-9401", kev=True, kev_added=date(2026, 10, 20),
                 epss_percentile=0.10, cvss=5.0)
     ids = [v.cve_id for v in lane_views(db_session, NOW, "30d")[Lane.EXPLOITED]]
-    assert ids == ["CVE-2026-9401", "CVE-2026-9400"]
+    assert ids == ["CVE-2026-9400", "CVE-2026-9401"]  # high EPSS beats newer KEV
 
 
 def test_loud_counts_stories_in_range(db_session):
@@ -664,3 +664,29 @@ def test_one_invalid_derived_event_is_skipped_not_fatal(db_session, monkeypatch)
         [poisoned, good], collector="nvd", now=NOW, cfg=pipeline.get_settings()
     )
     assert [e.cve_id for e in out] == ["CVE-2026-9704"]
+
+
+def _kev(cve_id, **kw):
+    return NormalizedCve(cve_id=cve_id, published=NOW - timedelta(days=1), kev=True,
+                         kev_added=NOW.date(), **kw)
+
+
+def test_exploited_lane_is_ranked_by_priority(db_session):
+    ingest(db_session, CollectorResult(cves=[
+        _kev("CVE-2026-7001", cvss=5.0, epss_percentile=0.2),
+        _kev("CVE-2026-7002", epss_percentile=0.95),            # unscored, high EPSS
+        _kev("CVE-2026-7003", cvss=4.0, kev_ransomware=True),   # ransomware first
+        _kev("CVE-2026-7004"),                                   # NULLs last
+        _kev("CVE-2026-7006", cvss=5.0, epss_percentile=0.2),   # tie with 7001 -> id order
+    ]))
+    views = lane_views(db_session, NOW)
+    assert [v.cve_id for v in views[Lane.EXPLOITED]] == [
+        "CVE-2026-7003", "CVE-2026-7002", "CVE-2026-7001", "CVE-2026-7006", "CVE-2026-7004"]
+    assert all(v.cve_id not in {x.cve_id for x in views[Lane.EXPLOITED]} for v in views[Lane.LIKELY])
+
+
+def test_kev_with_high_epss_stays_out_of_likely(db_session):
+    ingest(db_session, CollectorResult(cves=[_kev("CVE-2026-7010", cvss=9.0, epss_percentile=0.99)]))
+    views = lane_views(db_session, NOW)
+    assert [v.cve_id for v in views[Lane.EXPLOITED]] == ["CVE-2026-7010"]
+    assert views[Lane.LIKELY] == []

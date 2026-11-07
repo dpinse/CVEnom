@@ -720,3 +720,45 @@ async def test_metasploit_only_cve_has_poc_badge_filter_and_reference(db_session
     url = "https://github.com/rapid7/metasploit-framework/blob/master/modules/exploits/a/b.rb"
     assert {"url": url, "tags": ["Exploit"]} in body["references"]
     assert (await get(db_session, "/api/cves/CVE-2024-0001")).json()["poc_badge"] is False
+
+
+# ---------------------------------------------------------------- sort=priority
+
+
+def _prio_fixture(db):
+    d = TODAY
+    cve(db, "CVE-2024-0001", kev=True, kev_added=d, cvss=5.0, epss_percentile=0.20)   # scored, low EPSS
+    cve(db, "CVE-2024-0002", kev=True, kev_added=d, epss_percentile=0.95)             # unscored, high EPSS
+    cve(db, "CVE-2024-0003", kev=True, kev_added=d, kev_ransomware=True, cvss=4.0)    # ransomware, low
+    cve(db, "CVE-2024-0004", kev=True, kev_added=d)                                    # all NULL
+    cve(db, "CVE-2024-0005", kev=True, kev_added=d, cvss=9.0, epss_percentile=0.20)   # beats 0001 on cvss
+    cve(db, "CVE-2024-0006", kev=True, kev_added=d, cvss=9.0, epss_percentile=0.20,
+        poc_badge=True)                                                                # beats 0005 on PoC
+    cve(db, "CVE-2024-0007", kev=True, kev_added=d, cvss=9.0, epss_percentile=0.20,
+        poc_badge=True, patch_available=False)                                         # beats 0006 on no patch
+    cve(db, "CVE-2024-0008", kev=True, kev_added=d - timedelta(days=3), cvss=9.0, epss_percentile=0.20,
+        poc_badge=True, patch_available=False)                                         # older KEV
+    cve(db, "CVE-2024-0009", kev=True, kev_added=d - timedelta(days=3), cvss=9.0, epss_percentile=0.20,
+        poc_badge=True, patch_available=False)                                         # tie: id order
+    return [
+        "CVE-2024-0003", "CVE-2024-0002", "CVE-2024-0007", "CVE-2024-0008", "CVE-2024-0009",
+        "CVE-2024-0006", "CVE-2024-0005", "CVE-2024-0001", "CVE-2024-0004",
+    ]
+
+
+async def test_sort_priority_order(db_session):
+    expected = _prio_fixture(db_session)
+    assert ids(await get(db_session, "/api/cves?sort=priority")) == expected
+
+
+async def test_sort_priority_paging_is_stable(db_session):
+    expected = _prio_fixture(db_session)
+    got = []
+    for page in (1, 2, 3):
+        got += ids(await get(db_session, f"/api/cves?sort=priority&page={page}&page_size=4"))
+    assert got == expected
+
+
+async def test_sort_priority_with_status_exploited(db_session):
+    expected = _prio_fixture(db_session)
+    assert ids(await get(db_session, "/api/cves?status=exploited&sort=priority")) == expected
