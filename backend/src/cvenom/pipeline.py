@@ -31,7 +31,7 @@ from cvenom.schemas import (
     NormalizedStory,
 )
 from cvenom.ranges import DEFAULT_RANGE, RangeKey, range_start, range_start_date
-from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve, priority_key
+from cvenom.scoring import CveView, Lane, heat_rank, lanes_for_cve, loud_key, priority_key
 from cvenom.textutil import content_hash, find_existing_story, sanitize_text
 from cvenom.timeline import derived_events, insert_cve_events
 
@@ -372,11 +372,12 @@ def lane_views(
     )
     rows = session.scalars(candidates).all()
 
-    counts: dict[str, int] = {}
+    counts: dict[str, tuple[int, datetime | None]] = {}
     if rows:
-        counts = dict(
-            session.execute(
-                select(StoryCveLink.cve_id, func.count())
+        counts = {
+            cid: (int(n), last)
+            for cid, n, last in session.execute(
+                select(StoryCveLink.cve_id, func.count(), func.max(Story.published))
                 .join(Story, Story.id == StoryCveLink.story_id)
                 .where(
                     StoryCveLink.cve_id.in_([r.cve_id for r in rows]),
@@ -385,7 +386,7 @@ def lane_views(
                 )
                 .group_by(StoryCveLink.cve_id)
             ).all()
-        )
+        }
 
     lanes: dict[Lane, list[CveView]] = {lane: [] for lane in Lane}
     for r in rows:
@@ -395,7 +396,8 @@ def lane_views(
             cvss=r.cvss,
             epss_percentile=r.epss_percentile,
             kev=r.kev,
-            recent_story_count=counts.get(r.cve_id, 0),
+            recent_story_count=counts.get(r.cve_id, (0, None))[0],
+            last_story_at=counts.get(r.cve_id, (0, None))[1],
             patch_available=r.patch_available,
             poc_badge=r.poc_badge,
             kev_added=r.kev_added,
@@ -406,6 +408,8 @@ def lane_views(
     for lane, views in lanes.items():
         if lane is Lane.EXPLOITED:
             views.sort(key=lambda v: priority_key(v, now))
+        elif lane is Lane.LOUD:
+            views.sort(key=lambda v: loud_key(v, now, cfg))
         else:
             views.sort(key=lambda v: (-heat_rank(v, now, cfg), v.cve_id))
     return lanes

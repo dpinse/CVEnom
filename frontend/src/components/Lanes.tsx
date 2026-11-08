@@ -8,12 +8,11 @@ import type { CveItem, Lane, LanesOut, LoudStory } from "../lib/types";
 import { useNow } from "../lib/useNow";
 import { LaneRow, StoryRow } from "./LaneRow";
 
-/** Alert bar still scans a deeper slice than the lanes show. */
+/** Rows each lane loads (the API maximum) and renders; the lane scrolls through all of them.
+ * The alert bar reads the same query, so the two share one cache entry. */
 export const LANE_CAP = 100;
 /** Rows a lane shows before it scrolls (sets the lane's visible height). */
 export const LANE_ROWS = 5;
-/** Rows a lane loads and renders; the rest of the range is behind "View all in Threats". */
-export const LANE_FETCH = 10;
 
 interface LaneDef {
   key: Lane;
@@ -104,9 +103,9 @@ export function LanesView({
       <div className="lanes">
         {DEFS.map((d) => {
           const total = lanes?.[d.key]?.total ?? 0;
-          const cves = (lanes?.[d.key]?.items ?? []).slice(0, LANE_FETCH);
+          const cves = (lanes?.[d.key]?.items ?? []).slice(0, LANE_CAP);
           const storyShown =
-            d.key === "LOUD" ? loudStoriesFor(cves, stories).slice(0, Math.max(0, LANE_FETCH - cves.length)) : [];
+            d.key === "LOUD" ? loudStoriesFor(cves, stories).slice(0, Math.max(0, LANE_CAP - cves.length)) : [];
           const count = cves.length + storyShown.length;
           const showSkeleton = loading && !lanes;
           const headId = `lane-${d.k}`;
@@ -158,8 +157,8 @@ export function LanesView({
 }
 
 export function Lanes({ range = DEFAULT_RANGE }: { range?: RangeKey }) {
-  const lanes = useLanes(range, LANE_FETCH);
-  const stories = useLoudStories(range, LANE_FETCH);
+  const lanes = useLanes(range, LANE_CAP);
+  const stories = useLoudStories(range, LANE_CAP);
   // Tick every second while the error countdown is on screen.
   const now = useNow(lanes.isError ? 1000 : 60_000);
   const { select } = useSelection();

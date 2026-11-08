@@ -103,14 +103,6 @@ export interface LaneOut {
 }
 export type LanesOut = Record<Lane, LaneOut>;
 
-export type SituationLevel = "Calm" | "Elevated" | "High" | "Severe";
-/** The header gauge, computed server-side (always the 7-day view). `reason` is a fixed template. */
-export interface Situation {
-  level: SituationLevel;
-  /** Lit gauge bars, 1..4 */
-  lit: 1 | 2 | 3 | 4;
-  reason: string;
-}
 /** GET /summary?range= */
 export interface SummaryOut {
   range: string;
@@ -120,8 +112,6 @@ export interface SummaryOut {
   public_exploits: number;
   /** "YYYY-MM-DD" or null */
   latest_kev_added: string | null;
-  /** Independent of `range` */
-  situation: Situation;
 }
 /** GET /volume?range=: CVE publications bucketed by CVSS band. */
 export interface VolumeBucket {

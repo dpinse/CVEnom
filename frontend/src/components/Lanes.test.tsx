@@ -10,7 +10,7 @@ import { parseSelection, useSelection } from "../lib/selection";
 import type { CveItem, Lane, LanesOut, LoudStory } from "../lib/types";
 import { item } from "../test/shell";
 import { laneMeta, productIssue } from "./LaneRow";
-import { LANE_FETCH, LanesView } from "./Lanes";
+import { LANE_CAP, LanesView } from "./Lanes";
 
 afterEach(cleanup);
 
@@ -68,19 +68,21 @@ describe("LanesView totals, rows and footer", () => {
     expect(link).toHaveAttribute("href", "/threats?status=exploited&added=week&sort=priority");
   });
   test("a lane shows 'View all' whenever the total exceeds the rows shown", () => {
-    const ten = Array.from({ length: LANE_FETCH }, (_, i) => cve(i));
-    render(<LanesView lanes={ln({ FRESH: ten }, { FRESH: 11 })} onSelect={noop} now={NOW} />);
-    expect(LANE_FETCH).toBe(10);
-    expect(within(lane("Fresh criticals")).getByRole("link", { name: "View all 11 in Threats →" })).toBeInTheDocument();
+    const loaded = Array.from({ length: LANE_CAP }, (_, i) => cve(i));
+    render(<LanesView lanes={ln({ FRESH: loaded }, { FRESH: 140 })} onSelect={noop} now={NOW} />);
+    expect(LANE_CAP).toBe(100);
+    expect(
+      within(lane("Fresh criticals")).getByRole("link", { name: "View all 140 in Threats →" }),
+    ).toBeInTheDocument();
   });
   test("a lane renders all of its loaded rows (it scrolls) up to the fetch cap", () => {
-    const many = Array.from({ length: 9 }, (_, i) => cve(i));
+    const many = Array.from({ length: 40 }, (_, i) => cve(i));
     render(<LanesView lanes={ln({ FRESH: many })} onSelect={noop} now={NOW} />);
-    expect(within(lane("Fresh criticals")).getAllByTestId("lane-row")).toHaveLength(9);
-    const tooMany = Array.from({ length: LANE_FETCH + 5 }, (_, i) => cve(i));
+    expect(within(lane("Fresh criticals")).getAllByTestId("lane-row")).toHaveLength(40);
+    const tooMany = Array.from({ length: LANE_CAP + 5 }, (_, i) => cve(i));
     cleanup();
     render(<LanesView lanes={ln({ FRESH: tooMany })} onSelect={noop} now={NOW} />);
-    expect(within(lane("Fresh criticals")).getAllByTestId("lane-row")).toHaveLength(LANE_FETCH);
+    expect(within(lane("Fresh criticals")).getAllByTestId("lane-row")).toHaveLength(LANE_CAP);
   });
   test("when everything in the lane is loaded the footer says Open in Threats", () => {
     render(<LanesView lanes={ln({ LIKELY: [cve(1), cve(2)] })} onSelect={noop} now={NOW} />);

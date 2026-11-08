@@ -185,9 +185,7 @@ async def test_summary_cached_for_anon(db_session):
     assert b["latest_kev_added"] == NOW.date().isoformat()
     assert set(b) == {
         "range", "new_kev", "kev_due_soon", "new_critical", "public_exploits", "latest_kev_added",
-        "situation",
     }
-    assert set(b["situation"]) == {"level", "lit", "reason"}
 
 
 async def test_volume_endpoint_shape(db_session):

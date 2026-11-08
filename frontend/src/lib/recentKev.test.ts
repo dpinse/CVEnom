@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { item, lanes } from "../test/shell";
-import { isRecentKevDate, recentKev } from "./situation";
+import { isRecentKevDate, recentKev } from "./recentKev";
 
 const NOW = new Date("2026-11-05T12:00:00Z");
 

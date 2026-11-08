@@ -14,7 +14,6 @@ from cvenom.ranges import (
     range_start,
 )
 from cvenom.scoring import recent_kev_cutoff
-from cvenom.situation import situation_for
 
 
 def _utc(now: datetime) -> datetime:
@@ -119,8 +118,6 @@ def summary_counts(session, now: datetime, rng: RangeKey) -> dict:
         "latest_kev_added": session.scalar(
             select(func.max(Cve.kev_added)).where(Cve.kev.is_(True))
         ),
-        # always the 7-day view, whatever `rng` is
-        "situation": situation_for(session, now),
     }
 
 
