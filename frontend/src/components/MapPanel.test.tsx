@@ -208,7 +208,11 @@ describe("CountryPanel: one country", () => {
     await screen.findByTestId("country-counts");
     expect(screen.getByRole("link", { name: "IP geolocation by DB-IP.com" })).toBeInTheDocument();
     cleanup();
+    // The list state fetches /api/geo: serve it and wait for it, or the request outlives this
+    // test and MSW's "error" strategy rejects it inside whichever test runs next.
+    serveGeo();
     renderAt(<CountryPanel range="7d" />, "/");
+    await screen.findByRole("list", { name: "Top countries" });
     expect(screen.getByRole("link", { name: "IP geolocation by DB-IP.com" })).toBeInTheDocument();
   });
 

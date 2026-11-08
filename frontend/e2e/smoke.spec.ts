@@ -169,7 +169,8 @@ test("400px: the drawer fits the viewport (no horizontal scroll, dialog <= 400px
   }));
   expect(m.doc).toBeLessThanOrEqual(400);
   expect(m.body).toBeLessThanOrEqual(400);
-  expect(m.dialog).toBeLessThanOrEqual(400);
+  // getBoundingClientRect is fractional: Linux Chromium reports a full-width dialog as 400.00003
+  expect(m.dialog).toBeLessThanOrEqual(400.5);
 });
 
 test("/search?q=x redirects to /threats?q=x and the Threats nav link is current", async ({ page }) => {
