@@ -62,23 +62,23 @@ header.command {
 .brand {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 9px;
   min-width: 0;
   color: inherit;
   text-decoration: none;
 }
 .brand .mark {
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   flex: none;
-  color: var(--scope);
+  color: var(--live);
 }
 .brand .name {
   display: block;
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 21px;
-  letter-spacing: 0.01em;
+  font-size: 20px;
+  letter-spacing: 0.02em;
   line-height: 1;
 }
 .brand .kicker {
@@ -136,6 +136,19 @@ header.command {
 .slabel {
   font-size: 10.5px;
   color: var(--faint);
+}
+.sreason {
+  display: none;
+}
+@media (min-width: 1280px) {
+  .sreason {
+    display: inline-block;
+    vertical-align: bottom;
+    max-width: 30ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 .slevel {
   font-family: var(--font-display);

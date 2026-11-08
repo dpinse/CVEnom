@@ -185,7 +185,9 @@ async def test_summary_cached_for_anon(db_session):
     assert b["latest_kev_added"] == NOW.date().isoformat()
     assert set(b) == {
         "range", "new_kev", "kev_due_soon", "new_critical", "public_exploits", "latest_kev_added",
+        "situation",
     }
+    assert set(b["situation"]) == {"level", "lit", "reason"}
 
 
 async def test_volume_endpoint_shape(db_session):
@@ -690,3 +692,14 @@ async def test_legacy_lane_excludes_restricted_only_cve_for_anon(db_session):
     h, _ = bearer(db_session, mk_user(db_session))
     authed = await get(db_session, "/api/cves?lane=LOUD&page_size=100", headers=h)
     assert "CVE-2024-6666" in {i["cve_id"] for i in authed.json()["items"]}
+
+
+async def test_lanes_exploited_ranked_by_priority_total_unchanged(db_session):
+    d = NOW.date()
+    cve(db_session, "CVE-2024-0001", kev=True, kev_added=d, cvss=5.0, epss_percentile=0.2)
+    cve(db_session, "CVE-2024-0002", kev=True, kev_added=d, epss_percentile=0.95)
+    cve(db_session, "CVE-2024-0003", kev=True, kev_added=d, kev_ransomware=True)
+    cve(db_session, "CVE-2024-0004", kev=True, kev_added=d)
+    r = (await get(db_session, "/api/lanes?limit=2")).json()["EXPLOITED"]
+    assert r["total"] == 4
+    assert [i["cve_id"] for i in r["items"]] == ["CVE-2024-0003", "CVE-2024-0002"]

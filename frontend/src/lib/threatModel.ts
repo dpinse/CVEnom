@@ -27,6 +27,7 @@ const KIND_LABEL: Record<CveEventKind, string> = {
 const KEY_KINDS: ReadonlySet<string> = new Set<CveEventKind>(["published", "poc_published", "kev_added"]);
 
 export interface TimelineRow {
+  kind: CveEventKind;
   at: string;
   offset: string | null;
   label: string;
@@ -45,6 +46,7 @@ export function timelineRows(events: CveEvent[], published: string | null): Time
       sawNews = true;
     }
     rows.push({
+      kind: e.kind,
       at: e.occurred_at,
       offset: published === null ? null : offsetLabel(e.occurred_at, published),
       label: KIND_LABEL[e.kind] ?? e.kind,

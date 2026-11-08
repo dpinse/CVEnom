@@ -27,6 +27,32 @@ class CveView:
     patch_available: bool | None = None
     poc_badge: bool = False
     kev_added: date | None = None
+    kev_ransomware: bool | None = None
+
+
+def recent_kev_cutoff(now: datetime) -> date:
+    """kev_added is a DATE: "recently added" = today or yesterday (UTC). Keep in sync with
+    isRecentKevDate in frontend/src/lib/situation.ts."""
+    return _utc(now).date() - timedelta(days=1)
+
+
+def priority_key(v: CveView, now: datetime) -> tuple:
+    """Shared "priority" order (SQL twin: readmodels.priority_order): recently added KEV first, then ransomware, EPSS desc,
+    CVSS desc (NULLs last), PoC first, no-patch first, newest KEV, then CVE id."""
+    recent = v.kev_added is not None and v.kev_added >= recent_kev_cutoff(now)
+    return (
+        not recent,  # 48h boost: expires on its own as kev_added ages
+        v.kev_ransomware is not True,
+        v.epss_percentile is None,
+        -(v.epss_percentile or 0.0),
+        v.cvss is None,
+        -(v.cvss or 0.0),
+        not v.poc_badge,
+        v.patch_available is not False,
+        v.kev_added is None,
+        -(v.kev_added.toordinal() if v.kev_added else 0),
+        v.cve_id,
+    )
 
 
 def _utc(dt: datetime) -> datetime:

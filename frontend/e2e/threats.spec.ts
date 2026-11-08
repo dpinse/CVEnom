@@ -27,6 +27,11 @@ test("Threats filters live in the URL; severity chips are colour-coded toggles",
   await page.getByRole("button", { name: "Exploited" }).click();
   await expect(page).toHaveURL(/added=month/);
   await expect(page).toHaveURL(/status=exploited/);
+  await page.getByLabel("Sort").selectOption("priority");
+  await expect(page).toHaveURL(/sort=priority/);
+  await expect
+    .poll(() => guards.apiRequests.some((r) => r.startsWith("/api/cves?") && r.includes("sort=priority")))
+    .toBe(true);
   await page.getByLabel("Sort").selectOption("due");
   await expect(page.getByText("Soonest CISA deadline first")).toBeVisible();
   // The URL state reaches the API as the matching query.
@@ -99,8 +104,22 @@ test("/history?kev=true lands on /threats?status=exploited", async ({ page }) =>
   await expect(page.getByRole("button", { name: "Exploited" })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("the News tab shows the stories table", async ({ page }) => {
+test("the News tab shows the stories table and asks for news only", async ({ page, guards }) => {
   await page.goto("/threats?tab=news");
   await expect(page.getByRole("tab", { name: "News" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("news-story")).toHaveCount(1);
+  await expect(page.getByTestId("ransomware-credit")).toHaveCount(0);
+  await expect
+    .poll(() => guards.apiRequests.some((r) => r.startsWith("/api/stories?") && r.includes("kind=news")))
+    .toBe(true);
+});
+
+test("the Ransomware tab is reachable and asks guests to sign in", async ({ page, guards }) => {
+  await page.goto("/threats?tab=news");
+  await page.getByRole("tab", { name: "Ransomware" }).click();
+  await expect(page).toHaveURL(/tab=ransomware/);
+  await expect(page.getByRole("tab", { name: "Ransomware" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("ransomware-signin")).toBeVisible();
+  await expect(page.getByTestId("news-story")).toHaveCount(0);
+  expect(guards.apiRequests.some((r) => r.includes("kind=ransomware"))).toBe(false);
 });

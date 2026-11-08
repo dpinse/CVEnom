@@ -2,9 +2,7 @@ import { Link, NavLink, useLocation } from "react-router-dom";
 import { useLiveUpdates, type LiveStatus } from "../lib/live";
 import { useRange } from "../lib/range";
 import { useSummary } from "../lib/queries";
-import { situationLevel } from "../lib/situation";
 import { useTheme } from "../lib/theme";
-import { useNow } from "../lib/useNow";
 import { RangeControl } from "./RangeControl";
 import { UserMenu } from "./UserMenu";
 
@@ -17,14 +15,14 @@ const STATUS_TEXT: Record<LiveStatus, string> = {
 const hhmm = (ms: number) =>
   new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
 
+/** The CVEnom mark: a radar scope with a sweep line. */
 function Radar() {
   return (
-    <svg className="mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-      <circle cx="16" cy="16" r="13" />
-      <ellipse cx="16" cy="16" rx="6" ry="13" />
-      <path d="M3 16h26" />
-      <path d="M16 16 L25.5 10.5" />
-      <circle cx="16" cy="16" r="2.4" fill="currentColor" stroke="none" />
+    <svg className="mark" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="10" cy="10" r="8.25" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="10" cy="10" r="4.25" stroke="currentColor" strokeWidth="1.5" opacity=".6" />
+      <path d="M10 10 L16.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="10" cy="10" r="1.5" fill="currentColor" />
     </svg>
   );
 }
@@ -32,14 +30,13 @@ function Radar() {
 function Situation() {
   // fixed 7-day window: the gauge is not driven by the Dashboard range control
   const summary = useSummary("7d");
-  const now = useNow();
-  const s = summary.data ? situationLevel(summary.data, now) : null;
-  const label = s ? s.level : "Unavailable";
+  const s = summary.data?.situation ?? null;
+  const label = s ? `${s.level}. ${s.reason}` : "Unavailable";
   return (
     <div
       className="situation"
       data-level={s?.level ?? "Unknown"}
-      title="Situation level, driven by live-exploited vulnerabilities"
+      title={s ? `${s.level}: ${s.reason}` : "Situation level, relative to this install's own normal"}
     >
       <div className="sgauge" role="img" aria-label={`Situation: ${label}`}>
         {[0, 1, 2, 3].map((i) => (
@@ -47,7 +44,10 @@ function Situation() {
         ))}
       </div>
       <div className="stext" aria-hidden="true">
-        <div className="slabel">Situation</div>
+        <div className="slabel">
+          Situation
+          {s && <span className="sreason"> · {s.reason}</span>}
+        </div>
         <div className="slevel">{s ? s.level : "…"}</div>
       </div>
     </div>
@@ -81,10 +81,7 @@ export function CommandBar() {
     <header className="command gutter">
       <Link className="brand" to="/">
         <Radar />
-        <span>
-          <span className="name">CVEnom</span>
-          <span className="kicker">vulnerability threat radar</span>
-        </span>
+        <span className="name">CVEnom</span>
       </Link>
       <nav className="cnav" aria-label="Main">
         <NavLink to={{ pathname: "/", search: `?range=${range}` }} end>

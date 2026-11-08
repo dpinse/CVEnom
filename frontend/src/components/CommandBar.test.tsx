@@ -49,22 +49,38 @@ describe("navigation", () => {
 });
 
 describe("Situation readout", () => {
-  test("renders the level and an accessible gauge label from the Exploited lane", async () => {
-    // the readout uses the real clock: 4 listings 4 days ago (UTC) are in the 7-day span, none recent
-    const added = new Date(Date.now() - 4 * 86_400_000).toISOString().slice(0, 10);
-    handlers({ lanes: lanes([1, 2, 3, 4].map((n) => item({ cve_id: `CVE-2020-${n}`, kev_added: added }))) });
+  test("shows the server's level, lit bars and reason", async () => {
+    handlers({ situation: { level: "High", lit: 3, reason: "7 KEV additions this week, 2.3x the 90-day norm" } });
     guest();
     bar();
-    expect(await screen.findByRole("img", { name: "Situation: High" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("img", { name: "Situation: High. 7 KEV additions this week, 2.3x the 90-day norm" }),
+    ).toBeInTheDocument();
     expect(document.querySelectorAll(".sgauge i.lit")).toHaveLength(3);
     expect(document.querySelectorAll(".sgauge i")).toHaveLength(4);
+    expect(document.querySelector(".situation")).toHaveAttribute("data-level", "High");
+    expect(document.querySelector(".situation")).toHaveAttribute(
+      "title",
+      "High: 7 KEV additions this week, 2.3x the 90-day norm",
+    );
+    expect(document.querySelector(".sreason")).toHaveTextContent("7 KEV additions this week");
   });
-  test("Calm with an empty lane shows one dim bar", async () => {
-    handlers();
+  test("a server Calm shows one dim bar even when the Exploited lane is full", async () => {
+    // the old client rule said Severe for a KEV today; the server's relative level is what shows
+    const added = new Date().toISOString().slice(0, 10);
+    handlers({ lanes: lanes([1, 2, 3, 4, 5, 6, 7].map((n) => item({ cve_id: `CVE-2020-${n}`, kev_added: added }))) });
     guest();
     bar();
-    expect(await screen.findByRole("img", { name: "Situation: Calm" })).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: /^Situation: Calm\./ })).toBeInTheDocument();
     expect(document.querySelectorAll(".sgauge i.lit")).toHaveLength(1);
+  });
+  test("shows Unavailable with no bars lit when the summary fails", async () => {
+    handlers({ situation: null });
+    guest();
+    bar();
+    expect(await screen.findByRole("img", { name: "Situation: Unavailable" })).toBeInTheDocument();
+    expect(document.querySelectorAll(".sgauge i.lit")).toHaveLength(0);
+    expect(document.querySelector(".sreason")).toBeNull();
   });
 });
 

@@ -114,6 +114,9 @@ export function VolumeView({ data, loading, error, range = DEFAULT_RANGE }: View
       >
         {bars.map((b, i) => (
           <g key={data.buckets[i].start}>
+            <title>
+              {`${fmt(data.buckets[i].start)}: ${SEV_ORDER.map((k) => `${SEV_LABEL[k]} ${NUMBER.format(count(data.buckets[i][k]))}`).join(", ")}`}
+            </title>
             {b.segs.map((s) =>
               s.height > 0 ? (
                 <rect
@@ -133,29 +136,31 @@ export function VolumeView({ data, loading, error, range = DEFAULT_RANGE }: View
         <span>{unit === "hour" ? "24h ago" : first ? fmt(first.start) : ""}</span>
         <span>now</span>
       </div>
-      <table className="sr-only">
-        <caption>New CVEs per {unit} by severity</caption>
-        <thead>
-          <tr>
-            <th scope="col">Start</th>
-            <th scope="col">Critical</th>
-            <th scope="col">High</th>
-            <th scope="col">Medium</th>
-            <th scope="col">Low</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.buckets.map((b) => (
-            <tr key={b.start}>
-              <th scope="row">{fmt(b.start)}</th>
-              <td>{b.crit}</td>
-              <td>{b.high}</td>
-              <td>{b.med}</td>
-              <td>{b.low}</td>
+      <div className="sr-only">
+        <table>
+          <caption>New CVEs per {unit} by severity</caption>
+          <thead>
+            <tr>
+              <th scope="col">Start</th>
+              <th scope="col">Critical</th>
+              <th scope="col">High</th>
+              <th scope="col">Medium</th>
+              <th scope="col">Low</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.buckets.map((b) => (
+              <tr key={b.start}>
+                <th scope="row">{fmt(b.start)}</th>
+                <td>{b.crit}</td>
+                <td>{b.high}</td>
+                <td>{b.med}</td>
+                <td>{b.low}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {data.unscored > 0 && <p className="vol-foot">{NUMBER.format(data.unscored)} unscored CVEs not shown</p>}
     </section>
   );

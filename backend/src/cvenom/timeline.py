@@ -26,6 +26,7 @@ SOURCE_LABELS = {
     "epss": "FIRST EPSS",
     "osv": "OSV",
     "exploitdb": "Exploit-DB",
+    "metasploit": "Metasploit",
 }
 KEV_SOURCE_LABELS = {"cisa": "CISA KEV", "vulncheck": "VulnCheck KEV"}
 MAX_EVENT_DETAIL_BYTES = 2048

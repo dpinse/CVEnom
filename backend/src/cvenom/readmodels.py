@@ -13,6 +13,8 @@ from cvenom.ranges import (
     RangeKey,
     range_start,
 )
+from cvenom.scoring import recent_kev_cutoff
+from cvenom.situation import situation_for
 
 
 def _utc(now: datetime) -> datetime:
@@ -117,6 +119,8 @@ def summary_counts(session, now: datetime, rng: RangeKey) -> dict:
         "latest_kev_added": session.scalar(
             select(func.max(Cve.kev_added)).where(Cve.kev.is_(True))
         ),
+        # always the 7-day view, whatever `rng` is
+        "situation": situation_for(session, now),
     }
 
 
@@ -362,9 +366,13 @@ def search_stories(
     page: int,
     page_size: int,
     exclude_sources: frozenset[str] = frozenset(),
+    include_sources: frozenset[str] = frozenset(),
 ) -> tuple[list[dict], int]:
-    """History search. `end` is exclusive. exclude_sources applies to page and count."""
+    """History search. `end` is exclusive. exclude_sources applies to page and count;
+    a non-empty include_sources keeps only those sources (exclude still wins)."""
     conds = []
+    if include_sources:
+        conds.append(Story.source.in_(include_sources))
     if exclude_sources:
         conds.append(Story.source.not_in(exclude_sources))
     if q:
@@ -404,7 +412,7 @@ ADDED_DAYS: dict[str, int] = {"day": 1, "week": 7, "14d": 14, "month": 30, "90d"
 StatusKey = Literal["all", "exploited", "likely", "news", "critical"]
 SevKey = Literal["low", "med", "high", "crit"]
 SEV_KEYS: tuple[str, ...] = ("low", "med", "high", "crit")
-SortKey = Literal["newest", "hot", "trending", "due", "kev_added", "published", "cvss"]
+SortKey = Literal["newest", "hot", "trending", "due", "kev_added", "published", "cvss", "priority"]
 TRENDING_DAYS = 7
 
 
@@ -570,6 +578,21 @@ def cve_search_filters(
     return conds
 
 
+def priority_order(now: datetime) -> tuple:
+    """SQL twin of scoring.priority_key (keep in sync); cve_id makes paging deterministic."""
+    recent = func.coalesce(Cve.kev_added >= recent_kev_cutoff(now), False)
+    return (
+        recent.desc(),
+        Cve.kev_ransomware.is_(True).desc(),
+        Cve.epss_percentile.desc().nulls_last(),
+        Cve.cvss.desc().nulls_last(),
+        Cve.poc_badge.is_(True).desc(),
+        Cve.patch_available.is_(False).desc(),
+        Cve.kev_added.desc().nulls_last(),
+        Cve.cve_id,
+    )
+
+
 def cve_search_order(
     now: datetime, sort: str, *, status: str = "all", hidden: frozenset[str] = frozenset()
 ) -> tuple:
@@ -582,6 +605,8 @@ def cve_search_order(
             Cve.published.desc().nulls_last(),
             Cve.cve_id,
         )
+    if sort == "priority":
+        return priority_order(now)
     if sort == "due":
         return (Cve.kev_due.asc(), Cve.cve_id)
     if sort == "kev_added":  # legacy History order

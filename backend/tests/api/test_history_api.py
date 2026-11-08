@@ -164,9 +164,56 @@ async def test_stories_anon_restricted_filtered_before_limit(db_session):
     assert anon["total"] == 1 and [i["source"] for i in anon["items"]] == ["src"]
     h, _ = bearer(db_session, mk_user(db_session))
     authed = (await get(db_session, "/api/stories?page_size=25", headers=h)).json()
-    assert authed["total"] == 31 and len(authed["items"]) == 25
+    assert authed["total"] == 1 and [i["source"] for i in authed["items"]] == ["src"]  # news kind
+    both = (await get(db_session, "/api/stories?kind=ransomware&page_size=25", headers=h)).json()
+    assert both["total"] == 30 and len(both["items"]) == 25
     r = (await get(db_session, "/api/stories?source=ransomware.live")).json()
     assert r["total"] == 0 and r["items"] == []
+
+
+async def test_stories_kind_news_excludes_ransomware_for_signed_in(db_session):
+    sstory(db_session, 1, title="news")
+    sstory(db_session, 2, source="ransomware.live")
+    sstory(db_session, 3, source="ransomware_live")
+    h, _ = bearer(db_session, mk_user(db_session))
+    for url in ("/api/stories", "/api/stories?kind=news"):
+        r = (await get(db_session, url, headers=h)).json()
+        assert r["total"] == 1 and [i["source"] for i in r["items"]] == ["src"]
+
+
+async def test_stories_kind_ransomware_only_ransomware_for_signed_in(db_session):
+    sstory(db_session, 1, title="news")
+    sstory(db_session, 2, source="ransomware.live")
+    sstory(db_session, 3, source="ransomware_live")
+    h, _ = bearer(db_session, mk_user(db_session))
+    r = (await get(db_session, "/api/stories?kind=ransomware", headers=h)).json()
+    assert r["total"] == 2
+    assert {i["source"] for i in r["items"]} == {"ransomware.live", "ransomware_live"}
+
+
+async def test_stories_kind_ransomware_anonymous_empty_and_news_unchanged(db_session):
+    sstory(db_session, 1, title="news")
+    sstory(db_session, 2, source="ransomware.live")
+    r = (await get(db_session, "/api/stories?kind=ransomware")).json()
+    assert r["items"] == [] and r["total"] == 0
+    n = (await get(db_session, "/api/stories?kind=news")).json()
+    assert n["total"] == 1 and [i["source"] for i in n["items"]] == ["src"]
+    assert (await get(db_session, "/api/stories")).json()["total"] == 1
+
+
+async def test_stories_kind_invalid_422(db_session):
+    assert (await get(db_session, "/api/stories?kind=bogus")).status_code == 422
+
+
+async def test_stories_kind_cached_per_value_anonymous(db_session):
+    sstory(db_session, 1)
+    app = make_app(db_session, redis=fakeredis.FakeAsyncRedis())
+    async with client(app) as c:
+        a = await c.get("/api/stories?kind=ransomware")
+        b = await c.get("/api/stories?kind=ransomware")
+        n = await c.get("/api/stories?kind=news")
+        assert a.json()["total"] == 0 and b.headers["x-cache"] == "HIT"
+        assert n.json()["total"] == 1
 
 
 async def test_stories_anon_cached_without_q_bypassed_with_q(db_session):

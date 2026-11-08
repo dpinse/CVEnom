@@ -23,6 +23,7 @@ CVEnom is a self-hosted vulnerability and threat radar. It pulls CVE, exploitati
 | CISA KEV | known-exploited CVEs | none |
 | VulnCheck KEV | earlier known-exploited signal | `VULNCHECK_API_TOKEN` (free; skipped without it) |
 | FIRST EPSS | exploit prediction scores | none |
+| Exploit-DB, Metasploit | public exploits: an Exploit-DB entry or a Metasploit `exploit/` module naming a CVE marks it as having a public exploit (Metasploit module index is fetched daily) | none |
 | OSV | affected packages | optional (`GITHUB_TOKEN`) |
 | News RSS: Krebs, The Hacker News, BleepingComputer, SecurityWeek | stories linked to CVEs | none |
 | DShield | scanning activity by country | none |
