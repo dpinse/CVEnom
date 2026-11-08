@@ -1,7 +1,7 @@
 # CI/CD for CVEnom.
 #
-#   every push / PR   backend tests, frontend lint+typecheck+unit, Playwright e2e (chromium on
-#                     Linux, firefox on Windows),
+#   every push / PR   backend tests, frontend lint+typecheck+unit, Playwright e2e (chromium
+#                     headless, firefox headed under Xvfb),
 #                     Trivy repo scan, both images built and Trivy-scanned (nothing is pushed)
 #   push to main      the above, then the images go to GHCR as :edge and :sha-<short>, and the
 #                     "rolling" GitHub prerelease is moved to that commit
@@ -101,17 +101,18 @@ jobs:
 
   e2e:
     name: E2E (${{ matrix.browser }})
-    # The globe specs need real WebGL. Headless Chromium on Linux has it (SwiftShader); headless
-    # Firefox on Linux has no WebGL at all, so Firefox runs on Windows (WARP software renderer).
+    # The globe specs need real WebGL. Headless Chromium has it (SwiftShader). Headless Firefox on
+    # Linux has none, and hosted Windows runners have no GPU for it either, so Firefox runs headed
+    # under Xvfb, where Mesa's llvmpipe software renderer provides WebGL.
     strategy:
       fail-fast: false
       matrix:
         include:
           - browser: chromium
-            os: ubuntu-24.04
+            run: npm run e2e -- --project=chromium
           - browser: firefox
-            os: windows-2025
-    runs-on: ${{ matrix.os }}
+            run: xvfb-run -a -s "-screen 0 1280x1024x24" npm run e2e -- --project=firefox --headed
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
@@ -129,7 +130,7 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps ${{ matrix.browser }}
       - name: Run all e2e specs
-        run: npm run e2e -- --project=${{ matrix.browser }}
+        run: ${{ matrix.run }}
       - name: Upload traces
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

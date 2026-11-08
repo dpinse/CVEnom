@@ -25,23 +25,24 @@ export type Patch = Record<string, string | undefined>;
 
 /** Writes filter params into the URL, keeping everything else (cve / story selection, tab); resets the page. */
 export function useUpdateParams() {
-  const [, setSp] = useSearchParams();
+  const [sp, setSp] = useSearchParams();
+  // react-router's functional update gets the params of the last render, not of the last write, so
+  // two writes before a re-render (a select change then a click) would drop the first. Writes made
+  // against the same render therefore build on the previous write instead.
+  const pending = useRef<{ from: URLSearchParams; next: URLSearchParams } | null>(null);
   return useCallback(
     (patch: Patch, push = false) => {
-      setSp(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          for (const [k, v] of Object.entries(patch)) {
-            if (v === undefined || v === "") next.delete(k);
-            else next.set(k, v);
-          }
-          if (!("page" in patch)) next.delete("page");
-          return next;
-        },
-        push ? undefined : { replace: true },
-      );
+      const p = pending.current;
+      const next = new URLSearchParams(p && p.from === sp ? p.next : sp);
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === undefined || v === "") next.delete(k);
+        else next.set(k, v);
+      }
+      if (!("page" in patch)) next.delete("page");
+      pending.current = { from: sp, next };
+      setSp(next, push ? undefined : { replace: true });
     },
-    [setSp],
+    [sp, setSp],
   );
 }
 
