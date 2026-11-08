@@ -374,3 +374,9 @@
 .dbody .dmuted {
   overflow-wrap: anywhere;
 }
+/* Summaries wrap in full: nothing global may clamp them to one line. */
+.dbody .sum {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}

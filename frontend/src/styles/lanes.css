@@ -83,8 +83,25 @@
   color: var(--muted);
   border-bottom: 1px solid var(--line);
 }
+/* Compact rows, ~50px each: the list shows --lane-rows of them and scrolls inside the lane. */
 .lane-items {
-  display: grid;
+  display: block;
+  max-height: calc(var(--lane-rows, 5) * 51px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.lane-items::-webkit-scrollbar {
+  width: 8px;
+}
+.lane-items::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+.lane-items::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }
 .lane-empty {
   margin: 0;
@@ -117,9 +134,13 @@
 
 .row {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
-  gap: 3px 10px;
-  padding: 9px 14px;
+  grid-template-columns: 8px auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 2px 8px;
+  height: 51px;
+  padding: 6px 14px 5px;
+  box-sizing: border-box;
   border: 0;
   border-bottom: 1px solid var(--line);
   background: none;
@@ -144,8 +165,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  margin-top: 6px;
-  grid-row: span 2;
+  grid-row: 1;
   background: var(--sev-low);
 }
 .row[data-sev="med"] .sev {
@@ -156,6 +176,9 @@
 }
 .row[data-sev="crit"] .sev {
   background: var(--sev-crit);
+}
+.row[data-sev="unscored"] .sev {
+  background: var(--muted);
 }
 .row .id {
   font-family: var(--font-mono);
@@ -168,8 +191,12 @@
   font-family: var(--font-mono);
   font-weight: 500;
   font-size: 12px;
-  text-align: right;
   color: var(--text);
+}
+.row[data-sev="unscored"] .score {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 .row[data-sev="crit"] .score {
   color: var(--sev-crit);
@@ -178,7 +205,8 @@
   color: var(--sev-high);
 }
 .row .t {
-  grid-column: 2 / 4;
+  grid-row: 2;
+  grid-column: 1 / -1;
   min-width: 0;
   color: var(--muted);
   font-size: 13px;
@@ -188,9 +216,11 @@
   unicode-bidi: isolate;
 }
 .row .meta {
-  grid-column: 2 / 4;
+  grid-row: 1;
+  grid-column: 4;
+  justify-self: end;
   display: flex;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   font-size: 11.5px;
   color: var(--muted);
@@ -205,6 +235,10 @@
 .story-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: none;
+  height: auto;
+  min-height: 51px;
+  align-content: center;
   cursor: default;
 }
 .story-row .sev {
@@ -225,6 +259,11 @@
 }
 .story-row .t,
 .story-row .meta {
+  grid-row: auto;
+  grid-column: 1;
+  justify-self: start;
+}
+.story-open .t {
   grid-column: 1;
 }
 

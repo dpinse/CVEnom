@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -61,6 +62,7 @@ class Cve(Base):
 
     __table_args__ = (
         Index("ix_cve_published_brin", "published", postgresql_using="brin"),
+        Index("ix_cve_kev_added", "kev_added", postgresql_where=text("kev")),
     )
 
 

@@ -103,6 +103,14 @@ export interface LaneOut {
 }
 export type LanesOut = Record<Lane, LaneOut>;
 
+export type SituationLevel = "Calm" | "Elevated" | "High" | "Severe";
+/** The header gauge, computed server-side (always the 7-day view). `reason` is a fixed template. */
+export interface Situation {
+  level: SituationLevel;
+  /** Lit gauge bars, 1..4 */
+  lit: 1 | 2 | 3 | 4;
+  reason: string;
+}
 /** GET /summary?range= */
 export interface SummaryOut {
   range: string;
@@ -112,6 +120,8 @@ export interface SummaryOut {
   public_exploits: number;
   /** "YYYY-MM-DD" or null */
   latest_kev_added: string | null;
+  /** Independent of `range` */
+  situation: Situation;
 }
 /** GET /volume?range=: CVE publications bucketed by CVSS band. */
 export interface VolumeBucket {
@@ -245,11 +255,13 @@ export interface StoryDetailOut extends StoryItem {
 export type AddedKey = "any" | "day" | "week" | "14d" | "month" | "90d" | "year";
 export type StatusKey = "all" | "exploited" | "likely" | "news" | "critical";
 export type SevKey = "low" | "med" | "high" | "crit";
-export type ThreatsSort = "newest" | "hot" | "trending" | "due";
+export type ThreatsSort = "newest" | "hot" | "trending" | "priority" | "due";
 export interface StoryQuery {
   added?: AddedKey;
   q?: string;
   source?: string;
+  /** "news" (default) excludes ransomware.live items; "ransomware" returns only them (members only). */
+  kind?: "news" | "ransomware";
   /** "YYYY-MM-DD", inclusive */
   from?: string;
   to?: string;

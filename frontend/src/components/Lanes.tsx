@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { RateLimited } from "../lib/api";
 import { DEFAULT_RANGE, RANGE_LABEL, type RangeKey } from "../lib/range";
@@ -9,8 +10,10 @@ import { LaneRow, StoryRow } from "./LaneRow";
 
 /** Alert bar still scans a deeper slice than the lanes show. */
 export const LANE_CAP = 100;
-/** Rows shown per lane on the dashboard. */
+/** Rows a lane shows before it scrolls (sets the lane's visible height). */
 export const LANE_ROWS = 5;
+/** Rows a lane loads and renders; the rest of the range is behind "View all in Threats". */
+export const LANE_FETCH = 10;
 
 interface LaneDef {
   key: Lane;
@@ -37,7 +40,8 @@ export function threatsHref(k: LaneDef["k"], range: RangeKey): string {
   // Likely is "published within likely_window_days (30)" whatever the range, so it always
   // links to added=month; the other lanes follow the range.
   const added = k === "likely" ? "month" : ADDED[range];
-  return `/threats?${STATUS[k]}&added=${added}`;
+  // Exploited is ranked by priority on the dashboard, so its link opens Threats in that order.
+  return `/threats?${STATUS[k]}&added=${added}${k === "exploited" ? "&sort=priority" : ""}`;
 }
 
 /** Stories newest first, minus those whose CVEs are all already shown as LOUD CVE rows. */
@@ -100,8 +104,9 @@ export function LanesView({
       <div className="lanes">
         {DEFS.map((d) => {
           const total = lanes?.[d.key]?.total ?? 0;
-          const cves = (lanes?.[d.key]?.items ?? []).slice(0, LANE_ROWS);
-          const storyShown = d.key === "LOUD" ? loudStoriesFor(cves, stories).slice(0, LANE_ROWS - cves.length) : [];
+          const cves = (lanes?.[d.key]?.items ?? []).slice(0, LANE_FETCH);
+          const storyShown =
+            d.key === "LOUD" ? loudStoriesFor(cves, stories).slice(0, Math.max(0, LANE_FETCH - cves.length)) : [];
           const count = cves.length + storyShown.length;
           const showSkeleton = loading && !lanes;
           const headId = `lane-${d.k}`;
@@ -116,7 +121,7 @@ export function LanesView({
                 </span>
               </header>
               <div className="lane-sub">{d.sub}</div>
-              <div className="lane-items">
+              <div className="lane-items" style={{ "--lane-rows": LANE_ROWS } as CSSProperties}>
                 {showSkeleton ? (
                   <Skeleton />
                 ) : count === 0 ? (
@@ -140,7 +145,7 @@ export function LanesView({
               {!showSkeleton && (
                 <div className="lane-foot">
                   <Link to={threatsHref(d.k, range)}>
-                    {total > LANE_ROWS ? `View all ${total} in Threats →` : "Open in Threats →"}
+                    {total > count ? `View all ${total} in Threats →` : "Open in Threats →"}
                   </Link>
                 </div>
               )}
@@ -153,8 +158,8 @@ export function LanesView({
 }
 
 export function Lanes({ range = DEFAULT_RANGE }: { range?: RangeKey }) {
-  const lanes = useLanes(range, LANE_ROWS);
-  const stories = useLoudStories(range, LANE_ROWS);
+  const lanes = useLanes(range, LANE_FETCH);
+  const stories = useLoudStories(range, LANE_FETCH);
   // Tick every second while the error countdown is on screen.
   const now = useNow(lanes.isError ? 1000 : 60_000);
   const { select } = useSelection();

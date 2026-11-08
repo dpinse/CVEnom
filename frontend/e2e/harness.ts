@@ -51,7 +51,11 @@ async function mockApi(page: Page, unexpected: string[]) {
     if (geoCc) return route.fulfill(json(JSON.stringify({ ...JSON.parse(fixture("geo-DE")), country_code: geoCc })));
     if (path === "/api/stories/loud") return route.fulfill(json(fixture("loud")));
     if (path === "/api/cves") return route.fulfill(json(fixture("cves")));
-    if (path === "/api/stories") return route.fulfill(json(fixture("stories")));
+    if (path === "/api/stories") {
+      // ransomware.live is members-only: the anonymous backend returns nothing for kind=ransomware
+      const kind = new URL(route.request().url()).searchParams.get("kind");
+      return route.fulfill(json(kind === "ransomware" ? fixture("stories-ransomware") : fixture("stories")));
+    }
     if (path === "/api/story") return route.fulfill(storyByUrl(new URL(route.request().url()).searchParams.get("url")));
     if (path === `/api/cves/${CVE_ID}`) return route.fulfill(json(fixture(`cve-${CVE_ID}`)));
     if (path === "/api/auth/refresh") return route.fulfill(json('{"error":"unauthorized"}', 401)); // stays a guest

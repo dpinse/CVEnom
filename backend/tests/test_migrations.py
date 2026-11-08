@@ -451,3 +451,21 @@ def test_migration_0008_backfill_and_model(scratch_url):
         assert not c.execute(text("select 1 from information_schema.columns "
                                   "where table_name='cve' and column_name='affected_versions'")).first()
     eng.dispose()
+
+
+def test_migration_0009_kev_added_partial_index_round_trips(scratch_url):
+    cfg = _cfg()
+    command.upgrade(cfg, "0008")
+    eng = create_engine(scratch_url)
+    q = "select indexdef from pg_indexes where indexname='ix_cve_kev_added'"
+    with eng.connect() as c:
+        assert c.execute(text(q)).first() is None
+    command.upgrade(cfg, "0009")
+    with eng.connect() as c:
+        d = c.execute(text(q)).scalar()
+    assert d and "(kev_added)" in d and "WHERE kev" in d
+    command.downgrade(cfg, "0008")
+    with eng.connect() as c:
+        assert c.execute(text(q)).first() is None
+    command.upgrade(cfg, "0009")
+    eng.dispose()

@@ -29,7 +29,7 @@ import {
   useUpdateParams,
   type Patch,
 } from "./threatsShared";
-import ThreatsNews, { STORY_FILTER_KEYS } from "./ThreatsNews";
+import ThreatsNews, { STORY_FILTER_KEYS, ThreatsRansomware } from "./ThreatsNews";
 
 export { DEBOUNCE_MS, MAX_Q, PAGE_SIZE, parseThreatFilters, toCveQuery };
 export type { ThreatFilters };
@@ -37,10 +37,11 @@ export type { ThreatFilters };
 /** Every param either tab owns; switching tabs clears them (the cve / story / country selection survives). */
 const TAB_PARAMS = [...new Set<string>([...FILTER_KEYS, ...STORY_FILTER_KEYS, "tab"])];
 
-type Tab = "cves" | "news";
+type Tab = "cves" | "news" | "ransomware";
 const TABS: { key: Tab; label: string }[] = [
   { key: "cves", label: "CVEs" },
   { key: "news", label: "News" },
+  { key: "ransomware", label: "Ransomware" },
 ];
 
 const SEV_NAME: Record<Sev, string> = { crit: "Critical", high: "High", med: "Medium", low: "Low" };
@@ -330,14 +331,15 @@ function ThreatsCves() {
 
 export default function Threats() {
   const [sp, setSp] = useSearchParams();
-  const tab: Tab = sp.get("tab") === "news" ? "news" : "cves";
+  const tabParam = sp.get("tab");
+  const tab: Tab = tabParam === "news" || tabParam === "ransomware" ? tabParam : "cves";
 
   const choose = (next: Tab) => {
     if (next === tab) return;
     setSp((prev) => {
       const out = new URLSearchParams(prev);
       for (const k of TAB_PARAMS) out.delete(k);
-      if (next === "news") out.set("tab", "news");
+      if (next !== "cves") out.set("tab", next);
       return out;
     });
   };
@@ -356,7 +358,10 @@ export default function Threats() {
   return (
     <section className="page gutter search">
       <h1>Threats</h1>
-      <p className="tsub">Every CVE and story CVEnom has recorded. Filter by when it was added, severity and status.</p>
+      <p className="tsub">
+        Every CVE, news story and ransomware report CVEnom has recorded. Filter by when it was added, severity and
+        status.
+      </p>
       <div className="htabs" role="tablist" aria-label="Threats">
         {TABS.map((t, i) => (
           <button
@@ -376,7 +381,7 @@ export default function Threats() {
         ))}
       </div>
       <div id="htab-panel" role="tabpanel" aria-labelledby={`htab-${tab}`} className="htab-panel">
-        {tab === "news" ? <ThreatsNews /> : <ThreatsCves />}
+        {tab === "news" ? <ThreatsNews /> : tab === "ransomware" ? <ThreatsRansomware /> : <ThreatsCves />}
       </div>
     </section>
   );

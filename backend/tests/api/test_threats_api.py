@@ -1,5 +1,6 @@
 """Threats search: GET /api/cves added/status/sev/poc/nopatch/due/sort/q + GET /api/stories added."""
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -16,6 +17,7 @@ from test_read_api import (  # noqa: F401  (secrets_key is an autouse fixture)
 
 from cvenom.api.routes_read import CACHE_PATHS
 from cvenom.models import Cve, CveEvent, Story
+from cvenom.pipeline import ingest
 from cvenom.readmodels import product_label
 
 TODAY = NOW.date()
@@ -697,3 +699,133 @@ async def test_lane_totals_match_their_threats_links(db_session, rng, added):
         assert r.status_code == 200, r.text
         assert lanes[lane]["total"] == r.json()["total"], (lane, rng)
         assert lanes[lane]["total"] > 0, (lane, rng)
+
+
+async def test_metasploit_only_cve_has_poc_badge_filter_and_reference(db_session):
+    from cvenom.collectors.metasploit import MetasploitCollector
+
+    cve(db_session, "CVE-2021-44228")
+    cve(db_session, "CVE-2024-0001")
+    module = {
+        "fullname": "exploit/a/b", "type": "exploit", "rank": 600,
+        "references": ["CVE-2021-44228"], "disclosure_date": "2021-12-09",
+        "path": "/modules/exploits/a/b.rb",
+    }
+    res = MetasploitCollector().normalize(json.dumps({"exploit_a/b": module}).encode())
+    ingest(db_session, res, enrich_only=True, collector="metasploit")
+    db_session.flush()
+    assert ids(await get(db_session, "/api/cves?poc=1")) == ["CVE-2021-44228"]
+    body = (await get(db_session, "/api/cves/CVE-2021-44228")).json()
+    assert body["poc_badge"] is True
+    url = "https://github.com/rapid7/metasploit-framework/blob/master/modules/exploits/a/b.rb"
+    assert {"url": url, "tags": ["Exploit"]} in body["references"]
+    assert (await get(db_session, "/api/cves/CVE-2024-0001")).json()["poc_badge"] is False
+
+
+# ---------------------------------------------------------------- sort=priority
+
+
+def _prio_fixture(db):
+    d = TODAY
+    cve(db, "CVE-2024-0001", kev=True, kev_added=d, cvss=5.0, epss_percentile=0.20)   # scored, low EPSS
+    cve(db, "CVE-2024-0002", kev=True, kev_added=d, epss_percentile=0.95)             # unscored, high EPSS
+    cve(db, "CVE-2024-0003", kev=True, kev_added=d, kev_ransomware=True, cvss=4.0)    # ransomware, low
+    cve(db, "CVE-2024-0004", kev=True, kev_added=d)                                    # all NULL
+    cve(db, "CVE-2024-0005", kev=True, kev_added=d, cvss=9.0, epss_percentile=0.20)   # beats 0001 on cvss
+    cve(db, "CVE-2024-0006", kev=True, kev_added=d, cvss=9.0, epss_percentile=0.20,
+        poc_badge=True)                                                                # beats 0005 on PoC
+    cve(db, "CVE-2024-0007", kev=True, kev_added=d, cvss=9.0, epss_percentile=0.20,
+        poc_badge=True, patch_available=False)                                         # beats 0006 on no patch
+    cve(db, "CVE-2024-0008", kev=True, kev_added=d - timedelta(days=3), cvss=9.0, epss_percentile=0.20,
+        poc_badge=True, patch_available=False)                                         # older KEV
+    cve(db, "CVE-2024-0009", kev=True, kev_added=d - timedelta(days=3), cvss=9.0, epss_percentile=0.20,
+        poc_badge=True, patch_available=False)                                         # tie: id order
+    # 48h boost: yesterday still counts as recent; null EPSS/CVSS beats an older p99
+    cve(db, "CVE-2024-0010", kev=True, kev_added=d - timedelta(days=2), cvss=9.8, epss_percentile=0.99)
+    cve(db, "CVE-2024-0011", kev=True, kev_added=d - timedelta(days=1))
+    return [
+        # recent (today/yesterday), normal order inside the group
+        "CVE-2024-0003", "CVE-2024-0002", "CVE-2024-0007", "CVE-2024-0006", "CVE-2024-0005",
+        "CVE-2024-0001", "CVE-2024-0004", "CVE-2024-0011",
+        # older, normal order inside the group
+        "CVE-2024-0010", "CVE-2024-0008", "CVE-2024-0009",
+    ]
+
+
+async def test_sort_priority_order(db_session):
+    expected = _prio_fixture(db_session)
+    assert ids(await get(db_session, "/api/cves?sort=priority")) == expected
+
+
+async def test_sort_priority_paging_is_stable(db_session):
+    expected = _prio_fixture(db_session)
+    got = []
+    for page in (1, 2, 3, 4):
+        got += ids(await get(db_session, f"/api/cves?sort=priority&page={page}&page_size=3"))
+    assert got == expected
+
+
+async def test_sort_priority_boost_expires_as_the_date_ages(db_session):
+    d = TODAY
+    cve(db_session, "CVE-2024-0001", kev=True, kev_added=d - timedelta(days=1))  # no signals, recent
+    cve(db_session, "CVE-2024-0002", kev=True, kev_added=d - timedelta(days=2), epss_percentile=0.99)
+    assert ids(await get(db_session, "/api/cves?sort=priority")) == ["CVE-2024-0001", "CVE-2024-0002"]
+    db_session.get(Cve, "CVE-2024-0001").kev_added = d - timedelta(days=2)  # ages out
+    db_session.flush()
+    assert ids(await get(db_session, "/api/cves?sort=priority")) == ["CVE-2024-0002", "CVE-2024-0001"]
+
+
+async def test_sort_priority_with_status_exploited(db_session):
+    expected = _prio_fixture(db_session)
+    assert ids(await get(db_session, "/api/cves?status=exploited&sort=priority")) == expected
+
+
+# ---------------------------------------------------------------- priority parity (Python key vs SQL)
+
+
+def _parity_fixture(db):
+    t = TODAY
+
+    def k(n, added=t, **kw):
+        cve(db, f"CVE-2024-{n:04d}", kev=True, kev_added=added, **kw)
+
+    y = t - timedelta(days=1)
+    k(101, kev_ransomware=True)
+    k(102, y, kev_ransomware=True, epss_percentile=0.1)
+    k(103, kev_ransomware=False, epss_percentile=0.9)
+    k(104, epss_percentile=0.9, cvss=5.0)                       # ransomware NULL
+    k(105, epss_percentile=0.9, cvss=5.0, poc_badge=False)      # equal to 104 but the id
+    k(106, epss_percentile=0.9, cvss=5.0, poc_badge=True)
+    k(107, epss_percentile=0.9, cvss=5.0, poc_badge=True, patch_available=False)
+    k(108, y, epss_percentile=0.9, cvss=5.0, poc_badge=True, patch_available=True)
+    k(109, epss_percentile=0.9, cvss=5.0, poc_badge=True)       # equal to 106 but the id
+    k(110, epss_percentile=0.5, cvss=9.9)
+    k(111)                                                       # nothing at all
+    o3, o5 = t - timedelta(days=3), t - timedelta(days=5)       # not recent
+    k(120, o3, epss_percentile=0.99, cvss=9.8)
+    k(121, o5, epss_percentile=0.99, cvss=9.8)
+    k(122, o5, epss_percentile=0.99, cvss=9.8)                  # equal to 121 but the id
+    k(123, o3)
+    return [f"CVE-2024-{n:04d}" for n in (
+        102, 101, 107, 106, 109, 108, 104, 105, 103, 110, 111,   # recent: ransomware, EPSS, CVSS, PoC, no patch, KEV date, id
+        120, 121, 122, 123,                                       # older: same order, no boost
+    )]
+
+
+async def test_priority_python_key_and_sql_order_agree(db_session):
+    from cvenom.pipeline import lane_views
+    from cvenom.scoring import Lane
+
+    expected = _parity_fixture(db_session)
+    py = [v.cve_id for v in lane_views(db_session, NOW, "30d")[Lane.EXPLOITED]]
+    sql = ids(await get(db_session, "/api/cves?sort=priority&page_size=100"))
+    assert py == sql
+    assert sql == expected  # hand-written, so a bug shared by both cannot hide
+
+
+async def test_priority_paging_returns_each_row_exactly_once(db_session):
+    expected = _parity_fixture(db_session)
+    got = []
+    for page in range(1, 10):
+        got += ids(await get(db_session, f"/api/cves?sort=priority&page_size=2&page={page}"))
+    assert got == expected and len(set(got)) == len(expected)
