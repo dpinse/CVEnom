@@ -1,7 +1,6 @@
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useLiveUpdates, type LiveStatus } from "../lib/live";
 import { useRange } from "../lib/range";
-import { useSummary } from "../lib/queries";
 import { useTheme } from "../lib/theme";
 import { RangeControl } from "./RangeControl";
 import { UserMenu } from "./UserMenu";
@@ -24,33 +23,6 @@ function Radar() {
       <path d="M10 10 L16.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
       <circle cx="10" cy="10" r="1.5" fill="currentColor" />
     </svg>
-  );
-}
-
-function Situation() {
-  // fixed 7-day window: the gauge is not driven by the Dashboard range control
-  const summary = useSummary("7d");
-  const s = summary.data?.situation ?? null;
-  const label = s ? `${s.level}. ${s.reason}` : "Unavailable";
-  return (
-    <div
-      className="situation"
-      data-level={s?.level ?? "Unknown"}
-      title={s ? `${s.level}: ${s.reason}` : "Situation level, relative to this install's own normal"}
-    >
-      <div className="sgauge" role="img" aria-label={`Situation: ${label}`}>
-        {[0, 1, 2, 3].map((i) => (
-          <i key={i} className={s && i < s.lit ? "lit" : undefined} />
-        ))}
-      </div>
-      <div className="stext" aria-hidden="true">
-        <div className="slabel">
-          Situation
-          {s && <span className="sreason"> · {s.reason}</span>}
-        </div>
-        <div className="slevel">{s ? s.level : "…"}</div>
-      </div>
-    </div>
   );
 }
 
@@ -89,7 +61,6 @@ export function CommandBar() {
         </NavLink>
         <NavLink to="/threats">Threats</NavLink>
       </nav>
-      <Situation />
       <div className="cspacer" />
       {pathname === "/" && <RangeControl />}
       <LiveStatusReadout />

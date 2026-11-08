@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { LiveState } from "../lib/live";
-import { admin, guest, handlers, item, lanes, member, renderAt, signIn, setupMsw } from "../test/shell";
+import { admin, guest, handlers, member, renderAt, signIn, setupMsw } from "../test/shell";
 import { CommandBar } from "./CommandBar";
 
 let live: LiveState = { status: "live", lastUpdated: null };
@@ -25,7 +25,6 @@ describe("navigation", () => {
     const nav = within(screen.getByRole("navigation", { name: "Main" }));
     expect(nav.getByRole("link", { name: "Threats" }).getAttribute("href")).toBe("/threats");
     expect(nav.getByRole("link", { name: "Dashboard" }).getAttribute("href")).toBe("/?range=7d");
-    await screen.findByRole("img", { name: /Situation/ });
   });
   test("on /threats the Threats link is current and the range control is hidden", async () => {
     handlers();
@@ -34,7 +33,6 @@ describe("navigation", () => {
     expect(screen.getByRole("link", { name: "Threats" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
     expect(screen.queryByRole("group", { name: "Time range" })).toBeNull();
-    await screen.findByRole("img", { name: /Situation/ });
   });
   test("the range control shows on the Dashboard only", async () => {
     handlers();
@@ -44,43 +42,6 @@ describe("navigation", () => {
     cleanup();
     bar("/admin/users");
     expect(screen.queryByRole("group", { name: "Time range" })).toBeNull();
-    await screen.findByRole("img", { name: /Situation/ });
-  });
-});
-
-describe("Situation readout", () => {
-  test("shows the server's level, lit bars and reason", async () => {
-    handlers({ situation: { level: "High", lit: 3, reason: "7 KEV additions this week, 2.3x the 90-day norm" } });
-    guest();
-    bar();
-    expect(
-      await screen.findByRole("img", { name: "Situation: High. 7 KEV additions this week, 2.3x the 90-day norm" }),
-    ).toBeInTheDocument();
-    expect(document.querySelectorAll(".sgauge i.lit")).toHaveLength(3);
-    expect(document.querySelectorAll(".sgauge i")).toHaveLength(4);
-    expect(document.querySelector(".situation")).toHaveAttribute("data-level", "High");
-    expect(document.querySelector(".situation")).toHaveAttribute(
-      "title",
-      "High: 7 KEV additions this week, 2.3x the 90-day norm",
-    );
-    expect(document.querySelector(".sreason")).toHaveTextContent("7 KEV additions this week");
-  });
-  test("a server Calm shows one dim bar even when the Exploited lane is full", async () => {
-    // the old client rule said Severe for a KEV today; the server's relative level is what shows
-    const added = new Date().toISOString().slice(0, 10);
-    handlers({ lanes: lanes([1, 2, 3, 4, 5, 6, 7].map((n) => item({ cve_id: `CVE-2020-${n}`, kev_added: added }))) });
-    guest();
-    bar();
-    expect(await screen.findByRole("img", { name: /^Situation: Calm\./ })).toBeInTheDocument();
-    expect(document.querySelectorAll(".sgauge i.lit")).toHaveLength(1);
-  });
-  test("shows Unavailable with no bars lit when the summary fails", async () => {
-    handlers({ situation: null });
-    guest();
-    bar();
-    expect(await screen.findByRole("img", { name: "Situation: Unavailable" })).toBeInTheDocument();
-    expect(document.querySelectorAll(".sgauge i.lit")).toHaveLength(0);
-    expect(document.querySelector(".sreason")).toBeNull();
   });
 });
 

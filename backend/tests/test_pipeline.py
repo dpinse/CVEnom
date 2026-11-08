@@ -147,6 +147,27 @@ def test_loud_window_and_recent_story_count(db_session):
     assert loud[0].recent_story_count == 2
 
 
+def test_loud_ranks_by_news_volume_not_kev_or_epss(db_session):
+    # A famous old KEV with one stray mention must not outrank what the news is covering now.
+    ingest(db_session, CollectorResult(
+        cves=[
+            NormalizedCve(cve_id="CVE-2021-44228", kev=True, kev_added=NOW.date() - timedelta(days=900),
+                          cvss=10.0, epss_percentile=1.0, published=NOW - timedelta(days=1800)),
+            NormalizedCve(cve_id="CVE-2026-9500", cvss=5.0, epss_percentile=0.1),
+            NormalizedCve(cve_id="CVE-2026-9501", cvss=5.0, epss_percentile=0.1),
+        ],
+        stories=[
+            _story("https://x/l4j", "log4j CVE-2021-44228", published=NOW - timedelta(hours=1)),
+            _story("https://x/a1", "a CVE-2026-9500", published=NOW - timedelta(hours=5)),
+            _story("https://x/a2", "a2 CVE-2026-9500", published=NOW - timedelta(hours=6)),
+            _story("https://x/a3", "a3 CVE-2026-9500", published=NOW - timedelta(hours=7)),
+            _story("https://x/b1", "b CVE-2026-9501", published=NOW - timedelta(hours=2)),
+            _story("https://x/b2", "b2 CVE-2026-9501", published=NOW - timedelta(hours=8)),
+        ]))
+    loud = lane_views(db_session, NOW)[Lane.LOUD]
+    assert [v.cve_id for v in loud] == ["CVE-2026-9500", "CVE-2026-9501", "CVE-2021-44228"]
+
+
 def test_lane_ordering_by_heat_rank_and_multi_lane(db_session):
     ingest(db_session, CollectorResult(cves=[
         NormalizedCve(cve_id="CVE-2026-9100", kev=True, kev_added=NOW.date(), cvss=5.0),

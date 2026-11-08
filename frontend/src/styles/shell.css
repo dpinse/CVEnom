@@ -1,4 +1,4 @@
-/* App shell: command bar, Situation readout, alert bar, menus. Tokens only, no raw colors. */
+/* App shell: command bar, alert bar, menus. Tokens only, no raw colors. */
 
 .sr-only {
   position: absolute;
@@ -87,87 +87,6 @@ header.command {
   color: var(--faint);
   line-height: 1.1;
   margin-top: 2px;
-}
-
-/* situation readout: the one bespoke instrument */
-.situation {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.sgauge {
-  display: flex;
-  gap: 3px;
-  align-items: flex-end;
-  height: 26px;
-}
-.sgauge i {
-  width: 5px;
-  border-radius: 1px;
-  background: var(--line);
-}
-.sgauge i:nth-child(1) {
-  height: 9px;
-}
-.sgauge i:nth-child(2) {
-  height: 14px;
-}
-.sgauge i:nth-child(3) {
-  height: 19px;
-}
-.sgauge i:nth-child(4) {
-  height: 24px;
-}
-.sgauge i.lit {
-  background: var(--muted);
-}
-.situation[data-level="Elevated"] .sgauge i.lit {
-  background: var(--sev-med);
-}
-.situation[data-level="High"] .sgauge i.lit {
-  background: var(--sev-high);
-}
-.situation[data-level="Severe"] .sgauge i.lit {
-  background: var(--live);
-}
-.stext {
-  line-height: 1.05;
-}
-.slabel {
-  font-size: 10.5px;
-  color: var(--faint);
-}
-.sreason {
-  display: none;
-}
-@media (min-width: 1280px) {
-  .sreason {
-    display: inline-block;
-    vertical-align: bottom;
-    max-width: 30ch;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-}
-.slevel {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 18px;
-  letter-spacing: 0.01em;
-  color: var(--text);
-}
-.situation[data-level="Elevated"] .slevel {
-  color: var(--sev-med);
-}
-.situation[data-level="High"] .slevel {
-  color: var(--sev-high);
-}
-.situation[data-level="Severe"] .slevel {
-  color: var(--live);
-}
-.situation[data-level="Calm"] .slevel {
-  color: var(--sev-low);
 }
 
 .cspacer {

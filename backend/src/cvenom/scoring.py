@@ -28,11 +28,12 @@ class CveView:
     poc_badge: bool = False
     kev_added: date | None = None
     kev_ransomware: bool | None = None
+    last_story_at: datetime | None = None  # newest in-range story linked to this CVE
 
 
 def recent_kev_cutoff(now: datetime) -> date:
     """kev_added is a DATE: "recently added" = today or yesterday (UTC). Keep in sync with
-    isRecentKevDate in frontend/src/lib/situation.ts."""
+    isRecentKevDate in frontend/src/lib/recentKev.ts."""
     return _utc(now).date() - timedelta(days=1)
 
 
@@ -53,6 +54,14 @@ def priority_key(v: CveView, now: datetime) -> tuple:
         -(v.kev_added.toordinal() if v.kev_added else 0),
         v.cve_id,
     )
+
+
+def loud_key(v: CveView, now: datetime, cfg: Settings) -> tuple:
+    """Order of the Loud lane: news volume first (distinct in-range stories), then the newest
+    story, and only then heat_rank as a tiebreak. KEV/EPSS must not outrank actual coverage,
+    or a famous old CVE with one stray mention sits above what the news is covering now."""
+    last = _utc(v.last_story_at).timestamp() if v.last_story_at else 0.0
+    return (-v.recent_story_count, -last, -heat_rank(v, now, cfg), v.cve_id)
 
 
 def _utc(dt: datetime) -> datetime:
